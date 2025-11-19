@@ -47,6 +47,10 @@ class GuidedSetupWizard(tk.Toplevel):
         self.dhcp_pools: List[Dict[str, str]] = []
         self.acl_rules: List[Dict[str, str]] = []
         self.uplinks: List[Dict[str, str]] = []
+        self.router_interface: str = ""  # Physical interface for router-on-a-stick
+        self.static_routes: List[Dict[str, str]] = []  # Static routing entries
+        self.rip_networks: List[Dict[str, str]] = []  # RIPv2 network entries
+        self.enable_rip: bool = False  # Whether to enable RIPv2
         self.summary_box: Optional[tk.Text] = None
 
         self.current_step = 0
@@ -150,6 +154,32 @@ class GuidedSetupWizard(tk.Toplevel):
             )
 
         if self.device_role == "router":
+            # Only add routing steps if this router handles routing
+            if self.routing_mode == "device":
+                self.steps.extend(
+                    [
+                        Step(
+                            "Router-on-a-Stick (Subinterfaces)",
+                            "Configure subinterfaces for inter-VLAN routing.",
+                            GuidedSetupWizard._build_step_router_subinterfaces,
+                            GuidedSetupWizard._validate_router_subinterfaces,
+                        ),
+                        Step(
+                            "Static Routes (Optional)",
+                            "Add static routes for networks outside this router.",
+                            GuidedSetupWizard._build_step_static_routes,
+                            GuidedSetupWizard._validate_static_routes,
+                        ),
+                        Step(
+                            "RIPv2 Dynamic Routing (Optional)",
+                            "Enable RIPv2 for automatic route discovery with other routers.",
+                            GuidedSetupWizard._build_step_rip,
+                            GuidedSetupWizard._validate_rip,
+                        ),
+                    ]
+                )
+            
+            # DHCP and ACL always available for routers
             self.steps.extend(
                 [
                     Step(
@@ -348,6 +378,83 @@ class GuidedSetupWizard(tk.Toplevel):
             default_values=(default_port, "trunk", "all"),
         )
 
+
+    def _build_step_router_subinterfaces(self, body):
+        """Router: Configure subinterfaces for router-on-a-stick"""
+        tip_text = "Select the physical interface and configure subinterfaces for each VLAN. The router will route traffic between VLANs."
+        tk.Label(body, text=tip_text, fg="#555", wraplength=600, justify="left").pack(anchor="w", pady=(0, 8))
+        
+        # Physical interface selection
+        interface_frame = tk.Frame(body)
+        interface_frame.pack(fill="x", pady=(0, 10))
+        tk.Label(interface_frame, text="Physical Interface:", width=18, anchor="w").pack(side="left")
+        
+        # Router interface options
+        router_interfaces = [
+            "FastEthernet0/0",
+            "GigabitEthernet1/0",
+            "GigabitEthernet2/0",
+            "GigabitEthernet3/0",
+            "GigabitEthernet4/0",
+            "GigabitEthernet5/0"
+        ]
+        
+        self.router_interface_var = tk.StringVar(value=self.router_interface or "FastEthernet0/0")
+        interface_dropdown = ttk.Combobox(interface_frame, textvariable=self.router_interface_var, 
+                                         values=router_interfaces, state="readonly", width=20)
+        interface_dropdown.pack(side="left", padx=5)
+        
+        tk.Label(body, text="Note: VLANs are created on the switch. Here you only configure the router's gateway for each VLAN.", 
+                fg="#888", wraplength=600, justify="left").pack(anchor="w", pady=(5, 8))
+        
+        tk.Label(body, text="Subinterfaces (one per VLAN):", font=("", 10, "bold")).pack(anchor="w", pady=(10, 5))
+        self.route_tree = self._build_tree(
+            body,
+            ("VLAN ID", "VLAN Name", "Gateway IP", "Subnet Mask"),
+            self.routing_entries,
+            default_values=("10", "Staff", "192.168.10.1", "255.255.255.0")
+        )
+
+    def _build_step_static_routes(self, body):
+        """Router: Add static routes (optional)"""
+        tip_text = "Add static routes to reach networks outside this router. Leave empty if not needed."
+        tk.Label(body, text=tip_text, fg="#555", wraplength=600, justify="left").pack(anchor="w", pady=(0, 8))
+        
+        tk.Label(body, text="Common example: Default route to ISP (0.0.0.0 0.0.0.0 [ISP-Gateway-IP])", 
+                fg="#888", wraplength=600, justify="left").pack(anchor="w", pady=(0, 8))
+        
+        self.static_route_tree = self._build_tree(
+            body,
+            ("Network", "Mask", "Next-Hop", "Description"),
+            self.static_routes,
+            default_values=("0.0.0.0", "0.0.0.0", "203.0.113.1", "Default route to ISP")
+        )
+
+    def _build_step_rip(self, body):
+        """Router: Configure RIPv2 dynamic routing (optional)"""
+        tip_text = "RIPv2 automatically shares routes with other routers. Enable this if you have multiple routers that need to learn routes from each other."
+        tk.Label(body, text=tip_text, fg="#555", wraplength=600, justify="left").pack(anchor="w", pady=(0, 8))
+        
+        # Enable RIPv2 checkbox
+        self.enable_rip_var = tk.BooleanVar(value=self.enable_rip)
+        enable_frame = tk.Frame(body)
+        enable_frame.pack(fill="x", pady=(5, 10))
+        tk.Checkbutton(enable_frame, text="Enable RIPv2 Dynamic Routing", 
+                      variable=self.enable_rip_var, font=("", 10, "bold")).pack(anchor="w")
+        
+        tk.Label(body, text="Networks to advertise via RIP (leave empty to auto-advertise all connected networks):", 
+                fg="#888", wraplength=600, justify="left").pack(anchor="w", pady=(10, 5))
+        
+        tk.Label(body, text="Tip: Use network addresses (e.g., 192.168.10.0 for 192.168.10.0/24)", 
+                fg="#888", wraplength=600, justify="left").pack(anchor="w", pady=(0, 8))
+        
+        self.rip_network_tree = self._build_tree(
+            body,
+            ("Network", "Description"),
+            self.rip_networks,
+            default_values=("192.168.10.0", "LAN subnet")
+        )
+
     def _build_step_summary(self, body):
         if self.summary_box is None:
             self.summary_box = tk.Text(body, wrap="word")
@@ -483,6 +590,43 @@ class GuidedSetupWizard(tk.Toplevel):
             messagebox.showinfo("Info", "You can add uplinks later if needed.")
         return True
 
+
+    def _validate_router_subinterfaces(self):
+        """Validate router subinterfaces step"""
+        self.router_interface = self.router_interface_var.get()
+        self.routing_entries = self._collect_tree(self.route_tree, ("vlan id", "vlan name", "gateway ip", "subnet mask"))
+        if not self.routing_entries:
+            messagebox.showerror("Add Subinterfaces", "Add at least one subinterface with a gateway IP.")
+            return False
+        # Store in format compatible with rendering (rename keys)
+        normalized_entries = []
+        for entry in self.routing_entries:
+            normalized_entries.append({
+                "vlan": entry.get("vlan id"),
+                "name": entry.get("vlan name"),
+                "ip": entry.get("gateway ip"),
+                "mask": entry.get("subnet mask")
+            })
+        self.routing_entries = normalized_entries
+        return True
+
+    def _validate_static_routes(self):
+        """Validate static routes step (optional, so always returns True)"""
+        self.static_routes = self._collect_tree(
+            self.static_route_tree,
+            ("network", "mask", "next-hop", "description")
+        )
+        return True
+
+    def _validate_rip(self):
+        """Validate RIPv2 step (optional, so always returns True)"""
+        self.enable_rip = self.enable_rip_var.get()
+        self.rip_networks = self._collect_tree(
+            self.rip_network_tree,
+            ("network", "description")
+        )
+        return True
+
     def _validate_summary(self):
         self._refresh_summary()
         return True
@@ -503,9 +647,11 @@ class GuidedSetupWizard(tk.Toplevel):
             ("BLOCK 1: Identity & Security", self._render_identity_block()),
             ("BLOCK 2: VLANs & Port Assignment", self._render_vlan_block()),
             ("BLOCK 3: Uplinks & Trunks", self._render_uplink_block()),
-            ("BLOCK 4: Routing & SVIs", self._render_routing_block()),
-            ("BLOCK 5: DHCP Pools", self._render_dhcp_block()),
-            ("BLOCK 6: Access Control Lists", self._render_acl_block()),
+            ("BLOCK 4: Routing & Subinterfaces", self._render_routing_block()),
+            ("BLOCK 5: Static Routes", self._render_static_routes_block()),
+            ("BLOCK 6: RIPv2 Dynamic Routing", self._render_rip_block()),
+            ("BLOCK 7: DHCP Pools", self._render_dhcp_block()),
+            ("BLOCK 8: Access Control Lists", self._render_acl_block()),
         ]
         
         inserted = False
@@ -544,6 +690,8 @@ class GuidedSetupWizard(tk.Toplevel):
             "guided_vlans": self._render_vlan_block(),
             "guided_uplinks": self._render_uplink_block(),
             "guided_routing": self._render_routing_block(),
+            "guided_static_routes": self._render_static_routes_block(),
+            "guided_rip": self._render_rip_block(),
             "guided_dhcp": self._render_dhcp_block(),
             "guided_acl": self._render_acl_block(),
         }
@@ -612,6 +760,10 @@ class GuidedSetupWizard(tk.Toplevel):
         return "\n".join(lines)
 
     def _render_vlan_block(self):
+        # Routers don't create VLANs - VLANs are created on switches
+        if self.device_role == "router":
+            return ""
+        
         if not self.vlans:
             return ""
         lines = []
@@ -699,6 +851,11 @@ class GuidedSetupWizard(tk.Toplevel):
         if not self.routing_entries:
             return ""
         
+        # For routers, use router-on-a-stick configuration
+        if self.device_role == "router":
+            return self._render_router_on_stick_block()
+        
+        # For core switches, use SVI configuration
         lines = ["configure terminal"]
         lines.append("ip routing")
         
@@ -713,6 +870,93 @@ class GuidedSetupWizard(tk.Toplevel):
             lines.append("no shutdown")
             lines.append("exit")
         
+        lines.append("exit")
+        return "\n".join(lines)
+
+    def _render_router_on_stick_block(self):
+        """Generate router-on-a-stick configuration with subinterfaces"""
+        if not self.router_interface or not self.routing_entries:
+            return ""
+        
+        lines = ["configure terminal"]
+        
+        # Configure physical interface
+        lines.append(f"interface {self.router_interface}")
+        lines.append("no shutdown")
+        lines.append("exit")
+        
+        # Configure subinterfaces for each VLAN
+        for entry in self.routing_entries:
+            vlan = entry.get("vlan")
+            ip = entry.get("ip")
+            mask = entry.get("mask")
+            if not vlan or not ip:
+                continue
+            
+            lines.append(f"interface {self.router_interface}.{vlan}")
+            lines.append(f"encapsulation dot1Q {vlan}")
+            lines.append(f"ip address {ip} {mask}")
+            lines.append("exit")
+        
+        lines.append("exit")
+        return "\n".join(lines)
+
+    def _render_static_routes_block(self):
+        """Generate static routing configuration"""
+        if not self.static_routes:
+            return ""
+        
+        lines = ["configure terminal"]
+        
+        for route in self.static_routes:
+            network = route.get("network")
+            mask = route.get("mask")
+            next_hop = route.get("next-hop")
+            description = route.get("description", "")
+            
+            if not network or not mask or not next_hop:
+                continue
+            
+            if description:
+                lines.append(f"! {description}")
+            lines.append(f"ip route {network} {mask} {next_hop}")
+        
+        lines.append("exit")
+        return "\n".join(lines)
+
+    def _render_rip_block(self):
+        """Generate RIPv2 dynamic routing configuration"""
+        if not self.enable_rip:
+            return ""
+        
+        lines = ["configure terminal"]
+        lines.append("router rip")
+        lines.append("version 2")
+        lines.append("no auto-summary")
+        
+        if self.rip_networks:
+            # User specified networks
+            for entry in self.rip_networks:
+                network = entry.get("network")
+                description = entry.get("description", "")
+                if not network:
+                    continue
+                if description:
+                    lines.append(f"! {description}")
+                lines.append(f"network {network}")
+        else:
+            # Auto-advertise all connected networks from subinterfaces
+            lines.append("! Auto-advertising all connected networks")
+            for route_entry in self.routing_entries:
+                ip = route_entry.get("ip")
+                if ip:
+                    # Extract network portion (e.g., 192.168.10.1 -> 192.168.10.0)
+                    parts = ip.split(".")
+                    if len(parts) == 4:
+                        network = f"{parts[0]}.{parts[1]}.{parts[2]}.0"
+                        lines.append(f"network {network}")
+        
+        lines.append("exit")
         lines.append("exit")
         return "\n".join(lines)
 

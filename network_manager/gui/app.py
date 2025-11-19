@@ -189,7 +189,20 @@ class App(ctk.CTk):
         preview_holder = ctk.CTkFrame(center)
         preview_holder.pack(fill="both", expand=True, padx=4, pady=4)
         self.preview = ctk.CTkTextbox(preview_holder, wrap="none")
-        self.preview.pack(fill="both", expand=True, padx=6, pady=6)
+        self.preview.pack(fill="both", expand=True, padx=6, pady=(6,2))
+        
+        # Clear preview button
+        clear_btn_frame = ctk.CTkFrame(preview_holder, fg_color="transparent")
+        clear_btn_frame.pack(fill="x", padx=6, pady=(2,6))
+        ctk.CTkButton(
+            clear_btn_frame, 
+            text="Clear Preview", 
+            command=self.clear_preview,
+            fg_color="#e74c3c",
+            hover_color="#c0392b",
+            width=120,
+            height=28
+        ).pack(side="right")
         
         # Enable paste in preview window
         def paste_handler(event=None):
@@ -240,28 +253,222 @@ class App(ctk.CTk):
         self.txt_logs.pack(fill="both", expand=True, padx=12, pady=(4,12))
         ctk.CTkButton(self.tab_logs, text="clear logs", command=lambda: self.txt_logs.delete("0.0","end")).pack(padx=12, pady=(0,12))
 
-        # database tab (devices | configs)
-        ctk.CTkLabel(self.tab_db, text="database (devices & configs)", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="nw", padx=12, pady=(8,6))
-        db_frame = ctk.CTkFrame(self.tab_db)
-        db_frame.pack(fill="both", expand=True, padx=12, pady=8)
+        # database tab: professional multi-entity browser
+        ctk.CTkLabel(
+            self.tab_db,
+            text="database browser",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(anchor="nw", padx=12, pady=(8, 2))
 
-        left_db = ctk.CTkFrame(db_frame, width=520)
-        left_db.pack(side="left", fill="both", expand=True, padx=(0,6)); left_db.pack_propagate(False)
-        self.tree_devices = ttk.Treeview(left_db, columns=("id","name","type","ip","port","conn","gns3","created"), show="headings")
-        for h,w in [("id",50),("name",160),("type",120),("ip",110),("port",70),("conn",100),("gns3",60),("created",160)]:
-            self.tree_devices.heading(h, text=h); self.tree_devices.column(h, width=w, anchor="center")
+        db_top = ctk.CTkFrame(self.tab_db, fg_color="transparent")
+        db_top.pack(fill="x", padx=12, pady=(0, 6))
+        ctk.CTkLabel(
+            db_top,
+            text=f"SQLite file: {DB_PATH}",
+            font=ctk.CTkFont(size=11),
+            text_color="#bcd",
+        ).pack(side="left")
+
+        # Inner tabview for each logical entity in the database
+        self.db_tabview = ctk.CTkTabview(self.tab_db)
+        self.db_tabview.pack(fill="both", expand=True, padx=12, pady=8)
+
+        tab_devices = self.db_tabview.add("devices")
+        tab_configs = self.db_tabview.add("configs")
+        tab_users = self.db_tabview.add("users")
+        tab_tasks = self.db_tabview.add("tasks")
+        tab_logs = self.db_tabview.add("logs")
+        tab_ai = self.db_tabview.add("ai models")
+        tab_training = self.db_tabview.add("training data")
+
+        # ----- devices tab -----
+        devices_frame = ctk.CTkFrame(tab_devices)
+        devices_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.tree_devices = ttk.Treeview(
+            devices_frame,
+            columns=("id", "name", "type", "ip", "port", "conn", "gns3", "status", "last_seen", "created"),
+            show="headings",
+        )
+        for h, w in [
+            ("id", 50),
+            ("name", 160),
+            ("type", 100),
+            ("ip", 110),
+            ("port", 70),
+            ("conn", 90),
+            ("gns3", 60),
+            ("status", 90),
+            ("last_seen", 130),
+            ("created", 150),
+        ]:
+            self.tree_devices.heading(h, text=h)
+            self.tree_devices.column(h, width=w, anchor="center")
         self.tree_devices.pack(fill="both", expand=True)
-        ctk.CTkButton(left_db, text="refresh devices", command=self.refresh_devices_tree).pack(pady=6)
-        ctk.CTkButton(left_db, text="import selected into workspace", command=self.import_device_from_tree).pack(pady=(0,6))
 
-        right_db = ctk.CTkFrame(db_frame)
-        right_db.pack(side="right", fill="both", expand=True, padx=(6,0))
-        self.tree_configs = ttk.Treeview(right_db, columns=("id","device_id","name","created"), show="headings")
-        for h,w in [("id",60),("device_id",100),("name",200),("created",160)]:
-            self.tree_configs.heading(h, text=h); self.tree_configs.column(h, width=w, anchor="center")
+        dev_btns = ctk.CTkFrame(tab_devices, fg_color="transparent")
+        dev_btns.pack(fill="x", padx=4, pady=(0, 6))
+        ctk.CTkButton(dev_btns, text="refresh devices", command=self.refresh_devices_tree).pack(side="left", padx=4)
+        ctk.CTkButton(
+            dev_btns,
+            text="import selected into workspace",
+            command=self.import_device_from_tree,
+        ).pack(side="left", padx=4)
+
+        # ----- configs (legacy generated configs) -----
+        configs_frame = ctk.CTkFrame(tab_configs)
+        configs_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.tree_configs = ttk.Treeview(
+            configs_frame,
+            columns=("id", "device_id", "name", "created"),
+            show="headings",
+        )
+        for h, w in [("id", 60), ("device_id", 100), ("name", 220), ("created", 160)]:
+            self.tree_configs.heading(h, text=h)
+            self.tree_configs.column(h, width=w, anchor="center")
         self.tree_configs.pack(fill="both", expand=True)
-        ctk.CTkButton(right_db, text="refresh configs", command=self.refresh_configs_tree).pack(pady=6)
-        ctk.CTkButton(right_db, text="load selected into preview", command=self.load_config_into_preview).pack(pady=(0,6))
+
+        cfg_btns = ctk.CTkFrame(tab_configs, fg_color="transparent")
+        cfg_btns.pack(fill="x", padx=4, pady=(0, 6))
+        ctk.CTkButton(cfg_btns, text="refresh configs", command=self.refresh_configs_tree).pack(side="left", padx=4)
+        ctk.CTkButton(
+            cfg_btns,
+            text="load selected into preview",
+            command=self.load_config_into_preview,
+        ).pack(side="left", padx=4)
+
+        # ----- users -----
+        users_frame = ctk.CTkFrame(tab_users)
+        users_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.tree_users = ttk.Treeview(
+            users_frame,
+            columns=("id", "username", "email", "role", "created"),
+            show="headings",
+        )
+        for h, w in [
+            ("id", 60),
+            ("username", 140),
+            ("email", 200),
+            ("role", 90),
+            ("created", 160),
+        ]:
+            self.tree_users.heading(h, text=h)
+            self.tree_users.column(h, width=w, anchor="center")
+        self.tree_users.pack(fill="both", expand=True)
+
+        ctk.CTkButton(
+            tab_users,
+            text="refresh users",
+            command=self.refresh_users_tree,
+        ).pack(padx=4, pady=(0, 6), anchor="w")
+
+        # ----- tasks -----
+        tasks_frame = ctk.CTkFrame(tab_tasks)
+        tasks_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.tree_tasks = ttk.Treeview(
+            tasks_frame,
+            columns=("id", "device_id", "task_type", "status", "executed_by", "created"),
+            show="headings",
+        )
+        for h, w in [
+            ("id", 60),
+            ("device_id", 90),
+            ("task_type", 150),
+            ("status", 90),
+            ("executed_by", 100),
+            ("created", 160),
+        ]:
+            self.tree_tasks.heading(h, text=h)
+            self.tree_tasks.column(h, width=w, anchor="center")
+        self.tree_tasks.pack(fill="both", expand=True)
+
+        ctk.CTkButton(
+            tab_tasks,
+            text="refresh tasks",
+            command=self.refresh_tasks_tree,
+        ).pack(padx=4, pady=(0, 6), anchor="w")
+
+        # ----- logs -----
+        logs_frame = ctk.CTkFrame(tab_logs)
+        logs_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.tree_logs = ttk.Treeview(
+            logs_frame,
+            columns=("id", "user_id", "device_id", "action", "severity", "created"),
+            show="headings",
+        )
+        for h, w in [
+            ("id", 50),
+            ("user_id", 70),
+            ("device_id", 80),
+            ("action", 220),
+            ("severity", 90),
+            ("created", 160),
+        ]:
+            self.tree_logs.heading(h, text=h)
+            self.tree_logs.column(h, width=w, anchor="center")
+        self.tree_logs.pack(fill="both", expand=True)
+
+        ctk.CTkButton(
+            tab_logs,
+            text="refresh logs",
+            command=self.refresh_logs_tree,
+        ).pack(padx=4, pady=(0, 6), anchor="w")
+
+        # ----- ai models -----
+        ai_frame = ctk.CTkFrame(tab_ai)
+        ai_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.tree_ai_models = ttk.Treeview(
+            ai_frame,
+            columns=("id", "model_name", "model_type", "accuracy", "version", "trained_at"),
+            show="headings",
+        )
+        for h, w in [
+            ("id", 50),
+            ("model_name", 180),
+            ("model_type", 140),
+            ("accuracy", 90),
+            ("version", 90),
+            ("trained_at", 160),
+        ]:
+            self.tree_ai_models.heading(h, text=h)
+            self.tree_ai_models.column(h, width=w, anchor="center")
+        self.tree_ai_models.pack(fill="both", expand=True)
+
+        ctk.CTkButton(
+            tab_ai,
+            text="refresh models",
+            command=self.refresh_ai_models_tree,
+        ).pack(padx=4, pady=(0, 6), anchor="w")
+
+        # ----- training data -----
+        training_frame = ctk.CTkFrame(tab_training)
+        training_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+        self.tree_training = ttk.Treeview(
+            training_frame,
+            columns=("id", "device_id", "label", "created"),
+            show="headings",
+        )
+        for h, w in [
+            ("id", 60),
+            ("device_id", 90),
+            ("label", 220),
+            ("created", 160),
+        ]:
+            self.tree_training.heading(h, text=h)
+            self.tree_training.column(h, width=w, anchor="center")
+        self.tree_training.pack(fill="both", expand=True)
+
+        ctk.CTkButton(
+            tab_training,
+            text="refresh training data",
+            command=self.refresh_training_tree,
+        ).pack(padx=4, pady=(0, 6), anchor="w")
 
         # gns3 tab quick view
         gns3_header = ctk.CTkFrame(self.tab_gns3, fg_color="transparent")
@@ -284,8 +491,14 @@ class App(ctk.CTk):
         def on_tab_changed(event=None):
             selected = self.nb.get()
             if selected == "database":
+                # When switching to the database tab, refresh all sub-tabs
                 self.refresh_devices_tree()
                 self.refresh_configs_tree()
+                self.refresh_users_tree()
+                self.refresh_tasks_tree()
+                self.refresh_logs_tree()
+                self.refresh_ai_models_tree()
+                self.refresh_training_tree()
         # bind the event - use configure callback as workaround for older customtkinter versions
         try:
             self.nb.bind("<<CTkTabviewChanged>>", on_tab_changed)
@@ -659,7 +872,25 @@ class App(ctk.CTk):
     def refresh_devices_tree(self):
         """Refresh the devices treeview with current database data"""
         for i in self.tree_devices.get_children(): self.tree_devices.delete(i)
-        cur.execute("SELECT id,name,type,ip,port,connection_type,added_from_gns3,created_at FROM devices ORDER BY id DESC")
+        # include status/last_seen if present; fallback handled by SELECT
+        try:
+            cur.execute("""
+                SELECT id,
+                       name,
+                       type,
+                       ip,
+                       port,
+                       connection_type,
+                       added_from_gns3,
+                       COALESCE(status, 'unknown'),
+                       COALESCE(last_seen, ''),
+                       created_at
+                FROM devices
+                ORDER BY id DESC
+            """)
+        except Exception:
+            # fallback to legacy schema if new columns are missing
+            cur.execute("SELECT id,name,type,ip,port,connection_type,added_from_gns3,'' as status,'' as last_seen,created_at FROM devices ORDER BY id DESC")
         for r in cur.fetchall():
             self.tree_devices.insert("", "end", values=r)
     
@@ -669,6 +900,11 @@ class App(ctk.CTk):
             if self.nb.get() == "database":
                 self.refresh_devices_tree()
                 self.refresh_configs_tree()
+                self.refresh_users_tree()
+                self.refresh_tasks_tree()
+                self.refresh_logs_tree()
+                self.refresh_ai_models_tree()
+                self.refresh_training_tree()
         except:
             pass
 
@@ -677,6 +913,77 @@ class App(ctk.CTk):
         cur.execute("SELECT id, device_id, config_name, created_at FROM configs ORDER BY id DESC")
         for r in cur.fetchall():
             self.tree_configs.insert("", "end", values=r)
+
+    def refresh_users_tree(self):
+        for i in self.tree_users.get_children():
+            self.tree_users.delete(i)
+        try:
+            cur.execute("SELECT id, username, email, role, created_at FROM users ORDER BY id DESC")
+            rows = cur.fetchall()
+        except Exception:
+            rows = []
+        for r in rows:
+            self.tree_users.insert("", "end", values=r)
+
+    def refresh_tasks_tree(self):
+        for i in self.tree_tasks.get_children():
+            self.tree_tasks.delete(i)
+        try:
+            cur.execute("""
+                SELECT id, device_id, task_type, status, executed_by, created_at
+                FROM tasks
+                ORDER BY id DESC
+            """)
+            rows = cur.fetchall()
+        except Exception:
+            rows = []
+        for r in rows:
+            self.tree_tasks.insert("", "end", values=r)
+
+    def refresh_logs_tree(self):
+        for i in self.tree_logs.get_children():
+            self.tree_logs.delete(i)
+        try:
+            cur.execute("""
+                SELECT id, user_id, device_id, action, severity, created_at
+                FROM logs
+                ORDER BY id DESC
+            """)
+            rows = cur.fetchall()
+        except Exception:
+            rows = []
+        for r in rows:
+            self.tree_logs.insert("", "end", values=r)
+
+    def refresh_ai_models_tree(self):
+        for i in self.tree_ai_models.get_children():
+            self.tree_ai_models.delete(i)
+        try:
+            cur.execute("""
+                SELECT id, model_name, model_type, accuracy, version, trained_at
+                FROM ai_models
+                ORDER BY id DESC
+            """)
+            rows = cur.fetchall()
+        except Exception:
+            rows = []
+        for r in rows:
+            self.tree_ai_models.insert("", "end", values=r)
+
+    def refresh_training_tree(self):
+        for i in self.tree_training.get_children():
+            self.tree_training.delete(i)
+        try:
+            cur.execute("""
+                SELECT id, device_id, label, created_at
+                FROM training_data
+                ORDER BY id DESC
+            """)
+            rows = cur.fetchall()
+        except Exception:
+            rows = []
+        for r in rows:
+            self.tree_training.insert("", "end", values=r)
 
     def import_device_from_tree(self):
         sel = self.tree_devices.selection()
@@ -706,6 +1013,14 @@ class App(ctk.CTk):
             
 
     # ------------------- logs only UI -------------------
+    def clear_preview(self):
+        """Clear the preview/config window"""
+        try:
+            self.preview.delete("0.0", "end")
+            self.log("Preview cleared")
+        except Exception:
+            pass
+
     def log(self, msg):
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         try:
@@ -757,16 +1072,22 @@ class App(ctk.CTk):
         self.log(f"starting serial to {port}@{baud}")
         ok = Sender.send_serial(self.log, port, baud, content)
         self.log(f"serial finished: {ok}")
+        if ok:
+            self.clear_preview()
 
     def _thread_telnet(self, host, port, user, pw, enable, content):
         self.log(f"starting telnet to {host}:{port}")
         ok = Sender.send_telnet(self.log, host, port, user, pw, enable, content)
         self.log(f"telnet finished: {ok}")
+        if ok:
+            self.clear_preview()
 
     def _thread_ssh(self, host, port, user, pw, enable, content):
         self.log(f"starting ssh to {host}:{port} as {user}")
         ok = Sender.send_ssh(self.log, host, port, user, pw, enable, content)
         self.log(f"ssh finished: {ok}")
+        if ok:
+            self.clear_preview()
 
     # ------------------- GNS3 integration -------------------
     def refresh_gns3_connection(self):
@@ -853,6 +1174,16 @@ class App(ctk.CTk):
                         ntype = 'router'
                     else:
                         ntype = 'switch'
+                    # Check if device already exists in database by node_id
+                    try:
+                        cur.execute("SELECT name FROM devices WHERE node_id=? AND project_id=?", (node_id, project_id))
+                        existing = cur.fetchone()
+                        if existing:
+                            # Device already exists, skip import
+                            continue
+                    except Exception:
+                        pass  # If check fails, proceed with import
+                    
                     base = name; dev_name = base; i = 1
                     while any(d[0]==dev_name for d in self.devices):
                         dev_name = f"{base}-{i}"; i+=1
@@ -912,15 +1243,27 @@ class App(ctk.CTk):
         sel = simpledialog.askinteger("select node", "\n".join(labels) + "\n\nenter number to import:", parent=self, minvalue=1, maxvalue=len(labels))
         if not sel: return
         node = nodes[sel-1]
+        node_id = node.get("node_id") or node.get("id")
+        
+        # Check if device already exists in database
+        try:
+            cur.execute("SELECT name FROM devices WHERE node_id=? AND project_id=?", (node_id, project_id))
+            existing = cur.fetchone()
+            if existing:
+                messagebox.showinfo("Already Imported", f"This device '{existing[0]}' has already been imported from GNS3.", parent=self)
+                return
+        except Exception:
+            pass
+        
         console_host = node.get("console_host", "localhost")
         console_port = node.get("console") or node.get("console_port") or ""
-        name = node.get("name") or f"node-{str(node.get('node_id',''))[:6]}"
+        name = node.get("name") or f"node-{str(node_id,'')[:6]}"
         dtype = simpledialog.askstring("device type", "device type for imported node (router/switch/core switch):", initialvalue="router", parent=self)
         if not dtype: return
         dtype = dtype.strip().lower()
         if dtype not in self.device_types:
             messagebox.showerror("error","unknown type"); return
-        meta = {"gns3_node": True, "project_id": project_id, "node_id": node.get("node_id") or node.get("id"), "console_host": console_host, "console_port": console_port}
+        meta = {"gns3_node": True, "project_id": project_id, "node_id": node_id, "console_host": console_host, "console_port": console_port}
         base = name; dev_name = base; i = 1
         while any(d[0]==dev_name for d in self.devices):
             dev_name = f"{base}-{i}"; i+=1
@@ -928,7 +1271,7 @@ class App(ctk.CTk):
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         try:
             cur.execute("INSERT OR REPLACE INTO devices (name,type,ip,port,connection_type,added_from_gns3,project_id,node_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                        (dev_name, dtype, console_host, str(console_port), "gns3-console", 1, project_id, node.get("node_id") or node.get("id"), ts))
+                        (dev_name, dtype, console_host, str(console_port), "gns3-console", 1, project_id, node_id, ts))
             conn.commit()
         except Exception as e:
             self.log(f"[db] error saving gns3 device: {e}")
