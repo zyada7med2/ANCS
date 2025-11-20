@@ -2,7 +2,7 @@
 Network communication sender for serial, telnet, and SSH
 """
 import time
-import telnetlib
+import telnetlib3
 import re
 
 # Optional imports
@@ -116,7 +116,7 @@ class Sender:
     def send_telnet(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0):
         try:
             log_fn(f"[telnet] connecting to {host}:{port} ...")
-            tn = telnetlib.Telnet(host, port, timeout=timeout)
+            tn = telnetlib3.Telnet(host, port, timeout=timeout)
             time.sleep(0.4)
             # best-effort login
             try:
