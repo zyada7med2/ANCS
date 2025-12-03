@@ -43,7 +43,22 @@ class App(ctk.CTk):
         self.minsize(900, 580)
 
         ctk.set_appearance_mode("dark")
+        # Custom color theme matching Figma design
         ctk.set_default_color_theme("blue")
+        
+        # Figma design colors
+        self.colors = {
+            "bg_main": "#0d1117",      # Very dark background
+            "bg_card": "#1a1f2e",      # Card/panel background
+            "bg_inner": "#0f1419",     # Inner content area
+            "accent": "#22d3ee",       # Primary cyan accent
+            "accent_hover": "#06b6d4", # Hover state
+            "text_primary": "#ffffff",
+            "text_secondary": "#9ca3af",
+            "success": "#22c55e",
+            "danger": "#ef4444",
+            "border": "#374151",
+        }
 
         # device types
         self.device_types = {"router": RouterModel, "switch": SwitchModel, "core switch": CoreSwitchModel}
@@ -67,7 +82,10 @@ class App(ctk.CTk):
         threading.Thread(target=self._auto_connect_gns3, daemon=True).start()
 
     def _build_ui(self):
-        top = ctk.CTkFrame(self, height=70)
+        # Configure main window background - Figma dark theme
+        self.configure(fg_color="#0d1117")
+        
+        top = ctk.CTkFrame(self, height=70, fg_color="#0d1117")
         top.pack(side="top", fill="x")
         
         # ANCS Logo (left side)
@@ -117,91 +135,197 @@ class App(ctk.CTk):
                 if self.logo_image is not None:
                     break
         
-        # If no logo image found, show text logo
+        # If no logo image found, show text logo - Figma styled
         if self.logo_image is None:
-            ctk.CTkLabel(logo_frame, text="ANCS", font=ctk.CTkFont(size=20, weight="bold"), text_color="#4A9EFF").pack(side="left", padx=4)
-            ctk.CTkLabel(logo_frame, text="Auto Network\nConfiguration System", font=ctk.CTkFont(size=9), text_color="#bcd", justify="left").pack(side="left", padx=2)
+            ctk.CTkLabel(logo_frame, text="ANCS", font=ctk.CTkFont(size=20, weight="bold"), text_color="#22d3ee").pack(side="left", padx=4)
+            ctk.CTkLabel(logo_frame, text="Auto Network\nConfiguration System", font=ctk.CTkFont(size=9), text_color="#9ca3af", justify="left").pack(side="left", padx=2)
         
-        # Title and subtitle (center)
-        title_frame = ctk.CTkFrame(top, fg_color="transparent")
-        title_frame.pack(side="left", fill="x", expand=True, padx=12)
-        ctk.CTkLabel(title_frame, text="network manager", font=ctk.CTkFont(size=18, weight="bold")).pack(anchor="w")
-        ctk.CTkLabel(title_frame, text="customtk · sqlite · gns3(auto) · run(telnet/ssh/serial)", text_color="#bcd", font=ctk.CTkFont(size=11)).pack(anchor="w")
-
-        self.nb = ctk.CTkTabview(self)
-        self.nb.pack(fill="both", expand=True, padx=12, pady=12)
-        self.nb.add("main"); self.nb.add("gns3 devices"); self.nb.add("output / logs"); self.nb.add("database")
+        # Navigation tabs in CENTER of header - like Figma photo 1
+        nav_frame = ctk.CTkFrame(top, fg_color="transparent")
+        nav_frame.pack(side="left", fill="x", expand=True)
+        
+        # Center the nav buttons using inner frame
+        nav_inner = ctk.CTkFrame(nav_frame, fg_color="transparent")
+        nav_inner.pack(expand=True)
+        
+        # Main tab with icon and underline
+        self.main_tab_frame = ctk.CTkFrame(nav_inner, fg_color="transparent")
+        self.main_tab_frame.pack(side="left", padx=12)
+        self.btn_main_nav = ctk.CTkButton(self.main_tab_frame, text="🏠 Main", command=lambda: self._switch_tab("main"),
+                                         fg_color="transparent", hover_color="#1a1f2e", width=90, height=32,
+                                         font=ctk.CTkFont(size=13, weight="bold"), text_color="#22d3ee")
+        self.btn_main_nav.pack()
+        self.main_underline = ctk.CTkFrame(self.main_tab_frame, height=3, fg_color="#22d3ee")
+        self.main_underline.pack(fill="x", pady=(4,0))
+        
+        # Logs tab with icon and underline
+        self.logs_tab_frame = ctk.CTkFrame(nav_inner, fg_color="transparent")
+        self.logs_tab_frame.pack(side="left", padx=12)
+        self.btn_logs_nav = ctk.CTkButton(self.logs_tab_frame, text="☰ Logs", command=lambda: self._switch_tab("logs"),
+                                          fg_color="transparent", hover_color="#1a1f2e", width=90, height=32,
+                                          font=ctk.CTkFont(size=13), text_color="#9ca3af")
+        self.btn_logs_nav.pack()
+        self.logs_underline = ctk.CTkFrame(self.logs_tab_frame, height=3, fg_color="transparent")
+        self.logs_underline.pack(fill="x", pady=(4,0))
+        
+        # Create tabview - Figma dark theme
+        self.nb = ctk.CTkTabview(self, fg_color="#0d1117", segmented_button_fg_color="#0d1117",
+                                segmented_button_selected_color="#0d1117", 
+                                segmented_button_unselected_color="#0d1117")
+        self.nb.pack(fill="both", expand=True, padx=12, pady=8)
+        # Only add main and logs tabs - database tab code kept but hidden
+        self.nb.add("main")
+        self.nb.add("output / logs")
+        # Hide the default tab buttons (we're using custom navigation)
+        self.nb._segmented_button.pack_forget()
+        # Database tab: keep code but don't show tab (commented out for future use)
+        # self.nb.add("database")
         self.tab_main = self.nb.tab("main")
-        self.tab_gns3 = self.nb.tab("gns3 devices")
         self.tab_logs = self.nb.tab("output / logs")
-        self.tab_db = self.nb.tab("database")
+        # Keep database tab reference for future use (code remains intact)
+        # self.tab_db = self.nb.tab("database")
     
-        # left column
-        left_container = ctk.CTkFrame(self.tab_main, width=300)
+        # left column - Figma styled
+        left_container = ctk.CTkFrame(self.tab_main, width=280, fg_color="#1a1f2e", corner_radius=8)
         left_container.pack(side="left", fill="y", padx=(8,4), pady=8)
         left_container.pack_propagate(False)
-        left_scroll = ctk.CTkScrollableFrame(left_container, width=280)
-        left_scroll.pack(fill="both", expand=True)
+        left_scroll = ctk.CTkScrollableFrame(left_container, width=260, fg_color="transparent")
+        left_scroll.pack(fill="both", expand=True, padx=4, pady=4)
         left = left_scroll
-        ctk.CTkLabel(left, text="devices", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="nw", padx=8, pady=(8,4))
-        self.lb_devices = tk.Listbox(left, height=10, bd=0)
-        self.lb_devices.pack(fill="x", padx=8)
-        self.lb_devices.bind("<<ListboxSelect>>", lambda e: self.on_device_select())
+        
+        # ═══════════════════════════════════════════════════════════════
+        # DEVICES SECTION - Custom list with checkboxes like Figma photo 1
+        # ═══════════════════════════════════════════════════════════════
+        ctk.CTkLabel(left, text="Devices", font=ctk.CTkFont(size=14, weight="bold"), text_color="#ffffff").pack(anchor="nw", padx=8, pady=(8,4))
+        
+        # Custom devices list container
+        self.devices_list_frame = ctk.CTkFrame(left, fg_color="#0f1419", corner_radius=6)
+        self.devices_list_frame.pack(fill="x", padx=8, pady=(0,4))
+        
+        # Scrollable frame for device items
+        self.devices_scroll = ctk.CTkScrollableFrame(self.devices_list_frame, fg_color="transparent", height=180)
+        self.devices_scroll.pack(fill="x", padx=2, pady=2)
+        
+        # Store device item widgets and selection state
+        self.device_items = {}  # {name: {"frame": frame, "checkbox": checkbox, "selected": bool}}
+        self.selected_device_name = None
 
+        # Device buttons - OUTLINED style like Figma
         dbbtns = ctk.CTkFrame(left, fg_color="transparent")
         dbbtns.pack(fill="x", padx=8, pady=6)
-        ctk.CTkButton(dbbtns, text="add", command=self.add_device_prompt).pack(side="left", expand=True, padx=4)
-        ctk.CTkButton(dbbtns, text="remove", fg_color="#d9534f", command=self.remove_selected_device).pack(side="left", expand=True, padx=4)
-        ctk.CTkButton(left, text="save selected to db", command=self.save_device_to_db).pack(fill="x", padx=8, pady=(6,4))
-        ctk.CTkButton(left, text="view saved devices", command=self.view_saved_devices).pack(fill="x", padx=8)
-        ctk.CTkButton(left, text="subnet calculator (quick)", command=self.subnet_calculator).pack(fill="x", padx=8, pady=(6,4))
-        ctk.CTkButton(left, text="Subnet Calculator (GUI)", command=lambda: SubnetCalculator(self)).pack(fill="x", padx=8, pady=6)
+        ctk.CTkButton(dbbtns, text="+ Add", command=self.add_device_prompt,
+                     fg_color="transparent", hover_color="#1a1f2e", 
+                     border_width=1, border_color="#22d3ee", text_color="#22d3ee",
+                     font=ctk.CTkFont(size=11), corner_radius=6, height=30).pack(side="left", expand=True, padx=(0,4))
+        ctk.CTkButton(dbbtns, text="🗑 Remove", command=self.remove_selected_device,
+                     fg_color="transparent", hover_color="#1a1f2e",
+                     border_width=1, border_color="#22d3ee", text_color="#22d3ee",
+                     font=ctk.CTkFont(size=11), corner_radius=6, height=30).pack(side="left", expand=True, padx=(4,0))
 
-        ctk.CTkLabel(left, text="templates", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="nw", padx=8, pady=(12,4))
-        self.lb_templates = tk.Listbox(left, height=12, bd=0)
-        self.lb_templates.pack(fill="both", expand=True, padx=8)
-        self.lb_templates.bind("<<ListboxSelect>>", lambda e: self.on_template_select())
+        # ═══════════════════════════════════════════════════════════════
+        # TEMPLATES SECTION - Custom list with checkboxes like Figma photo 1
+        # ═══════════════════════════════════════════════════════════════
+        ctk.CTkLabel(left, text="Templates", font=ctk.CTkFont(size=14, weight="bold"), text_color="#ffffff").pack(anchor="nw", padx=8, pady=(12,4))
+        
+        # Custom templates list container
+        self.templates_list_frame = ctk.CTkFrame(left, fg_color="#0f1419", corner_radius=6)
+        self.templates_list_frame.pack(fill="both", expand=True, padx=8, pady=(0,4))
+        
+        # Scrollable frame for template items
+        self.templates_scroll = ctk.CTkScrollableFrame(self.templates_list_frame, fg_color="transparent")
+        self.templates_scroll.pack(fill="both", expand=True, padx=2, pady=2)
+        
+        # Store template item widgets and selection state
+        self.template_items = {}  # {name: {"frame": frame, "checkbox": checkbox, "selected": bool}}
+        self.selected_template_name = None
 
+        # Template buttons - OUTLINED style like Figma
         tbtns = ctk.CTkFrame(left, fg_color="transparent")
         tbtns.pack(fill="x", padx=8, pady=6)
-        ctk.CTkButton(tbtns, text="add template", command=self.add_template_dialog).pack(side="left", expand=True, padx=4)
-        ctk.CTkButton(tbtns, text="edit template", command=self.edit_template_dialog).pack(side="left", expand=True, padx=4)
-        ctk.CTkButton(left, text="guided setup (beginner)", fg_color="#1abc9c", command=self.guided_setup).pack(fill="x", padx=8, pady=(8,4))
-        ctk.CTkButton(left, text="vlan popup wizard", command=self.vlan_popup).pack(fill="x", padx=8, pady=(6,4))
-        ctk.CTkButton(left, text="vlan gui wizard", command=self.vlan_gui_wizard).pack(fill="x", padx=8)
-        ctk.CTkButton(left, text="stp popup wizard", command=self.stp_popup).pack(fill="x", padx=8, pady=(6,4))
-        ctk.CTkButton(left, text="stp gui wizard", command=self.stp_gui_wizard).pack(fill="x", padx=8)
+        ctk.CTkButton(tbtns, text="+ Add", command=self.add_template_dialog,
+                     fg_color="transparent", hover_color="#1a1f2e",
+                     border_width=1, border_color="#22d3ee", text_color="#22d3ee",
+                     font=ctk.CTkFont(size=11), corner_radius=6, height=30).pack(side="left", expand=True, padx=(0,4))
+        ctk.CTkButton(tbtns, text="✏ Edit", command=self.edit_template_dialog,
+                     fg_color="transparent", hover_color="#1a1f2e",
+                     border_width=1, border_color="#22d3ee", text_color="#22d3ee",
+                     font=ctk.CTkFont(size=11), corner_radius=6, height=30).pack(side="left", expand=True, padx=(4,0))
+        
+        # Guided Setup Wizard button - Figma styled (solid green accent)
+        ctk.CTkButton(left, text="🧙 Guided Setup (Beginner)", command=self.guided_setup,
+                     fg_color="#22c55e", hover_color="#16a34a", text_color="#0f1419",
+                     font=ctk.CTkFont(size=11, weight="bold"), corner_radius=6, height=34).pack(fill="x", padx=8, pady=(12,4))
+        
+        # Subnet Calculator GUI button - Figma styled (outlined cyan)
+        ctk.CTkButton(left, text="🔢 Subnet Calculator (GUI)", command=lambda: SubnetCalculator(self),
+                     fg_color="transparent", hover_color="#1a1f2e",
+                     border_width=1, border_color="#22d3ee", text_color="#22d3ee",
+                     font=ctk.CTkFont(size=11), corner_radius=6, height=32).pack(fill="x", padx=8, pady=(4,8))
 
-        # center area
-        center = ctk.CTkFrame(self.tab_main)
+        # center area - Figma styled
+        center = ctk.CTkFrame(self.tab_main, fg_color="transparent")
         center.pack(side="left", fill="both", expand=True, padx=6, pady=8)
 
-        topc = ctk.CTkFrame(center)
-        topc.pack(fill="x")
-        ctk.CTkLabel(topc, text="preview / generated config", font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
+        # Preview header with title and OUTLINED buttons on top right
+        topc = ctk.CTkFrame(center, fg_color="transparent")
+        topc.pack(fill="x", pady=(0, 6))
+        ctk.CTkLabel(topc, text="Preview", font=ctk.CTkFont(size=16, weight="bold"), text_color="#ffffff").pack(side="left")
         gframe = ctk.CTkFrame(topc, fg_color="transparent")
         gframe.pack(side="right")
-        ctk.CTkButton(gframe, text="generate selected", command=self.generate_selected).pack(side="left", padx=6)
-        ctk.CTkButton(gframe, text="generate full", command=self.generate_full).pack(side="left", padx=6)
-        ctk.CTkButton(gframe, text="save config to db", fg_color="#6b2d9c", command=self.save_config_to_db).pack(side="left", padx=6)
-        ctk.CTkButton(gframe, text="view saved configs", fg_color="#6b2d9c", command=self.view_saved_configs).pack(side="left", padx=6)
+        ctk.CTkButton(gframe, text="Save config to db", 
+                     fg_color="transparent", hover_color="#1a1f2e",
+                     border_width=1, border_color="#22d3ee", text_color="#22d3ee",
+                     command=self.save_config_to_db, width=130, height=32,
+                     font=ctk.CTkFont(size=11), corner_radius=6).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(gframe, text="View saved configs", 
+                     fg_color="transparent", hover_color="#1a1f2e",
+                     border_width=1, border_color="#22d3ee", text_color="#22d3ee",
+                     command=self.view_saved_configs, width=140, height=32,
+                     font=ctk.CTkFont(size=11), corner_radius=6).pack(side="left")
 
-        preview_holder = ctk.CTkFrame(center)
-        preview_holder.pack(fill="both", expand=True, padx=4, pady=4)
-        self.preview = ctk.CTkTextbox(preview_holder, wrap="none")
-        self.preview.pack(fill="both", expand=True, padx=6, pady=(6,2))
+        # Preview holder - dark card like Figma
+        preview_holder = ctk.CTkFrame(center, fg_color="#1a1f2e", corner_radius=8)
+        preview_holder.pack(fill="both", expand=True, padx=0, pady=0)
         
-        # Clear preview button
-        clear_btn_frame = ctk.CTkFrame(preview_holder, fg_color="transparent")
-        clear_btn_frame.pack(fill="x", padx=6, pady=(2,6))
+        # Inner preview area - darker
+        self.preview = ctk.CTkTextbox(preview_holder, wrap="none", 
+                                     font=ctk.CTkFont(family="Consolas", size=11),
+                                     fg_color="#0f1419", text_color="#ffffff",
+                                     corner_radius=6, border_width=1, border_color="#374151")
+        self.preview.pack(fill="both", expand=True, padx=12, pady=(12, 8))
+        
+        # Bottom buttons frame
+        bottom_btn_frame = ctk.CTkFrame(preview_holder, fg_color="transparent")
+        bottom_btn_frame.pack(fill="x", padx=12, pady=(0, 12))
+        
+        # Generate button - SOLID filled like Figma
         ctk.CTkButton(
-            clear_btn_frame, 
+            bottom_btn_frame, 
+            text="Generate", 
+            command=self.generate_full,
+            fg_color="#22d3ee",
+            hover_color="#06b6d4",
+            text_color="#0f1419",
+            width=110,
+            height=32,
+            font=ctk.CTkFont(size=11, weight="bold"),
+            corner_radius=6
+        ).pack(side="left")
+        
+        # Clear Preview button - OUTLINED red like Figma
+        ctk.CTkButton(
+            bottom_btn_frame, 
             text="Clear Preview", 
             command=self.clear_preview,
-            fg_color="#e74c3c",
-            hover_color="#c0392b",
+            fg_color="transparent",
+            hover_color="#1a1f2e",
+            border_width=1,
+            border_color="#ef4444",
+            text_color="#ef4444",
             width=120,
-            height=28
+            height=32,
+            font=ctk.CTkFont(size=11),
+            corner_radius=6
         ).pack(side="right")
         
         # Enable paste in preview window
@@ -216,269 +340,391 @@ class App(ctk.CTk):
         self.preview.bind("<Control-v>", paste_handler)
         self.preview.bind("<Command-v>", paste_handler)  # macOS
 
-        # right column
-        right = ctk.CTkFrame(self.tab_main, width=320)
+        # right column - Figma styled card
+        right = ctk.CTkFrame(self.tab_main, width=300, fg_color="#1a1f2e", corner_radius=8)
         right.pack(side="right", fill="y", padx=(4,8), pady=8)
         right.pack_propagate(False)
-        ctk.CTkLabel(right, text="send / connect", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="nw", padx=8, pady=(8,6))
-        self.send_method = ctk.CTkOptionMenu(right, values=["serial (console)", "telnet", "ssh"]) 
-        self.send_method.set("serial (console)")
-        self.send_method.pack(fill="x", padx=8, pady=(0,6))
-
-        # serial
-        ctk.CTkLabel(right, text="serial (console)").pack(anchor="w", padx=8, pady=(6,0))
-        self.ent_serial_port = ctk.CTkEntry(right, placeholder_text="COM3 or /dev/ttyUSB0")
-        self.ent_serial_port.pack(fill="x", padx=8)
-        self.ent_serial_baud = ctk.CTkEntry(right, placeholder_text="9600")
-        self.ent_serial_baud.pack(fill="x", padx=8, pady=(6,0))
-
-        # network
-        ctk.CTkLabel(right, text="network (telnet / ssh)").pack(anchor="w", padx=8, pady=(8,0))
-        self.ent_host = ctk.CTkEntry(right, placeholder_text="host or ip")
-        self.ent_host.pack(fill="x", padx=8)
-        self.ent_port = ctk.CTkEntry(right, placeholder_text="port")
-        self.ent_port.pack(fill="x", padx=8, pady=(6,0))
-        self.ent_user = ctk.CTkEntry(right, placeholder_text="username")
-        self.ent_user.pack(fill="x", padx=8, pady=(6,0))
-        self.ent_pass = ctk.CTkEntry(right, placeholder_text="password", show="*")
-        self.ent_pass.pack(fill="x", padx=8, pady=(6,0))
-        self.ent_enable = ctk.CTkEntry(right, placeholder_text="enable password (optional)", show="*")
-        self.ent_enable.pack(fill="x", padx=8, pady=(6,0))
-
-        ctk.CTkButton(right, text="send now (background)", command=self.send_now).pack(fill="x", padx=8, pady=(12,8))
-
-        # logs tab
-        ctk.CTkLabel(self.tab_logs, text="output / logs", font=ctk.CTkFont(size=14, weight="bold")).pack(anchor="nw", padx=12, pady=(8,6))
-        self.txt_logs = ctk.CTkTextbox(self.tab_logs)
-        self.txt_logs.pack(fill="both", expand=True, padx=12, pady=(4,12))
-        ctk.CTkButton(self.tab_logs, text="clear logs", command=lambda: self.txt_logs.delete("0.0","end")).pack(padx=12, pady=(0,12))
-
-        # database tab: professional multi-entity browser
-        ctk.CTkLabel(
-            self.tab_db,
-            text="database browser",
-            font=ctk.CTkFont(size=14, weight="bold")
-        ).pack(anchor="nw", padx=12, pady=(8, 2))
-
-        db_top = ctk.CTkFrame(self.tab_db, fg_color="transparent")
-        db_top.pack(fill="x", padx=12, pady=(0, 6))
-        ctk.CTkLabel(
-            db_top,
-            text=f"SQLite file: {DB_PATH}",
-            font=ctk.CTkFont(size=11),
-            text_color="#bcd",
-        ).pack(side="left")
-
-        # Inner tabview for each logical entity in the database
-        self.db_tabview = ctk.CTkTabview(self.tab_db)
-        self.db_tabview.pack(fill="both", expand=True, padx=12, pady=8)
-
-        tab_devices = self.db_tabview.add("devices")
-        tab_configs = self.db_tabview.add("configs")
-        tab_users = self.db_tabview.add("users")
-        tab_tasks = self.db_tabview.add("tasks")
-        tab_logs = self.db_tabview.add("logs")
-        tab_ai = self.db_tabview.add("ai models")
-        tab_training = self.db_tabview.add("training data")
-
-        # ----- devices tab -----
-        devices_frame = ctk.CTkFrame(tab_devices)
-        devices_frame.pack(fill="both", expand=True, padx=4, pady=4)
-
-        self.tree_devices = ttk.Treeview(
-            devices_frame,
-            columns=("id", "name", "type", "ip", "port", "conn", "gns3", "status", "last_seen", "created"),
-            show="headings",
-        )
-        for h, w in [
-            ("id", 50),
-            ("name", 160),
-            ("type", 100),
-            ("ip", 110),
-            ("port", 70),
-            ("conn", 90),
-            ("gns3", 60),
-            ("status", 90),
-            ("last_seen", 130),
-            ("created", 150),
-        ]:
-            self.tree_devices.heading(h, text=h)
-            self.tree_devices.column(h, width=w, anchor="center")
-        self.tree_devices.pack(fill="both", expand=True)
-
-        dev_btns = ctk.CTkFrame(tab_devices, fg_color="transparent")
-        dev_btns.pack(fill="x", padx=4, pady=(0, 6))
-        ctk.CTkButton(dev_btns, text="refresh devices", command=self.refresh_devices_tree).pack(side="left", padx=4)
-        ctk.CTkButton(
-            dev_btns,
-            text="import selected into workspace",
-            command=self.import_device_from_tree,
-        ).pack(side="left", padx=4)
-
-        # ----- configs (legacy generated configs) -----
-        configs_frame = ctk.CTkFrame(tab_configs)
-        configs_frame.pack(fill="both", expand=True, padx=4, pady=4)
-
-        self.tree_configs = ttk.Treeview(
-            configs_frame,
-            columns=("id", "device_id", "name", "created"),
-            show="headings",
-        )
-        for h, w in [("id", 60), ("device_id", 100), ("name", 220), ("created", 160)]:
-            self.tree_configs.heading(h, text=h)
-            self.tree_configs.column(h, width=w, anchor="center")
-        self.tree_configs.pack(fill="both", expand=True)
-
-        cfg_btns = ctk.CTkFrame(tab_configs, fg_color="transparent")
-        cfg_btns.pack(fill="x", padx=4, pady=(0, 6))
-        ctk.CTkButton(cfg_btns, text="refresh configs", command=self.refresh_configs_tree).pack(side="left", padx=4)
-        ctk.CTkButton(
-            cfg_btns,
-            text="load selected into preview",
-            command=self.load_config_into_preview,
-        ).pack(side="left", padx=4)
-
-        # ----- users -----
-        users_frame = ctk.CTkFrame(tab_users)
-        users_frame.pack(fill="both", expand=True, padx=4, pady=4)
-
-        self.tree_users = ttk.Treeview(
-            users_frame,
-            columns=("id", "username", "email", "role", "created"),
-            show="headings",
-        )
-        for h, w in [
-            ("id", 60),
-            ("username", 140),
-            ("email", 200),
-            ("role", 90),
-            ("created", 160),
-        ]:
-            self.tree_users.heading(h, text=h)
-            self.tree_users.column(h, width=w, anchor="center")
-        self.tree_users.pack(fill="both", expand=True)
-
-        ctk.CTkButton(
-            tab_users,
-            text="refresh users",
-            command=self.refresh_users_tree,
-        ).pack(padx=4, pady=(0, 6), anchor="w")
-
-        # ----- tasks -----
-        tasks_frame = ctk.CTkFrame(tab_tasks)
-        tasks_frame.pack(fill="both", expand=True, padx=4, pady=4)
-
-        self.tree_tasks = ttk.Treeview(
-            tasks_frame,
-            columns=("id", "device_id", "task_type", "status", "executed_by", "created"),
-            show="headings",
-        )
-        for h, w in [
-            ("id", 60),
-            ("device_id", 90),
-            ("task_type", 150),
-            ("status", 90),
-            ("executed_by", 100),
-            ("created", 160),
-        ]:
-            self.tree_tasks.heading(h, text=h)
-            self.tree_tasks.column(h, width=w, anchor="center")
-        self.tree_tasks.pack(fill="both", expand=True)
-
-        ctk.CTkButton(
-            tab_tasks,
-            text="refresh tasks",
-            command=self.refresh_tasks_tree,
-        ).pack(padx=4, pady=(0, 6), anchor="w")
-
-        # ----- logs -----
-        logs_frame = ctk.CTkFrame(tab_logs)
-        logs_frame.pack(fill="both", expand=True, padx=4, pady=4)
-
-        self.tree_logs = ttk.Treeview(
-            logs_frame,
-            columns=("id", "user_id", "device_id", "action", "severity", "created"),
-            show="headings",
-        )
-        for h, w in [
-            ("id", 50),
-            ("user_id", 70),
-            ("device_id", 80),
-            ("action", 220),
-            ("severity", 90),
-            ("created", 160),
-        ]:
-            self.tree_logs.heading(h, text=h)
-            self.tree_logs.column(h, width=w, anchor="center")
-        self.tree_logs.pack(fill="both", expand=True)
-
-        ctk.CTkButton(
-            tab_logs,
-            text="refresh logs",
-            command=self.refresh_logs_tree,
-        ).pack(padx=4, pady=(0, 6), anchor="w")
-
-        # ----- ai models -----
-        ai_frame = ctk.CTkFrame(tab_ai)
-        ai_frame.pack(fill="both", expand=True, padx=4, pady=4)
-
-        self.tree_ai_models = ttk.Treeview(
-            ai_frame,
-            columns=("id", "model_name", "model_type", "accuracy", "version", "trained_at"),
-            show="headings",
-        )
-        for h, w in [
-            ("id", 50),
-            ("model_name", 180),
-            ("model_type", 140),
-            ("accuracy", 90),
-            ("version", 90),
-            ("trained_at", 160),
-        ]:
-            self.tree_ai_models.heading(h, text=h)
-            self.tree_ai_models.column(h, width=w, anchor="center")
-        self.tree_ai_models.pack(fill="both", expand=True)
-
-        ctk.CTkButton(
-            tab_ai,
-            text="refresh models",
-            command=self.refresh_ai_models_tree,
-        ).pack(padx=4, pady=(0, 6), anchor="w")
-
-        # ----- training data -----
-        training_frame = ctk.CTkFrame(tab_training)
-        training_frame.pack(fill="both", expand=True, padx=4, pady=4)
-
-        self.tree_training = ttk.Treeview(
-            training_frame,
-            columns=("id", "device_id", "label", "created"),
-            show="headings",
-        )
-        for h, w in [
-            ("id", 60),
-            ("device_id", 90),
-            ("label", 220),
-            ("created", 160),
-        ]:
-            self.tree_training.heading(h, text=h)
-            self.tree_training.column(h, width=w, anchor="center")
-        self.tree_training.pack(fill="both", expand=True)
-
-        ctk.CTkButton(
-            tab_training,
-            text="refresh training data",
-            command=self.refresh_training_tree,
-        ).pack(padx=4, pady=(0, 6), anchor="w")
-
-        # gns3 tab quick view
-        gns3_header = ctk.CTkFrame(self.tab_gns3, fg_color="transparent")
-        gns3_header.pack(fill="x", padx=12, pady=(8,6))
-        ctk.CTkLabel(gns3_header, text="gns3 auto-import", font=ctk.CTkFont(size=14, weight="bold")).pack(side="left")
-        ctk.CTkButton(gns3_header, text="🔄 Refresh", command=self.refresh_gns3_connection, width=100, fg_color="#2d9cdb").pack(side="right", padx=(6,0))
         
-        self.lbl_gns3_status = ctk.CTkLabel(self.tab_gns3, text="attempting auto-connect to gns3...")
-        self.lbl_gns3_status.pack(anchor="nw", padx=12, pady=(0,6))
-        ctk.CTkButton(self.tab_gns3, text="manual import from gns3", command=self.gns3_list_projects).pack(padx=12, pady=(6,6))
+        # CONFIG STATUS SECTION - Like Figma design
+        ctk.CTkLabel(right, text="Config Status", font=ctk.CTkFont(size=14, weight="bold"), 
+                    text_color="#ffffff").pack(anchor="nw", padx=12, pady=(12,8))
+        
+        # Config name row with Connected badge
+        config_row = ctk.CTkFrame(right, fg_color="transparent")
+        config_row.pack(fill="x", padx=12, pady=(0, 8))
+        ctk.CTkLabel(config_row, text="config name", font=ctk.CTkFont(size=11), 
+                    text_color="#9ca3af").pack(side="left")
+        
+        # Connected badge - green pill like Figma
+        self.lbl_gns3_status = ctk.CTkLabel(config_row, text="● Connected", 
+                                           font=ctk.CTkFont(size=11),
+                                           text_color="#22c55e",
+                                           fg_color="transparent")
+        self.lbl_gns3_status.pack(side="right")
+        
+        # Import and Refresh buttons - OUTLINED like Figma
+        gns3_controls = ctk.CTkFrame(right, fg_color="transparent")
+        gns3_controls.pack(fill="x", padx=12, pady=(0, 16))
+        ctk.CTkButton(gns3_controls, text="⬆ Import", command=self.gns3_list_projects,
+                     fg_color="transparent", hover_color="#1a1f2e",
+                     border_width=1, border_color="#22d3ee", text_color="#22d3ee",
+                     width=100, height=32, font=ctk.CTkFont(size=11), corner_radius=6).pack(side="left", padx=(0, 8))
+        ctk.CTkButton(gns3_controls, text="↻ Refresh", command=self.refresh_gns3_connection, 
+                     fg_color="transparent", hover_color="#1a1f2e",
+                     border_width=1, border_color="#22d3ee", text_color="#22d3ee",
+                     width=100, height=32, font=ctk.CTkFont(size=11), corner_radius=6).pack(side="left")
+        
+        # SEND / CONNECT SECTION
+        ctk.CTkLabel(right, text="Send / Connect", font=ctk.CTkFont(size=14, weight="bold"), 
+                    text_color="#ffffff").pack(anchor="nw", padx=12, pady=(0,8))
+        
+        # Protocol dropdown - SOLID filled cyan like Figma
+        self.send_method = ctk.CTkOptionMenu(right, values=["Telnet", "Serial", "SSH"],
+                                            fg_color="#22d3ee", button_color="#06b6d4",
+                                            button_hover_color="#0891b2", text_color="#0f1419",
+                                            font=ctk.CTkFont(size=11), corner_radius=6, height=36) 
+        self.send_method.set("Telnet")
+        self.send_method.pack(fill="x", padx=12, pady=(0,12))
+        self.send_method.configure(command=self._on_protocol_changed)
+
+        # Serial fields section
+        self.lbl_serial_title = ctk.CTkLabel(right, text="Serial", font=ctk.CTkFont(size=12, weight="bold"), 
+                                            text_color="#ffffff")
+        self.lbl_serial_title.pack(anchor="w", padx=12, pady=(0,6))
+        
+        self.ent_serial_port = ctk.CTkEntry(right, placeholder_text="COM3 or /dev/ttyUSB0",
+                                           font=ctk.CTkFont(size=11), height=36,
+                                           fg_color="#0f1419", border_color="#374151",
+                                           corner_radius=6, text_color="#ffffff")
+        self.ent_serial_port.pack(fill="x", padx=12, pady=(0,6))
+        
+        self.ent_serial_baud = ctk.CTkEntry(right, placeholder_text="9600",
+                                           font=ctk.CTkFont(size=11), height=36,
+                                           fg_color="#0f1419", border_color="#374151",
+                                           corner_radius=6, text_color="#ffffff")
+        self.ent_serial_baud.pack(fill="x", padx=12, pady=(0,12))
+
+        # Network fields section
+        self.lbl_network_title = ctk.CTkLabel(right, text="Network", font=ctk.CTkFont(size=12, weight="bold"), 
+                                             text_color="#ffffff")
+        self.lbl_network_title.pack(anchor="w", padx=12, pady=(0,6))
+        
+        self.ent_host = ctk.CTkEntry(right, placeholder_text="Host or Ip",
+                                    font=ctk.CTkFont(size=11), height=36,
+                                    fg_color="#0f1419", border_color="#374151",
+                                    corner_radius=6, text_color="#ffffff")
+        self.ent_host.pack(fill="x", padx=12, pady=(0,6))
+        
+        self.ent_port = ctk.CTkEntry(right, placeholder_text="Port",
+                                     font=ctk.CTkFont(size=11), height=36,
+                                     fg_color="#0f1419", border_color="#374151",
+                                     corner_radius=6, text_color="#ffffff")
+        self.ent_port.pack(fill="x", padx=12, pady=(0,6))
+        self.ent_user = ctk.CTkEntry(right, placeholder_text="Username",
+                                    font=ctk.CTkFont(size=11), height=36,
+                                    fg_color="#0f1419", border_color="#374151",
+                                    corner_radius=6, text_color="#ffffff")
+        self.ent_user.pack(fill="x", padx=12, pady=(0,6))
+        
+        self.ent_pass = ctk.CTkEntry(right, placeholder_text="Password", show="*",
+                                    font=ctk.CTkFont(size=11), height=36,
+                                    fg_color="#0f1419", border_color="#374151",
+                                    corner_radius=6, text_color="#ffffff")
+        self.ent_pass.pack(fill="x", padx=12, pady=(0,6))
+        
+        # Optional enable password - Figma styled
+        ctk.CTkLabel(right, text="Optional", font=ctk.CTkFont(size=10), 
+                    text_color="#9ca3af").pack(anchor="w", padx=12, pady=(4,2))
+        enable_frame = ctk.CTkFrame(right, fg_color="transparent")
+        enable_frame.pack(fill="x", padx=12, pady=(0,0))
+        self.enable_checkbox = ctk.CTkCheckBox(enable_frame, text="",
+                                              font=ctk.CTkFont(size=11), width=20,
+                                              fg_color="#22d3ee", hover_color="#06b6d4",
+                                              border_color="#374151")
+        self.enable_checkbox.pack(side="right", padx=(4,0))
+        self.ent_enable = ctk.CTkEntry(enable_frame, placeholder_text="Enable Password", show="*",
+                                      font=ctk.CTkFont(size=11), height=36,
+                                      fg_color="#0f1419", border_color="#374151",
+                                      corner_radius=6, text_color="#ffffff")
+        self.ent_enable.pack(side="left", fill="x", expand=True)
+
+        # Send button - Solid filled cyan like Figma
+        ctk.CTkButton(right, text="Send", command=self.send_now, 
+                     fg_color="#22d3ee", hover_color="#06b6d4", text_color="#0f1419",
+                     height=40, font=ctk.CTkFont(size=12, weight="bold"),
+                     corner_radius=6).pack(fill="x", padx=12, pady=(16,12))
+        
+        # Store references for conditional enabling
+        self.serial_widgets = [self.lbl_serial_title, self.ent_serial_port, self.ent_serial_baud]
+        self.network_widgets = [self.lbl_network_title, self.ent_host, self.ent_port, self.ent_user, self.ent_pass, self.ent_enable, self.enable_checkbox]
+        
+        # Initialize field states based on default protocol
+        self._on_protocol_changed("Telnet")
+
+        # logs tab - Figma styled
+        logs_card = ctk.CTkFrame(self.tab_logs, fg_color="#1a1f2e", corner_radius=8)
+        logs_card.pack(fill="both", expand=True, padx=12, pady=12)
+        
+        ctk.CTkLabel(logs_card, text="Output", font=ctk.CTkFont(size=16, weight="bold"),
+                    text_color="#ffffff").pack(anchor="nw", padx=16, pady=(12,8))
+        
+        self.txt_logs = ctk.CTkTextbox(logs_card, font=ctk.CTkFont(family="Consolas", size=11),
+                                      fg_color="#0f1419", text_color="#ffffff",
+                                      corner_radius=6, border_width=1, border_color="#374151")
+        self.txt_logs.pack(fill="both", expand=True, padx=12, pady=(0,12))
+        # Clear Logs button in bottom right corner - OUTLINED red like Figma
+        clear_logs_frame = ctk.CTkFrame(logs_card, fg_color="transparent")
+        clear_logs_frame.pack(fill="x", padx=12, pady=(0,12))
+        clear_logs_btn = ctk.CTkButton(clear_logs_frame, text="Clear Logs", 
+                                      command=lambda: self.txt_logs.delete("0.0","end"),
+                                      fg_color="transparent", hover_color="#1a1f2e",
+                                      border_width=1, border_color="#ef4444",
+                                      text_color="#ef4444", width=110, height=32,
+                                      font=ctk.CTkFont(size=11), corner_radius=6)
+        clear_logs_btn.pack(side="right")
+
+        # Database tab: professional multi-entity browser
+        # NOTE: Database tab UI code is kept but commented out since tab is hidden from users
+        # All database methods remain functional for future use
+        # To re-enable: uncomment the tab creation line (around line 179) and uncomment this section
+        
+        # Initialize database treeviews as None to prevent errors in methods
+        self.tree_devices = None
+        self.tree_configs = None
+        self.tree_users = None
+        self.tree_tasks = None
+        self.tree_logs = None
+        self.tree_ai_models = None
+        self.tree_training = None
+        self.db_tabview = None
+        
+        # Database tab UI code commented out - tab hidden from users
+        # To re-enable: uncomment the tab creation line (around line 175) and change False to True below
+        # All database tab UI code is preserved below but disabled
+        if False:  # Database tab UI disabled - set to True and uncomment tab_db creation to enable
+            pass  # Placeholder - actual code preserved in comments below
+            """
+            Database tab UI code (preserved for future use):
+            
+            ctk.CTkLabel(
+                self.tab_db,
+                text="database browser",
+                font=ctk.CTkFont(size=14, weight="bold")
+            ).pack(anchor="nw", padx=12, pady=(8, 2))
+
+            db_top = ctk.CTkFrame(self.tab_db, fg_color="transparent")
+            db_top.pack(fill="x", padx=12, pady=(0, 6))
+            ctk.CTkLabel(
+                db_top,
+                text=f"SQLite file: {DB_PATH}",
+                font=ctk.CTkFont(size=11),
+                text_color="#bcd",
+            ).pack(side="left")
+
+            # Inner tabview for each logical entity in the database
+            self.db_tabview = ctk.CTkTabview(self.tab_db)
+            self.db_tabview.pack(fill="both", expand=True, padx=12, pady=8)
+
+            tab_devices = self.db_tabview.add("devices")
+            tab_configs = self.db_tabview.add("configs")
+            tab_users = self.db_tabview.add("users")
+            tab_tasks = self.db_tabview.add("tasks")
+            tab_logs = self.db_tabview.add("logs")
+            tab_ai = self.db_tabview.add("ai models")
+            tab_training = self.db_tabview.add("training data")
+
+            # ----- devices tab -----
+            devices_frame = ctk.CTkFrame(tab_devices)
+            devices_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+            self.tree_devices = ttk.Treeview(
+                devices_frame,
+                columns=("id", "name", "type", "ip", "port", "conn", "gns3", "status", "last_seen", "created"),
+                show="headings",
+            )
+            for h, w in [
+                ("id", 50),
+                ("name", 160),
+                ("type", 100),
+                ("ip", 110),
+                ("port", 70),
+                ("conn", 90),
+                ("gns3", 60),
+                ("status", 90),
+                ("last_seen", 130),
+                ("created", 150),
+            ]:
+                self.tree_devices.heading(h, text=h)
+                self.tree_devices.column(h, width=w, anchor="center")
+            self.tree_devices.pack(fill="both", expand=True)
+
+            dev_btns = ctk.CTkFrame(tab_devices, fg_color="transparent")
+            dev_btns.pack(fill="x", padx=4, pady=(0, 6))
+            ctk.CTkButton(dev_btns, text="refresh devices", command=self.refresh_devices_tree).pack(side="left", padx=4)
+            ctk.CTkButton(
+                dev_btns,
+                text="import selected into workspace",
+                command=self.import_device_from_tree,
+            ).pack(side="left", padx=4)
+
+            # ----- configs (legacy generated configs) -----
+            configs_frame = ctk.CTkFrame(tab_configs)
+            configs_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+            self.tree_configs = ttk.Treeview(
+                configs_frame,
+                columns=("id", "device_id", "name", "created"),
+                show="headings",
+            )
+            for h, w in [("id", 60), ("device_id", 100), ("name", 220), ("created", 160)]:
+                self.tree_configs.heading(h, text=h)
+                self.tree_configs.column(h, width=w, anchor="center")
+            self.tree_configs.pack(fill="both", expand=True)
+
+            cfg_btns = ctk.CTkFrame(tab_configs, fg_color="transparent")
+            cfg_btns.pack(fill="x", padx=4, pady=(0, 6))
+            ctk.CTkButton(cfg_btns, text="refresh configs", command=self.refresh_configs_tree).pack(side="left", padx=4)
+            ctk.CTkButton(
+                cfg_btns,
+                text="load selected into preview",
+                command=self.load_config_into_preview,
+            ).pack(side="left", padx=4)
+
+            # ----- users -----
+            users_frame = ctk.CTkFrame(tab_users)
+            users_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+            self.tree_users = ttk.Treeview(
+                users_frame,
+                columns=("id", "username", "email", "role", "created"),
+                show="headings",
+            )
+            for h, w in [
+                ("id", 60),
+                ("username", 140),
+                ("email", 200),
+                ("role", 90),
+                ("created", 160),
+            ]:
+                self.tree_users.heading(h, text=h)
+                self.tree_users.column(h, width=w, anchor="center")
+            self.tree_users.pack(fill="both", expand=True)
+
+            ctk.CTkButton(
+                tab_users,
+                text="refresh users",
+                command=self.refresh_users_tree,
+            ).pack(padx=4, pady=(0, 6), anchor="w")
+
+            # ----- tasks -----
+            tasks_frame = ctk.CTkFrame(tab_tasks)
+            tasks_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+            self.tree_tasks = ttk.Treeview(
+                tasks_frame,
+                columns=("id", "device_id", "task_type", "status", "executed_by", "created"),
+                show="headings",
+            )
+            for h, w in [
+                ("id", 60),
+                ("device_id", 90),
+                ("task_type", 150),
+                ("status", 90),
+                ("executed_by", 100),
+                ("created", 160),
+            ]:
+                self.tree_tasks.heading(h, text=h)
+                self.tree_tasks.column(h, width=w, anchor="center")
+            self.tree_tasks.pack(fill="both", expand=True)
+
+            ctk.CTkButton(
+                tab_tasks,
+                text="refresh tasks",
+                command=self.refresh_tasks_tree,
+            ).pack(padx=4, pady=(0, 6), anchor="w")
+
+            # ----- logs -----
+            logs_frame = ctk.CTkFrame(tab_logs)
+            logs_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+            self.tree_logs = ttk.Treeview(
+                logs_frame,
+                columns=("id", "user_id", "device_id", "action", "severity", "created"),
+                show="headings",
+            )
+            for h, w in [
+                ("id", 50),
+                ("user_id", 70),
+                ("device_id", 80),
+                ("action", 220),
+                ("severity", 90),
+                ("created", 160),
+            ]:
+                self.tree_logs.heading(h, text=h)
+                self.tree_logs.column(h, width=w, anchor="center")
+            self.tree_logs.pack(fill="both", expand=True)
+
+            ctk.CTkButton(
+                tab_logs,
+                text="refresh logs",
+                command=self.refresh_logs_tree,
+            ).pack(padx=4, pady=(0, 6), anchor="w")
+
+            # ----- ai models -----
+            ai_frame = ctk.CTkFrame(tab_ai)
+            ai_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+            self.tree_ai_models = ttk.Treeview(
+                ai_frame,
+                columns=("id", "model_name", "model_type", "accuracy", "version", "trained_at"),
+                show="headings",
+            )
+            for h, w in [
+                ("id", 50),
+                ("model_name", 180),
+                ("model_type", 140),
+                ("accuracy", 90),
+                ("version", 90),
+                ("trained_at", 160),
+            ]:
+                self.tree_ai_models.heading(h, text=h)
+                self.tree_ai_models.column(h, width=w, anchor="center")
+            self.tree_ai_models.pack(fill="both", expand=True)
+
+            ctk.CTkButton(
+                tab_ai,
+                text="refresh models",
+                command=self.refresh_ai_models_tree,
+            ).pack(padx=4, pady=(0, 6), anchor="w")
+
+            # ----- training data -----
+            training_frame = ctk.CTkFrame(tab_training)
+            training_frame.pack(fill="both", expand=True, padx=4, pady=4)
+
+            self.tree_training = ttk.Treeview(
+                training_frame,
+                columns=("id", "device_id", "label", "created"),
+                show="headings",
+            )
+            for h, w in [
+                ("id", 60),
+                ("device_id", 90),
+                ("label", 220),
+                ("created", 160),
+            ]:
+                self.tree_training.heading(h, text=h)
+                self.tree_training.column(h, width=w, anchor="center")
+            self.tree_training.pack(fill="both", expand=True)
+
+            ctk.CTkButton(
+                tab_training,
+                text="refresh training data",
+                command=self.refresh_training_tree,
+            ).pack(padx=4, pady=(0, 6), anchor="w")
+            """
+        
+        # GNS3 tab removed - functionality moved to top right of main page
+        # GNS3 controls are now in the center area above preview section
 
         # menu quick action
         menubar = tk.Menu(self)
@@ -487,29 +733,8 @@ class App(ctk.CTk):
         menubar.add_cascade(label="gns3", menu=gmenu)
         gmenu.add_command(label="import from gns3", command=lambda: self.gns3_list_projects())
 
-        # tab changed binding to refresh db tab when switched
-        def on_tab_changed(event=None):
-            selected = self.nb.get()
-            if selected == "database":
-                # When switching to the database tab, refresh all sub-tabs
-                self.refresh_devices_tree()
-                self.refresh_configs_tree()
-                self.refresh_users_tree()
-                self.refresh_tasks_tree()
-                self.refresh_logs_tree()
-                self.refresh_ai_models_tree()
-                self.refresh_training_tree()
-        # bind the event - use configure callback as workaround for older customtkinter versions
-        try:
-            self.nb.bind("<<CTkTabviewChanged>>", on_tab_changed)
-        except NotImplementedError:
-            # Fallback: manually check tab on button clicks or use configure callback
-            # We'll refresh when database tab buttons are clicked instead
-            pass
-        
-        # Initial refresh of database tab
-        self.refresh_devices_tree()
-        self.refresh_configs_tree()
+        # Tab change handler removed - database tab is hidden from users
+        # Database code remains intact for future use
 
     # ------------------- device workspace functions -------------------
     def add_device_instance(self, type_key, name, metadata=None):
@@ -523,15 +748,24 @@ class App(ctk.CTk):
         self.devices.append((name, obj, metadata))
 
     def refresh_device_list(self):
-        self.lb_devices.delete(0, "end")
-        for n, obj, meta in self.devices:
+        """Refresh the device list with Figma-style items"""
+        # Clear existing items
+        for name, item in self.device_items.items():
+            item["frame"].destroy()
+        self.device_items.clear()
+        self.selected_device_name = None
+        
+        # Add new items
+        for idx, (n, obj, meta) in enumerate(self.devices):
             label = f"{n} ({obj.__class__.__name__})"
             if meta.get("gns3_node"):
                 label += " [gns3]"
-            self.lb_devices.insert("end", label)
+            self._create_device_item(n, label, idx)
+        
+        # Select first item
         if self.devices:
-            self.lb_devices.select_set(0)
-            self.on_device_select()
+            first_name = self.devices[0][0]
+            self._on_device_item_click(first_name, 0)
 
     def add_device_prompt(self):
         dtype = simpledialog.askstring("add device", "device type: router / switch / core switch", parent=self)
@@ -545,30 +779,27 @@ class App(ctk.CTk):
         self.refresh_device_list()
 
     def remove_selected_device(self):
-        sel = self.lb_devices.curselection()
-        if not sel: return
-        idx = sel[0]
-        name,_,_ = self.devices[idx]
+        """Remove the selected device"""
+        if not self.selected_device_name:
+            messagebox.showinfo("info", "select device first")
+            return
+        # Find index
+        idx = None
+        for i, (n, _, _) in enumerate(self.devices):
+            if n == self.selected_device_name:
+                idx = i
+                break
+        if idx is None:
+            return
+        name = self.devices[idx][0]
         if messagebox.askyesno("confirm", f"remove {name}?"):
             del self.devices[idx]
             self.refresh_device_list()
 
     def on_device_select(self):
-        sel = self.lb_devices.curselection()
-        if not sel: return
-        idx = sel[0]
-        name, model, meta = self.devices[idx]
-        self.current_device = (name, model, meta)
-        # templates
-        self.lb_templates.delete(0, "end")
-        for t in model.get_template_names():
-            self.lb_templates.insert("end", t)
-        # preview header
-        try:
-            self.preview.delete("0.0", "end")
-            self.preview.insert("0.0", f"! device: {name}\n")
-        except Exception:
-            pass
+        """Legacy method - now handled by _on_device_item_click"""
+        # This method is kept for compatibility but the main logic is in _on_device_item_click
+        pass
 
     # ------------------- templates -------------------
     def add_template_dialog(self):
@@ -583,23 +814,24 @@ class App(ctk.CTk):
             self.on_device_select()
 
     def edit_template_dialog(self):
-        sel = self.lb_templates.curselection()
-        if not sel:
-            messagebox.showinfo("info", "select template first"); return
-        tname = self.lb_templates.get(sel[0])
+        """Edit the selected template"""
+        if not self.selected_template_name:
+            messagebox.showinfo("info", "select template first")
+            return
+        if not self.current_device:
+            messagebox.showinfo("info", "select device first")
+            return
+        tname = self.selected_template_name
         editor = TextEditorPopup(self, title=f"edit template: {tname}", initial=self.current_device[1].get_template(tname))
         self.wait_window(editor)
         if getattr(editor, "result", None) is not None:
             self.current_device[1].set_template(tname, editor.result)
-            self.on_device_select()
+            self._refresh_template_list()
 
     def on_template_select(self):
-        sel = self.lb_templates.curselection()
-        if not sel: return
-        tname = self.lb_templates.get(sel[0])
-        txt = self.current_device[1].get_template(tname).replace("{name}", self.current_device[0])
-        self.preview.delete("0.0", "end")
-        self.preview.insert("0.0", txt)
+        """Legacy method - now handled by _on_template_item_click"""
+        # This method is kept for compatibility but the main logic is in _on_template_item_click
+        pass
 
     # ------------------- VLAN wizards -------------------
     def vlan_popup(self):
@@ -781,22 +1013,27 @@ class App(ctk.CTk):
 
     # ------------------- generate / export / db -------------------
     def generate_selected(self):
-        sel = self.lb_templates.curselection()
-        if not sel:
-            messagebox.showinfo("info", "select template first"); return
-        tname = self.lb_templates.get(sel[0])
+        """Generate config for selected template"""
+        if not self.selected_template_name:
+            messagebox.showinfo("info", "select template first")
+            return
+        if not self.current_device:
+            messagebox.showinfo("info", "select device first")
+            return
+        tname = self.selected_template_name
         txt = self.current_device[1].get_template(tname).replace("{name}", self.current_device[0])
         self.preview.delete("0.0", "end")
         self.preview.insert("0.0", txt)
 
     def generate_full(self):
+        if not self.current_device:
+            messagebox.showinfo("info", "select device first"); return
         txt = self.current_device[1].build_full_config().replace("{name}", self.current_device[0])
         self.preview.delete("0.0", "end")
         self.preview.insert("0.0", txt)
 
     def save_config_to_db(self):
-        sel = self.lb_devices.curselection()
-        if not sel:
+        if not self.selected_device_name:
             messagebox.showinfo("info", "select device first"); return
         idx = sel[0]
         name, _, _ = self.devices[idx]
@@ -909,12 +1146,16 @@ class App(ctk.CTk):
             pass
 
     def refresh_configs_tree(self):
+        if self.tree_configs is None:
+            return  # Database tab UI not initialized
         for i in self.tree_configs.get_children(): self.tree_configs.delete(i)
         cur.execute("SELECT id, device_id, config_name, created_at FROM configs ORDER BY id DESC")
         for r in cur.fetchall():
             self.tree_configs.insert("", "end", values=r)
 
     def refresh_users_tree(self):
+        if self.tree_users is None:
+            return  # Database tab UI not initialized
         for i in self.tree_users.get_children():
             self.tree_users.delete(i)
         try:
@@ -926,6 +1167,8 @@ class App(ctk.CTk):
             self.tree_users.insert("", "end", values=r)
 
     def refresh_tasks_tree(self):
+        if self.tree_tasks is None:
+            return  # Database tab UI not initialized
         for i in self.tree_tasks.get_children():
             self.tree_tasks.delete(i)
         try:
@@ -941,6 +1184,8 @@ class App(ctk.CTk):
             self.tree_tasks.insert("", "end", values=r)
 
     def refresh_logs_tree(self):
+        if self.tree_logs is None:
+            return  # Database tab UI not initialized
         for i in self.tree_logs.get_children():
             self.tree_logs.delete(i)
         try:
@@ -956,6 +1201,8 @@ class App(ctk.CTk):
             self.tree_logs.insert("", "end", values=r)
 
     def refresh_ai_models_tree(self):
+        if self.tree_ai_models is None:
+            return  # Database tab UI not initialized
         for i in self.tree_ai_models.get_children():
             self.tree_ai_models.delete(i)
         try:
@@ -971,6 +1218,8 @@ class App(ctk.CTk):
             self.tree_ai_models.insert("", "end", values=r)
 
     def refresh_training_tree(self):
+        if self.tree_training is None:
+            return  # Database tab UI not initialized
         for i in self.tree_training.get_children():
             self.tree_training.delete(i)
         try:
@@ -986,6 +1235,8 @@ class App(ctk.CTk):
             self.tree_training.insert("", "end", values=r)
 
     def import_device_from_tree(self):
+        if self.tree_devices is None:
+            messagebox.showinfo("info", "Database tab not available"); return
         sel = self.tree_devices.selection()
         if not sel:
             messagebox.showinfo("info","select device first"); return
@@ -1002,6 +1253,8 @@ class App(ctk.CTk):
         messagebox.showinfo("imported", f"{name} imported to workspace")
 
     def load_config_into_preview(self):
+        if self.tree_configs is None:
+            messagebox.showinfo("info", "Database tab not available"); return
         sel = self.tree_configs.selection()
         if not sel:
             messagebox.showinfo("info","select config first"); return
@@ -1030,13 +1283,247 @@ class App(ctk.CTk):
         except Exception:
             pass
 
+    # ------------------- config status helpers -------------------
+    def _import_config(self):
+        """Import config from file"""
+        filename = filedialog.askopenfilename(
+            title="Import Config",
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")]
+        )
+        if filename:
+            try:
+                with open(filename, 'r') as f:
+                    content = f.read()
+                self.preview.delete("0.0", "end")
+                self.preview.insert("0.0", content)
+                self.log(f"Config imported from {filename}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to import config: {e}")
+    
+    def _refresh_config_status(self):
+        """Refresh config status indicator"""
+        # Config name is now in GNS3 section - this method kept for compatibility
+        self.log("Config status refreshed")
+
+    # ------------------- tab switching -------------------
+    def _switch_tab(self, tab: str):
+        """Switch between Main and Logs tabs with Figma-style underline animation"""
+        if tab == "main":
+            self.nb.set("main")
+            self.btn_main_nav.configure(text_color="#22d3ee")
+            self.btn_logs_nav.configure(text_color="#9ca3af")
+            self.main_underline.configure(fg_color="#22d3ee")
+            self.logs_underline.configure(fg_color="transparent")
+        else:
+            self.nb.set("output / logs")
+            self.btn_main_nav.configure(text_color="#9ca3af")
+            self.btn_logs_nav.configure(text_color="#22d3ee")
+            self.main_underline.configure(fg_color="transparent")
+            self.logs_underline.configure(fg_color="#22d3ee")
+
+    # ------------------- custom list item helpers (Figma style) -------------------
+    def _create_device_item(self, name: str, label: str, idx: int):
+        """Create a device list item with checkbox - Figma style"""
+        # Outer frame with left border for selection
+        item_frame = ctk.CTkFrame(self.devices_scroll, fg_color="transparent", height=40)
+        item_frame.pack(fill="x", pady=1)
+        item_frame.pack_propagate(False)
+        
+        # Left border indicator (shows when selected)
+        border = ctk.CTkFrame(item_frame, width=3, fg_color="transparent", corner_radius=0)
+        border.pack(side="left", fill="y")
+        
+        # Content frame
+        content = ctk.CTkFrame(item_frame, fg_color="transparent")
+        content.pack(side="left", fill="both", expand=True, padx=(4, 0))
+        
+        # Label
+        lbl = ctk.CTkLabel(content, text=label, font=ctk.CTkFont(size=11), 
+                          text_color="#ffffff", anchor="w")
+        lbl.pack(side="left", fill="x", expand=True, padx=4)
+        
+        # Checkbox on right
+        var = ctk.BooleanVar(value=False)
+        checkbox = ctk.CTkCheckBox(content, text="", variable=var, width=20,
+                                  fg_color="#22d3ee", hover_color="#06b6d4",
+                                  border_color="#374151", corner_radius=4,
+                                  command=lambda n=name, i=idx: self._on_device_item_click(n, i))
+        checkbox.pack(side="right", padx=4)
+        
+        # Store reference
+        self.device_items[name] = {
+            "frame": item_frame, "border": border, "label": lbl, 
+            "checkbox": checkbox, "var": var, "idx": idx
+        }
+        
+        # Click binding on entire frame
+        for widget in [item_frame, content, lbl]:
+            widget.bind("<Button-1>", lambda e, n=name, i=idx: self._on_device_item_click(n, i))
+    
+    def _on_device_item_click(self, name: str, idx: int):
+        """Handle device item selection"""
+        # Deselect previous
+        if self.selected_device_name and self.selected_device_name in self.device_items:
+            prev = self.device_items[self.selected_device_name]
+            prev["border"].configure(fg_color="transparent")
+            prev["var"].set(False)
+        
+        # Select new
+        self.selected_device_name = name
+        if name in self.device_items:
+            item = self.device_items[name]
+            item["border"].configure(fg_color="#22d3ee")
+            item["var"].set(True)
+        
+        # Trigger device selection logic
+        if 0 <= idx < len(self.devices):
+            dname, model, meta = self.devices[idx]
+            self.current_device = (dname, model, meta)
+            self._refresh_template_list()
+            # Update preview header
+            try:
+                self.preview.delete("0.0", "end")
+                self.preview.insert("0.0", f"! device: {dname}\n")
+            except Exception:
+                pass
+    
+    def _create_template_item(self, name: str, idx: int):
+        """Create a template list item with checkbox - Figma style"""
+        # Outer frame with left border for selection
+        item_frame = ctk.CTkFrame(self.templates_scroll, fg_color="transparent", height=40)
+        item_frame.pack(fill="x", pady=1)
+        item_frame.pack_propagate(False)
+        
+        # Left border indicator (shows when selected)
+        border = ctk.CTkFrame(item_frame, width=3, fg_color="transparent", corner_radius=0)
+        border.pack(side="left", fill="y")
+        
+        # Content frame
+        content = ctk.CTkFrame(item_frame, fg_color="transparent")
+        content.pack(side="left", fill="both", expand=True, padx=(4, 0))
+        
+        # Label
+        lbl = ctk.CTkLabel(content, text=name, font=ctk.CTkFont(size=11), 
+                          text_color="#ffffff", anchor="w")
+        lbl.pack(side="left", fill="x", expand=True, padx=4)
+        
+        # Checkbox on right
+        var = ctk.BooleanVar(value=False)
+        checkbox = ctk.CTkCheckBox(content, text="", variable=var, width=20,
+                                  fg_color="#22d3ee", hover_color="#06b6d4",
+                                  border_color="#374151", corner_radius=4,
+                                  command=lambda n=name, i=idx: self._on_template_item_click(n, i))
+        checkbox.pack(side="right", padx=4)
+        
+        # Store reference
+        self.template_items[name] = {
+            "frame": item_frame, "border": border, "label": lbl, 
+            "checkbox": checkbox, "var": var, "idx": idx
+        }
+        
+        # Click binding on entire frame
+        for widget in [item_frame, content, lbl]:
+            widget.bind("<Button-1>", lambda e, n=name, i=idx: self._on_template_item_click(n, i))
+    
+    def _on_template_item_click(self, name: str, idx: int):
+        """Handle template item selection"""
+        # Deselect previous
+        if self.selected_template_name and self.selected_template_name in self.template_items:
+            prev = self.template_items[self.selected_template_name]
+            prev["border"].configure(fg_color="transparent")
+            prev["var"].set(False)
+        
+        # Select new
+        self.selected_template_name = name
+        if name in self.template_items:
+            item = self.template_items[name]
+            item["border"].configure(fg_color="#22d3ee")
+            item["var"].set(True)
+        
+        # Show template content in preview
+        if self.current_device:
+            txt = self.current_device[1].get_template(name).replace("{name}", self.current_device[0])
+            self.preview.delete("0.0", "end")
+            self.preview.insert("0.0", txt)
+    
+    def _refresh_template_list(self):
+        """Refresh the template list for current device"""
+        # Clear existing items
+        for name, item in self.template_items.items():
+            item["frame"].destroy()
+        self.template_items.clear()
+        self.selected_template_name = None
+        
+        # Add new items
+        if self.current_device:
+            for idx, tname in enumerate(self.current_device[1].get_template_names()):
+                self._create_template_item(tname, idx)
+
+    # ------------------- conditional field enabling -------------------
+    def _on_protocol_changed(self, value):
+        """Enable/disable fields based on selected protocol - Figma colors"""
+        protocol = value.lower()
+        
+        # Figma design colors for disabled fields
+        disabled_color = "#1a1f2e"  # Same as card background
+        disabled_text_color = "#4b5563"  # Muted gray
+        enabled_color = "#0f1419"  # Dark input background
+        enabled_label_color = "#ffffff"
+        
+        if protocol == "telnet":
+            # Enable only Network IP and Port
+            self.ent_host.configure(state="normal", fg_color=enabled_color)
+            self.ent_port.configure(state="normal", fg_color=enabled_color)
+            self.lbl_network_title.configure(text_color=enabled_label_color)
+            # Disable other Network fields
+            self.ent_user.configure(state="disabled", fg_color=disabled_color)
+            self.ent_pass.configure(state="disabled", fg_color=disabled_color)
+            self.ent_enable.configure(state="disabled", fg_color=disabled_color)
+            self.enable_checkbox.configure(state="disabled")
+            # Disable Serial fields
+            for widget in self.serial_widgets:
+                if isinstance(widget, ctk.CTkEntry):
+                    widget.configure(state="disabled", fg_color=disabled_color)
+                elif isinstance(widget, ctk.CTkLabel):
+                    widget.configure(text_color=disabled_text_color)
+        elif protocol == "serial":
+            # Enable only Serial fields
+            for widget in self.serial_widgets:
+                if isinstance(widget, ctk.CTkEntry):
+                    widget.configure(state="normal", fg_color=enabled_color)
+                elif isinstance(widget, ctk.CTkLabel):
+                    widget.configure(text_color=enabled_label_color)
+            # Disable all Network fields
+            self.ent_host.configure(state="disabled", fg_color=disabled_color)
+            self.ent_port.configure(state="disabled", fg_color=disabled_color)
+            self.ent_user.configure(state="disabled", fg_color=disabled_color)
+            self.ent_pass.configure(state="disabled", fg_color=disabled_color)
+            self.ent_enable.configure(state="disabled", fg_color=disabled_color)
+            self.enable_checkbox.configure(state="disabled")
+            self.lbl_network_title.configure(text_color=disabled_text_color)
+        elif protocol == "ssh":
+            # Enable all Network fields
+            self.ent_host.configure(state="normal", fg_color=enabled_color)
+            self.ent_port.configure(state="normal", fg_color=enabled_color)
+            self.ent_user.configure(state="normal", fg_color=enabled_color)
+            self.ent_pass.configure(state="normal", fg_color=enabled_color)
+            self.ent_enable.configure(state="normal", fg_color=enabled_color)
+            self.enable_checkbox.configure(state="normal")
+            self.lbl_network_title.configure(text_color=enabled_label_color)
+            # Disable Serial fields
+            for widget in self.serial_widgets:
+                if isinstance(widget, ctk.CTkEntry):
+                    widget.configure(state="disabled", fg_color=disabled_color)
+                elif isinstance(widget, ctk.CTkLabel):
+                    widget.configure(text_color=disabled_text_color)
+
     # ------------------- send/run -------------------
     def send_now(self):
         content = self.preview.get("0.0","end").strip()
         if not content:
             messagebox.showinfo("info","nothing to send"); return
-        method = self.send_method.get()
-        if method.startswith("serial"):
+        method = self.send_method.get().lower()
+        if method == "serial":
             port = self.ent_serial_port.get().strip()
             try:
                 baud = int(self.ent_serial_baud.get().strip() or "9600")
@@ -1053,7 +1540,8 @@ class App(ctk.CTk):
                 port = int(self.ent_port.get().strip() or "23")
             except:
                 messagebox.showerror("error","invalid port"); return
-            user = self.ent_user.get().strip(); pw = self.ent_pass.get().strip(); enable = self.ent_enable.get().strip()
+            # Telnet doesn't use username/password in this implementation
+            user = ""; pw = ""; enable = ""
             threading.Thread(target=self._thread_telnet, args=(host,port,user,pw,enable,content), daemon=True).start()
         elif method == "ssh":
             host = self.ent_host.get().strip()
@@ -1092,19 +1580,22 @@ class App(ctk.CTk):
     # ------------------- GNS3 integration -------------------
     def refresh_gns3_connection(self):
         """Refresh GNS3 connection and detect newly opened projects"""
-        self.lbl_gns3_status.configure(text="refreshing gns3 connection...")
+        if hasattr(self, 'lbl_gns3_status'):
+            self.lbl_gns3_status.configure(text="refreshing gns3 connection...")
         threading.Thread(target=self._auto_connect_gns3, daemon=True).start()
     
     def _auto_connect_gns3(self):
         # try to auto-connect on startup and import nodes from open/most-recent project
         if requests is None:
-            self.lbl_gns3_status.configure(text="requests not installed; gns3 auto-import disabled")
+            if hasattr(self, 'lbl_gns3_status'):
+                self.lbl_gns3_status.configure(text="requests not installed; gns3 auto-import disabled")
             return
         try:
             g = GNS3Connector(GNS3_DEFAULT_URL)
             projs = g.get_projects()
             if not projs:
-                self.lbl_gns3_status.configure(text="no gns3 projects found on server")
+                if hasattr(self, 'lbl_gns3_status'):
+                    self.lbl_gns3_status.configure(text="no gns3 projects found on server")
                 return
             # try to pick open project, else most recently modified (fallback)
             proj = None
@@ -1128,13 +1619,16 @@ class App(ctk.CTk):
             
             self.gns3 = g
             self.last_gns3_project = proj
-            self.lbl_gns3_status.configure(text=f"auto-connected to gns3, project: {proj.get('name')}")
+            # Update GNS3 status label (now in main page top right)
+            if hasattr(self, 'lbl_gns3_status'):
+                self.lbl_gns3_status.configure(text=f"auto-connected to gns3, project: {proj.get('name')}")
             # import nodes
             try:
                 # FIX: Use .get() with fallback for project_id
                 project_id = proj.get('project_id') or proj.get('projectId') or proj.get('id')
                 if not project_id:
-                    self.lbl_gns3_status.configure(text="gns3 project missing project_id")
+                    if hasattr(self, 'lbl_gns3_status'):
+                        self.lbl_gns3_status.configure(text="gns3 project missing project_id")
                     return
                 nodes = self.gns3.get_nodes(project_id)
                 imported = 0
@@ -1203,7 +1697,8 @@ class App(ctk.CTk):
             except Exception as e:
                 self.log(f"[gns3] could not list nodes: {e}")
         except Exception as e:
-            self.lbl_gns3_status.configure(text=f"gns3 auto-connect failed: {e}")
+            if hasattr(self, 'lbl_gns3_status'):
+                self.lbl_gns3_status.configure(text=f"gns3 auto-connect failed: {e}")
 
     def gns3_list_projects(self):
         if requests is None:
