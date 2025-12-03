@@ -32,7 +32,6 @@ else:
     # If running as module (python -m network_manager.main), use relative imports
     from .gui.app import App
 
-
 def main():
     """Main entry point for the application"""
     app = App()
