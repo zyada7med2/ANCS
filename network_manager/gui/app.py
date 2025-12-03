@@ -1035,7 +1035,14 @@ class App(ctk.CTk):
     def save_config_to_db(self):
         if not self.selected_device_name:
             messagebox.showinfo("info", "select device first"); return
-        idx = sel[0]
+        # Find device by name
+        idx = None
+        for i, (n, _, _) in enumerate(self.devices):
+            if n == self.selected_device_name:
+                idx = i
+                break
+        if idx is None:
+            return
         name, _, _ = self.devices[idx]
         content = self.preview.get("0.0", "end").strip()
         if not content:
@@ -1082,17 +1089,24 @@ class App(ctk.CTk):
                 devname, content = r
                 for i,(n,_,_) in enumerate(self.devices):
                     if n == devname:
-                        self.lb_devices.select_clear(0,"end"); self.lb_devices.select_set(i); self.on_device_select(); break
+                        self._on_device_item_click(n, i)
+                        break
                 self.preview.delete("0.0","end"); self.preview.insert("0.0", content)
                 win.destroy()
         tk.Button(win, text="load selected into preview", command=load_into_preview).pack(pady=6)
 
     # ------------------- db device functions -------------------
     def save_device_to_db(self):
-        sel = self.lb_devices.curselection()
-        if not sel:
+        if not self.selected_device_name:
             messagebox.showinfo("info", "select device first"); return
-        idx = sel[0]
+        # Find device by name
+        idx = None
+        for i, (n, _, _) in enumerate(self.devices):
+            if n == self.selected_device_name:
+                idx = i
+                break
+        if idx is None:
+            return
         name, model, meta = self.devices[idx]
         ip = simpledialog.askstring("device ip", "enter device ip (optional):", parent=self) or ""
         port = simpledialog.askstring("device port", "enter device port (optional):", parent=self) or ""
@@ -1108,6 +1122,8 @@ class App(ctk.CTk):
 
     def refresh_devices_tree(self):
         """Refresh the devices treeview with current database data"""
+        if self.tree_devices is None:
+            return  # Database tab UI not initialized
         for i in self.tree_devices.get_children(): self.tree_devices.delete(i)
         # include status/last_seen if present; fallback handled by SELECT
         try:
@@ -1752,7 +1768,7 @@ class App(ctk.CTk):
         
         console_host = node.get("console_host", "localhost")
         console_port = node.get("console") or node.get("console_port") or ""
-        name = node.get("name") or f"node-{str(node_id,'')[:6]}"
+        name = node.get("name") or f"node-{str(node_id or '')[:6]}"
         dtype = simpledialog.askstring("device type", "device type for imported node (router/switch/core switch):", initialvalue="router", parent=self)
         if not dtype: return
         dtype = dtype.strip().lower()
