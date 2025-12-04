@@ -2,7 +2,7 @@
 Network communication sender for serial, telnet, and SSH
 """
 import time
-import telnetlib3
+import asyncio
 import re
 
 # Optional imports
@@ -15,6 +15,11 @@ try:
     import paramiko
 except Exception:
     paramiko = None
+
+try:
+    import telnetlib3
+except Exception:
+    telnetlib3 = None
 
 
 class Sender:
@@ -74,6 +79,7 @@ class Sender:
                 blocks.append(("Configuration", "\n".join(filtered)))
 
         return blocks
+
     @staticmethod
     def send_serial(log_fn, port, baud, text, newline_delay=0.02, block_delay=3.0):
         if serial is None:
@@ -113,48 +119,78 @@ class Sender:
             return False
 
     @staticmethod
-    def send_telnet(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0):
-        try:
-            log_fn(f"[telnet] connecting to {host}:{port} ...")
-            tn = telnetlib3.Telnet(host, port, timeout=timeout)
-            time.sleep(0.4)
-            # best-effort login
+    async def _send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0):
+        """Async implementation of telnet send using telnetlib3"""
+        reader, writer = await asyncio.wait_for(
+            telnetlib3.open_connection(host, port),
+            timeout=timeout
+        )
+        
+        async def write_line(line):
+            """Helper to write a line and flush"""
+            writer.write(line + "\r\n")
+            await asyncio.sleep(0.1)
+        
+        async def read_available(timeout_sec=1.0):
+            """Read whatever is available with timeout"""
             try:
-                idx, _, _ = tn.expect([b"Username:", b"login:"], timeout=1)
-                tn.write(username.encode('utf-8') + b"\r\n")
-                tn.read_until(b"Password:", timeout=1)
-                tn.write(password.encode('utf-8') + b"\r\n")
-                log_fn("[telnet] login sent")
-            except Exception:
-                # fallback: try sending username/password blind
-                try:
-                    if username:
-                        tn.write(username.encode('utf-8') + b"\r\n")
-                        time.sleep(0.1)
-                    if password:
-                        tn.write(password.encode('utf-8') + b"\r\n")
-                        time.sleep(0.1)
-                except Exception:
-                    pass
+                return await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
+            except asyncio.TimeoutError:
+                return ""
+        
+        try:
+            await asyncio.sleep(0.4)
+            
+            # Best-effort login - read initial prompt
+            initial = await read_available(2.0)
+            log_fn(f"[telnet] initial: {initial[:200] if initial else '(empty)'}")
+            
+            # Check for login prompts
+            initial_lower = initial.lower() if initial else ""
+            if "username:" in initial_lower or "login:" in initial_lower:
+                if username:
+                    await write_line(username)
+                    await asyncio.sleep(0.3)
+                    resp = await read_available(1.0)
+                    if "password:" in resp.lower():
+                        if password:
+                            await write_line(password)
+                            await asyncio.sleep(0.3)
+                    log_fn("[telnet] login sent")
+            elif "password:" in initial_lower:
+                if password:
+                    await write_line(password)
+                    await asyncio.sleep(0.3)
+                    log_fn("[telnet] password sent")
+            else:
+                # No login prompt, try sending credentials blind if provided
+                if username:
+                    await write_line(username)
+                    await asyncio.sleep(0.2)
+                if password:
+                    await write_line(password)
+                    await asyncio.sleep(0.2)
+            
+            # Enable mode if needed
             if enable_pw:
-                tn.write(b"enable\r\n")
-                time.sleep(0.2)
-                tn.write(enable_pw.encode('utf-8') + b"\r\n")
+                await write_line("enable")
+                await asyncio.sleep(0.3)
+                await write_line(enable_pw)
+                await asyncio.sleep(0.2)
                 log_fn("[telnet] enable sent")
-
+            
             # Reduce noise that can corrupt long commands (syslog/paging)
             try:
-                tn.write(b"terminal length 0\r\n")
-                time.sleep(0.2)
-                tn.write(b"configure terminal\r\n")
-                time.sleep(0.2)
-                tn.write(b"no logging console\r\n")
-                time.sleep(0.2)
-                tn.write(b"exit\r\n")
-                time.sleep(0.2)
+                await write_line("terminal length 0")
+                await asyncio.sleep(0.2)
+                await write_line("configure terminal")
+                await asyncio.sleep(0.2)
+                await write_line("no logging console")
+                await asyncio.sleep(0.2)
+                await write_line("exit")
+                await asyncio.sleep(0.2)
                 log_fn("[telnet] disabled console logging for this session")
             except Exception:
-                # Best-effort; continue even if device doesn't like these
                 pass
             
             # Split into blocks
@@ -169,29 +205,46 @@ class Sender:
                 
                 for line in block_content.splitlines():
                     if line.strip():
-                        tn.write((line + "\r\n").encode('utf-8'))
+                        await write_line(line)
                         log_fn(f"[telnet] sent: {line}")
-                        time.sleep(0.2)
+                        await asyncio.sleep(0.2)
                 
                 # Wait between blocks
                 if idx < len(blocks):
                     log_fn(f"[telnet] waiting {block_delay}s before next block...")
-                    time.sleep(block_delay)
+                    await asyncio.sleep(block_delay)
             
-            time.sleep(0.4)
-            out = b""
-            try:
-                out = tn.read_very_eager()
-            except Exception:
-                pass
-            out = out.decode('utf-8', errors='ignore') if out else ""
-            if out.strip():
+            # Read final output
+            await asyncio.sleep(0.4)
+            out = await read_available(1.0)
+            if out and out.strip():
                 log_fn("[telnet] output:\n" + out[:2000])
             else:
                 log_fn("[telnet] no output")
-            tn.close()
+            
+            writer.close()
             log_fn("[telnet] closed")
             return True
+            
+        except Exception as e:
+            try:
+                writer.close()
+            except Exception:
+                pass
+            raise e
+
+    @staticmethod
+    def send_telnet(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0):
+        """Send configuration via telnet using async telnetlib3"""
+        if telnetlib3 is None:
+            log_fn("[telnet] telnetlib3 not installed")
+            return False
+        try:
+            log_fn(f"[telnet] connecting to {host}:{port} ...")
+            # Run the async function in a new event loop
+            return asyncio.run(
+                Sender._send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout, block_delay)
+            )
         except Exception as e:
             log_fn(f"[telnet] error: {e}")
             return False
@@ -268,4 +321,3 @@ class Sender:
         except Exception as e:
             log_fn(f"[ssh] error: {e}")
             return False
-
