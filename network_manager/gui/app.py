@@ -46,21 +46,20 @@ class App(ctk.CTk):
         # Custom color theme matching Figma design
         ctk.set_default_color_theme("blue")
         
-        # Figma design colors
+        # Figma design colors - FLAT theme
         self.colors = {
-            "bg_main": "#13151b",      # Main background (very dark blue-grey)
-            "bg_sidebar": "#1a1f2e",   # Secondary background (sidebar/panels)
-            "bg_card": "#222736",      # Cards/containers
-            "bg_input": "#2b3040",     # Input field background
-            "accent": "#4ade80",       # Primary accent (green for checkboxes/active)
-            "accent_hover": "#22c55e", # Accent hover state
-            "btn_primary": "#3b82f6",  # Primary button (blue)
-            "btn_primary_hover": "#2563eb",  # Primary button hover
+            "bg_main": "#13151b",      # Root background (darkest)
+            "bg_sidebar": "#1a1f2e",   # Sidebars (slightly lighter)
+            "bg_card": "#1f2937",      # Center preview card
+            "bg_input": "#374151",     # Input field background
+            "input_border": "#4b5563", # Input field border
+            "accent": "#3b82f6",       # Primary accent (blue)
+            "accent_hover": "#2563eb", # Accent hover state
             "text_primary": "#ffffff",
             "text_secondary": "#9ca3af",
+            "text_heading": "#9ca3af", # Section headings (grey)
             "success": "#4ade80",
             "danger": "#ef4444",
-            "border": "#374151",
         }
 
         # device types
@@ -138,9 +137,9 @@ class App(ctk.CTk):
                 if self.logo_image is not None:
                     break
         
-        # If no logo image found, show text logo - Figma styled
+        # If no logo image found, show text logo
         if self.logo_image is None:
-            ctk.CTkLabel(logo_frame, text="ANCS", font=ctk.CTkFont(size=20, weight="bold"), text_color="#4ade80").pack(side="left", padx=4)
+            ctk.CTkLabel(logo_frame, text="ANCS", font=ctk.CTkFont(size=20, weight="bold"), text_color="#3b82f6").pack(side="left", padx=4)
             ctk.CTkLabel(logo_frame, text="Auto Network\nConfiguration System", font=ctk.CTkFont(size=9), text_color="#9ca3af", justify="left").pack(side="left", padx=2)
         
         # Navigation tabs in CENTER of header - like Figma photo 1
@@ -155,20 +154,20 @@ class App(ctk.CTk):
         self.main_tab_frame = ctk.CTkFrame(nav_inner, fg_color="transparent")
         self.main_tab_frame.pack(side="left", padx=12)
         self.btn_main_nav = ctk.CTkButton(self.main_tab_frame, text="🏠 Main", command=lambda: self._switch_tab("main"),
-                                         fg_color="transparent", hover_color="#222736", width=90, height=32,
-                                         font=ctk.CTkFont(size=13, weight="bold"), text_color="#4ade80")
+                                         fg_color="transparent", hover_color="#374151", width=90, height=32,
+                                         font=ctk.CTkFont(size=13, weight="bold"), text_color="#3b82f6")
         self.btn_main_nav.pack()
-        self.main_underline = ctk.CTkFrame(self.main_tab_frame, height=3, fg_color="#4ade80")
+        self.main_underline = ctk.CTkFrame(self.main_tab_frame, height=2, fg_color="#3b82f6")
         self.main_underline.pack(fill="x", pady=(4,0))
         
         # Logs tab with icon and underline
         self.logs_tab_frame = ctk.CTkFrame(nav_inner, fg_color="transparent")
         self.logs_tab_frame.pack(side="left", padx=12)
         self.btn_logs_nav = ctk.CTkButton(self.logs_tab_frame, text="☰ Logs", command=lambda: self._switch_tab("logs"),
-                                          fg_color="transparent", hover_color="#222736", width=90, height=32,
+                                          fg_color="transparent", hover_color="#374151", width=90, height=32,
                                           font=ctk.CTkFont(size=13), text_color="#9ca3af")
         self.btn_logs_nav.pack()
-        self.logs_underline = ctk.CTkFrame(self.logs_tab_frame, height=3, fg_color="transparent")
+        self.logs_underline = ctk.CTkFrame(self.logs_tab_frame, height=2, fg_color="transparent")
         self.logs_underline.pack(fill="x", pady=(4,0))
         
         # Create tabview - Figma dark theme
@@ -188,120 +187,107 @@ class App(ctk.CTk):
         # Keep database tab reference for future use (code remains intact)
         # self.tab_db = self.nb.tab("database")
     
-        # left column - Figma styled
-        left_container = ctk.CTkFrame(self.tab_main, width=280, fg_color="#1a1f2e", corner_radius=8)
-        left_container.pack(side="left", fill="y", padx=(8,4), pady=8)
+        # LEFT SIDEBAR - One continuous flat panel (no borders)
+        left_container = ctk.CTkFrame(self.tab_main, width=280, fg_color="#1a1f2e", corner_radius=0, border_width=0)
+        left_container.pack(side="left", fill="y", padx=0, pady=0)
         left_container.pack_propagate(False)
         left_scroll = ctk.CTkScrollableFrame(left_container, width=260, fg_color="transparent")
-        left_scroll.pack(fill="both", expand=True, padx=4, pady=4)
+        left_scroll.pack(fill="both", expand=True, padx=0, pady=0)
         left = left_scroll
         
-        # ═══════════════════════════════════════════════════════════════
-        # DEVICES SECTION - Custom list with checkboxes like Figma photo 1
-        # ═══════════════════════════════════════════════════════════════
-        ctk.CTkLabel(left, text="Devices", font=ctk.CTkFont(size=14, weight="bold"), text_color="#ffffff").pack(anchor="nw", padx=8, pady=(8,4))
+        # DEVICES SECTION - Flat, no box borders
+        ctk.CTkLabel(left, text="Devices", font=ctk.CTkFont(size=14, weight="bold"), text_color="#9ca3af").pack(anchor="nw", padx=15, pady=(20,10))
         
-        # Custom devices list container
-        self.devices_list_frame = ctk.CTkFrame(left, fg_color="#222736", corner_radius=8)
-        self.devices_list_frame.pack(fill="x", padx=8, pady=(0,4))
-        
-        # Scrollable frame for device items
-        self.devices_scroll = ctk.CTkScrollableFrame(self.devices_list_frame, fg_color="transparent", height=180)
-        self.devices_scroll.pack(fill="x", padx=2, pady=2)
+        # Scrollable frame for device items (no container box)
+        self.devices_list_frame = ctk.CTkFrame(left, fg_color="transparent", border_width=0)
+        self.devices_list_frame.pack(fill="x", padx=15, pady=(0,5))
+        self.devices_scroll = ctk.CTkScrollableFrame(self.devices_list_frame, fg_color="transparent", height=160)
+        self.devices_scroll.pack(fill="x")
         
         # Store device item widgets and selection state
-        self.device_items = {}  # {name: {"frame": frame, "checkbox": checkbox, "selected": bool}}
+        self.device_items = {}
         self.selected_device_name = None
 
-        # Device buttons - OUTLINED style like Figma
+        # Device buttons - subtle style
         dbbtns = ctk.CTkFrame(left, fg_color="transparent")
-        dbbtns.pack(fill="x", padx=8, pady=6)
+        dbbtns.pack(fill="x", padx=15, pady=(5,15))
         ctk.CTkButton(dbbtns, text="+ Add", command=self.add_device_prompt,
-                     fg_color="transparent", hover_color="#222736", 
-                     border_width=1, border_color="#4ade80", text_color="#4ade80",
-                     font=ctk.CTkFont(size=11), corner_radius=8, height=30).pack(side="left", expand=True, padx=(0,4))
-        ctk.CTkButton(dbbtns, text="🗑 Remove", command=self.remove_selected_device,
-                     fg_color="transparent", hover_color="#222736",
-                     border_width=1, border_color="#4ade80", text_color="#4ade80",
-                     font=ctk.CTkFont(size=11), corner_radius=8, height=30).pack(side="left", expand=True, padx=(4,0))
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     font=ctk.CTkFont(size=11), corner_radius=6, height=28, border_width=0).pack(side="left", expand=True, padx=(0,4))
+        ctk.CTkButton(dbbtns, text="Remove", command=self.remove_selected_device,
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     font=ctk.CTkFont(size=11), corner_radius=6, height=28, border_width=0).pack(side="left", expand=True, padx=(4,0))
 
-        # ═══════════════════════════════════════════════════════════════
-        # TEMPLATES SECTION - Custom list with checkboxes like Figma photo 1
-        # ═══════════════════════════════════════════════════════════════
-        ctk.CTkLabel(left, text="Templates", font=ctk.CTkFont(size=14, weight="bold"), text_color="#ffffff").pack(anchor="nw", padx=8, pady=(12,4))
+        # TEMPLATES SECTION - Flat, no box borders
+        ctk.CTkLabel(left, text="Templates", font=ctk.CTkFont(size=14, weight="bold"), text_color="#9ca3af").pack(anchor="nw", padx=15, pady=(10,10))
         
-        # Custom templates list container
-        self.templates_list_frame = ctk.CTkFrame(left, fg_color="#222736", corner_radius=8)
-        self.templates_list_frame.pack(fill="both", expand=True, padx=8, pady=(0,4))
-        
-        # Scrollable frame for template items
+        # Scrollable frame for template items (no container box)
+        self.templates_list_frame = ctk.CTkFrame(left, fg_color="transparent", border_width=0)
+        self.templates_list_frame.pack(fill="both", expand=True, padx=15, pady=(0,5))
         self.templates_scroll = ctk.CTkScrollableFrame(self.templates_list_frame, fg_color="transparent")
-        self.templates_scroll.pack(fill="both", expand=True, padx=2, pady=2)
+        self.templates_scroll.pack(fill="both", expand=True)
         
         # Store template item widgets and selection state
-        self.template_items = {}  # {name: {"frame": frame, "checkbox": checkbox, "selected": bool}}
+        self.template_items = {}
         self.selected_template_name = None
 
-        # Template buttons - OUTLINED style like Figma
+        # Template buttons - subtle style
         tbtns = ctk.CTkFrame(left, fg_color="transparent")
-        tbtns.pack(fill="x", padx=8, pady=6)
+        tbtns.pack(fill="x", padx=15, pady=(5,15))
         ctk.CTkButton(tbtns, text="+ Add", command=self.add_template_dialog,
-                     fg_color="transparent", hover_color="#222736",
-                     border_width=1, border_color="#4ade80", text_color="#4ade80",
-                     font=ctk.CTkFont(size=11), corner_radius=8, height=30).pack(side="left", expand=True, padx=(0,4))
-        ctk.CTkButton(tbtns, text="✏ Edit", command=self.edit_template_dialog,
-                     fg_color="transparent", hover_color="#222736",
-                     border_width=1, border_color="#4ade80", text_color="#4ade80",
-                     font=ctk.CTkFont(size=11), corner_radius=8, height=30).pack(side="left", expand=True, padx=(4,0))
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     font=ctk.CTkFont(size=11), corner_radius=6, height=28, border_width=0).pack(side="left", expand=True, padx=(0,4))
+        ctk.CTkButton(tbtns, text="Edit", command=self.edit_template_dialog,
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     font=ctk.CTkFont(size=11), corner_radius=6, height=28, border_width=0).pack(side="left", expand=True, padx=(4,0))
         
-        # Guided Setup Wizard button - Figma styled (solid green accent)
-        ctk.CTkButton(left, text="🧙 Guided Setup (Beginner)", command=self.guided_setup,
-                     fg_color="#4ade80", hover_color="#22c55e", text_color="#13151b",
-                     font=ctk.CTkFont(size=11, weight="bold"), corner_radius=8, height=34).pack(fill="x", padx=8, pady=(12,4))
+        # Guided Setup Wizard button - subtle teal/blue (not bright green)
+        ctk.CTkButton(left, text="🧙 Guided Setup", command=self.guided_setup,
+                     fg_color="transparent", hover_color="#374151", text_color="#3b82f6",
+                     font=ctk.CTkFont(size=11), corner_radius=6, height=32, 
+                     border_width=1, border_color="#3b82f6").pack(fill="x", padx=15, pady=(10,5))
         
-        # Subnet Calculator GUI button - Figma styled (outlined green)
-        ctk.CTkButton(left, text="🔢 Subnet Calculator (GUI)", command=lambda: SubnetCalculator(self),
-                     fg_color="transparent", hover_color="#222736",
-                     border_width=1, border_color="#4ade80", text_color="#4ade80",
-                     font=ctk.CTkFont(size=11), corner_radius=8, height=32).pack(fill="x", padx=8, pady=(4,8))
+        # Subnet Calculator GUI button - subtle style
+        ctk.CTkButton(left, text="🔢 Subnet Calculator", command=lambda: SubnetCalculator(self),
+                     fg_color="transparent", hover_color="#374151", text_color="#9ca3af",
+                     font=ctk.CTkFont(size=11), corner_radius=6, height=32,
+                     border_width=1, border_color="#4b5563").pack(fill="x", padx=15, pady=(5,20))
 
-        # center area - Figma styled
+        # CENTER AREA - Preview card floating in the middle
         center = ctk.CTkFrame(self.tab_main, fg_color="transparent")
-        center.pack(side="left", fill="both", expand=True, padx=6, pady=8)
+        center.pack(side="left", fill="both", expand=True, padx=10, pady=10)
 
-        # Preview header with title and OUTLINED buttons on top right
+        # Preview header with title and subtle buttons
         topc = ctk.CTkFrame(center, fg_color="transparent")
-        topc.pack(fill="x", pady=(0, 6))
-        ctk.CTkLabel(topc, text="Preview", font=ctk.CTkFont(size=16, weight="bold"), text_color="#ffffff").pack(side="left")
+        topc.pack(fill="x", pady=(0, 8))
+        ctk.CTkLabel(topc, text="Preview", font=ctk.CTkFont(size=16, weight="bold"), text_color="#9ca3af").pack(side="left")
         gframe = ctk.CTkFrame(topc, fg_color="transparent")
         gframe.pack(side="right")
-        ctk.CTkButton(gframe, text="Save config to db", 
-                     fg_color="transparent", hover_color="#222736",
-                     border_width=1, border_color="#4ade80", text_color="#4ade80",
-                     command=self.save_config_to_db, width=130, height=32,
-                     font=ctk.CTkFont(size=11), corner_radius=8).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(gframe, text="View saved configs", 
-                     fg_color="transparent", hover_color="#222736",
-                     border_width=1, border_color="#4ade80", text_color="#4ade80",
-                     command=self.view_saved_configs, width=140, height=32,
-                     font=ctk.CTkFont(size=11), corner_radius=8).pack(side="left")
+        ctk.CTkButton(gframe, text="Save to DB", 
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     command=self.save_config_to_db, width=100, height=28,
+                     font=ctk.CTkFont(size=10), corner_radius=6, border_width=0).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(gframe, text="View Saved", 
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     command=self.view_saved_configs, width=100, height=28,
+                     font=ctk.CTkFont(size=10), corner_radius=6, border_width=0).pack(side="left")
 
-        # Preview holder - dark card like Figma
-        preview_holder = ctk.CTkFrame(center, fg_color="#222736", corner_radius=10)
-        preview_holder.pack(fill="both", expand=True, padx=0, pady=0)
+        # Preview holder - floating card (no borders)
+        preview_holder = ctk.CTkFrame(center, fg_color="#1f2937", corner_radius=12, border_width=0)
+        preview_holder.pack(fill="both", expand=True)
         
-        # Inner preview area - darker
+        # Inner preview text area
         self.preview = ctk.CTkTextbox(preview_holder, wrap="none", 
                                      font=ctk.CTkFont(family="Consolas", size=11),
-                                     fg_color="#2b3040", text_color="#ffffff",
-                                     corner_radius=8, border_width=1, border_color="#374151")
-        self.preview.pack(fill="both", expand=True, padx=12, pady=(12, 8))
+                                     fg_color="#374151", text_color="#ffffff",
+                                     corner_radius=8, border_width=1, border_color="#4b5563")
+        self.preview.pack(fill="both", expand=True, padx=16, pady=(16, 10))
         
         # Bottom buttons frame
         bottom_btn_frame = ctk.CTkFrame(preview_holder, fg_color="transparent")
-        bottom_btn_frame.pack(fill="x", padx=12, pady=(0, 12))
+        bottom_btn_frame.pack(fill="x", padx=16, pady=(0, 16))
         
-        # Generate button - SOLID filled blue like Figma
+        # Generate button - solid blue
         ctk.CTkButton(
             bottom_btn_frame, 
             text="Generate", 
@@ -309,26 +295,26 @@ class App(ctk.CTk):
             fg_color="#3b82f6",
             hover_color="#2563eb",
             text_color="#ffffff",
-            width=110,
+            width=100,
             height=32,
             font=ctk.CTkFont(size=11, weight="bold"),
-            corner_radius=8
+            corner_radius=6,
+            border_width=0
         ).pack(side="left")
         
-        # Clear Preview button - OUTLINED red like Figma
+        # Clear Preview button - subtle
         ctk.CTkButton(
             bottom_btn_frame, 
-            text="Clear Preview", 
+            text="Clear", 
             command=self.clear_preview,
-            fg_color="transparent",
-            hover_color="#222736",
-            border_width=1,
-            border_color="#ef4444",
-            text_color="#ef4444",
-            width=120,
+            fg_color="#374151",
+            hover_color="#4b5563",
+            text_color="#9ca3af",
+            width=80,
             height=32,
             font=ctk.CTkFont(size=11),
-            corner_radius=8
+            corner_radius=6,
+            border_width=0
         ).pack(side="right")
         
         # Enable paste in preview window
@@ -343,119 +329,115 @@ class App(ctk.CTk):
         self.preview.bind("<Control-v>", paste_handler)
         self.preview.bind("<Command-v>", paste_handler)  # macOS
 
-        # right column - Figma styled card
-        right = ctk.CTkFrame(self.tab_main, width=300, fg_color="#1a1f2e", corner_radius=10)
-        right.pack(side="right", fill="y", padx=(4,8), pady=8)
+        # RIGHT SIDEBAR - Flat continuous panel (no borders)
+        right = ctk.CTkFrame(self.tab_main, width=300, fg_color="#1a1f2e", corner_radius=0, border_width=0)
+        right.pack(side="right", fill="y", padx=0, pady=0)
         right.pack_propagate(False)
         
-        # CONFIG STATUS SECTION - Like Figma design
+        # CONFIG STATUS SECTION
         ctk.CTkLabel(right, text="Config Status", font=ctk.CTkFont(size=14, weight="bold"), 
-                    text_color="#ffffff").pack(anchor="nw", padx=12, pady=(12,8))
+                    text_color="#9ca3af").pack(anchor="nw", padx=15, pady=(20,10))
         
         # Config name row with Connected badge
         config_row = ctk.CTkFrame(right, fg_color="transparent")
-        config_row.pack(fill="x", padx=12, pady=(0, 8))
-        ctk.CTkLabel(config_row, text="config name", font=ctk.CTkFont(size=11), 
+        config_row.pack(fill="x", padx=15, pady=(0, 10))
+        ctk.CTkLabel(config_row, text="GNS3 Status", font=ctk.CTkFont(size=11), 
                     text_color="#9ca3af").pack(side="left")
         
-        # Connected badge - green pill like Figma
+        # Connected badge
         self.lbl_gns3_status = ctk.CTkLabel(config_row, text="● Connected", 
                                            font=ctk.CTkFont(size=11),
                                            text_color="#4ade80",
                                            fg_color="transparent")
         self.lbl_gns3_status.pack(side="right")
         
-        # Import and Refresh buttons - OUTLINED like Figma
+        # Import and Refresh buttons - subtle style
         gns3_controls = ctk.CTkFrame(right, fg_color="transparent")
-        gns3_controls.pack(fill="x", padx=12, pady=(0, 16))
-        ctk.CTkButton(gns3_controls, text="⬆ Import", command=self.gns3_list_projects,
-                     fg_color="transparent", hover_color="#222736",
-                     border_width=1, border_color="#4ade80", text_color="#4ade80",
-                     width=100, height=32, font=ctk.CTkFont(size=11), corner_radius=8).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(gns3_controls, text="↻ Refresh", command=self.refresh_gns3_connection, 
-                     fg_color="transparent", hover_color="#222736",
-                     border_width=1, border_color="#4ade80", text_color="#4ade80",
-                     width=100, height=32, font=ctk.CTkFont(size=11), corner_radius=8).pack(side="left")
+        gns3_controls.pack(fill="x", padx=15, pady=(0, 20))
+        ctk.CTkButton(gns3_controls, text="Import", command=self.gns3_list_projects,
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     width=90, height=28, font=ctk.CTkFont(size=10), corner_radius=6, border_width=0).pack(side="left", padx=(0, 6))
+        ctk.CTkButton(gns3_controls, text="Refresh", command=self.refresh_gns3_connection, 
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     width=90, height=28, font=ctk.CTkFont(size=10), corner_radius=6, border_width=0).pack(side="left")
         
-        # SEND / CONNECT SECTION
-        ctk.CTkLabel(right, text="Send / Connect", font=ctk.CTkFont(size=14, weight="bold"), 
-                    text_color="#ffffff").pack(anchor="nw", padx=12, pady=(0,8))
+        # CONNECTION SECTION
+        ctk.CTkLabel(right, text="Connection", font=ctk.CTkFont(size=14, weight="bold"), 
+                    text_color="#9ca3af").pack(anchor="nw", padx=15, pady=(0,10))
         
-        # Protocol dropdown - SOLID filled blue like Figma
+        # Protocol dropdown
         self.send_method = ctk.CTkOptionMenu(right, values=["Telnet", "Serial", "SSH"],
-                                            fg_color="#3b82f6", button_color="#2563eb",
-                                            button_hover_color="#1d4ed8", text_color="#ffffff",
-                                            font=ctk.CTkFont(size=11), corner_radius=8, height=36) 
+                                            fg_color="#374151", button_color="#4b5563",
+                                            button_hover_color="#6b7280", text_color="#ffffff",
+                                            font=ctk.CTkFont(size=11), corner_radius=6, height=36) 
         self.send_method.set("Telnet")
-        self.send_method.pack(fill="x", padx=12, pady=(0,12))
+        self.send_method.pack(fill="x", padx=15, pady=(0,15))
         self.send_method.configure(command=self._on_protocol_changed)
 
         # Serial fields section
         self.lbl_serial_title = ctk.CTkLabel(right, text="Serial", font=ctk.CTkFont(size=12, weight="bold"), 
-                                            text_color="#ffffff")
-        self.lbl_serial_title.pack(anchor="w", padx=12, pady=(0,6))
+                                            text_color="#9ca3af")
+        self.lbl_serial_title.pack(anchor="w", padx=15, pady=(0,8))
         
         self.ent_serial_port = ctk.CTkEntry(right, placeholder_text="COM3 or /dev/ttyUSB0",
-                                           font=ctk.CTkFont(size=11), height=36,
-                                           fg_color="#2b3040", border_color="#374151",
-                                           corner_radius=8, text_color="#ffffff")
-        self.ent_serial_port.pack(fill="x", padx=12, pady=(0,6))
+                                           font=ctk.CTkFont(size=11), height=38,
+                                           fg_color="#374151", border_color="#4b5563", border_width=1,
+                                           corner_radius=6, text_color="#ffffff")
+        self.ent_serial_port.pack(fill="x", padx=15, pady=(0,8))
         
         self.ent_serial_baud = ctk.CTkEntry(right, placeholder_text="9600",
-                                           font=ctk.CTkFont(size=11), height=36,
-                                           fg_color="#2b3040", border_color="#374151",
-                                           corner_radius=8, text_color="#ffffff")
-        self.ent_serial_baud.pack(fill="x", padx=12, pady=(0,12))
+                                           font=ctk.CTkFont(size=11), height=38,
+                                           fg_color="#374151", border_color="#4b5563", border_width=1,
+                                           corner_radius=6, text_color="#ffffff")
+        self.ent_serial_baud.pack(fill="x", padx=15, pady=(0,15))
 
         # Network fields section
         self.lbl_network_title = ctk.CTkLabel(right, text="Network", font=ctk.CTkFont(size=12, weight="bold"), 
-                                             text_color="#ffffff")
-        self.lbl_network_title.pack(anchor="w", padx=12, pady=(0,6))
+                                             text_color="#9ca3af")
+        self.lbl_network_title.pack(anchor="w", padx=15, pady=(0,8))
         
-        self.ent_host = ctk.CTkEntry(right, placeholder_text="Host or Ip",
-                                    font=ctk.CTkFont(size=11), height=36,
-                                    fg_color="#2b3040", border_color="#374151",
-                                    corner_radius=8, text_color="#ffffff")
-        self.ent_host.pack(fill="x", padx=12, pady=(0,6))
+        self.ent_host = ctk.CTkEntry(right, placeholder_text="Host or IP",
+                                    font=ctk.CTkFont(size=11), height=38,
+                                    fg_color="#374151", border_color="#4b5563", border_width=1,
+                                    corner_radius=6, text_color="#ffffff")
+        self.ent_host.pack(fill="x", padx=15, pady=(0,8))
         
         self.ent_port = ctk.CTkEntry(right, placeholder_text="Port",
-                                     font=ctk.CTkFont(size=11), height=36,
-                                     fg_color="#2b3040", border_color="#374151",
-                                     corner_radius=8, text_color="#ffffff")
-        self.ent_port.pack(fill="x", padx=12, pady=(0,6))
+                                     font=ctk.CTkFont(size=11), height=38,
+                                     fg_color="#374151", border_color="#4b5563", border_width=1,
+                                     corner_radius=6, text_color="#ffffff")
+        self.ent_port.pack(fill="x", padx=15, pady=(0,8))
         self.ent_user = ctk.CTkEntry(right, placeholder_text="Username",
-                                    font=ctk.CTkFont(size=11), height=36,
-                                    fg_color="#2b3040", border_color="#374151",
-                                    corner_radius=8, text_color="#ffffff")
-        self.ent_user.pack(fill="x", padx=12, pady=(0,6))
+                                    font=ctk.CTkFont(size=11), height=38,
+                                    fg_color="#374151", border_color="#4b5563", border_width=1,
+                                    corner_radius=6, text_color="#ffffff")
+        self.ent_user.pack(fill="x", padx=15, pady=(0,8))
         
         self.ent_pass = ctk.CTkEntry(right, placeholder_text="Password", show="*",
-                                    font=ctk.CTkFont(size=11), height=36,
-                                    fg_color="#2b3040", border_color="#374151",
-                                    corner_radius=8, text_color="#ffffff")
-        self.ent_pass.pack(fill="x", padx=12, pady=(0,6))
+                                    font=ctk.CTkFont(size=11), height=38,
+                                    fg_color="#374151", border_color="#4b5563", border_width=1,
+                                    corner_radius=6, text_color="#ffffff")
+        self.ent_pass.pack(fill="x", padx=15, pady=(0,8))
         
-        # Optional enable password - Figma styled
-        ctk.CTkLabel(right, text="Optional", font=ctk.CTkFont(size=10), 
-                    text_color="#9ca3af").pack(anchor="w", padx=12, pady=(4,2))
+        # Optional enable password
         enable_frame = ctk.CTkFrame(right, fg_color="transparent")
-        enable_frame.pack(fill="x", padx=12, pady=(0,0))
+        enable_frame.pack(fill="x", padx=15, pady=(0,8))
         self.enable_checkbox = ctk.CTkCheckBox(enable_frame, text="",
                                               font=ctk.CTkFont(size=11), width=20,
-                                              fg_color="#4ade80", hover_color="#22c55e",
-                                              border_color="#374151")
-        self.enable_checkbox.pack(side="right", padx=(4,0))
-        self.ent_enable = ctk.CTkEntry(enable_frame, placeholder_text="Enable Password", show="*",
-                                      font=ctk.CTkFont(size=11), height=36,
-                                      fg_color="#2b3040", border_color="#374151",
-                                      corner_radius=8, text_color="#ffffff")
+                                              fg_color="#3b82f6", hover_color="#2563eb",
+                                              border_color="#4b5563")
+        self.enable_checkbox.pack(side="right", padx=(8,0))
+        self.ent_enable = ctk.CTkEntry(enable_frame, placeholder_text="Enable Password (optional)", show="*",
+                                      font=ctk.CTkFont(size=11), height=38,
+                                      fg_color="#374151", border_color="#4b5563", border_width=1,
+                                      corner_radius=6, text_color="#ffffff")
         self.ent_enable.pack(side="left", fill="x", expand=True)
 
-        # Send button - Solid filled blue like Figma
+        # Send button - solid blue
         ctk.CTkButton(right, text="Send", command=self.send_now, 
                      fg_color="#3b82f6", hover_color="#2563eb", text_color="#ffffff",
                      height=40, font=ctk.CTkFont(size=12, weight="bold"),
-                     corner_radius=8).pack(fill="x", padx=12, pady=(16,12))
+                     corner_radius=6, border_width=0).pack(fill="x", padx=15, pady=(20,20))
         
         # Store references for conditional enabling
         self.serial_widgets = [self.lbl_serial_title, self.ent_serial_port, self.ent_serial_baud]
@@ -464,26 +446,25 @@ class App(ctk.CTk):
         # Initialize field states based on default protocol
         self._on_protocol_changed("Telnet")
 
-        # logs tab - Figma styled
-        logs_card = ctk.CTkFrame(self.tab_logs, fg_color="#222736", corner_radius=10)
-        logs_card.pack(fill="both", expand=True, padx=12, pady=12)
+        # LOGS TAB - Flat design
+        logs_card = ctk.CTkFrame(self.tab_logs, fg_color="#1f2937", corner_radius=12, border_width=0)
+        logs_card.pack(fill="both", expand=True, padx=10, pady=10)
         
         ctk.CTkLabel(logs_card, text="Output", font=ctk.CTkFont(size=16, weight="bold"),
-                    text_color="#ffffff").pack(anchor="nw", padx=16, pady=(12,8))
+                    text_color="#9ca3af").pack(anchor="nw", padx=16, pady=(16,10))
         
         self.txt_logs = ctk.CTkTextbox(logs_card, font=ctk.CTkFont(family="Consolas", size=11),
-                                      fg_color="#2b3040", text_color="#ffffff",
-                                      corner_radius=8, border_width=1, border_color="#374151")
-        self.txt_logs.pack(fill="both", expand=True, padx=12, pady=(0,12))
-        # Clear Logs button in bottom right corner - OUTLINED red like Figma
+                                      fg_color="#374151", text_color="#ffffff",
+                                      corner_radius=8, border_width=1, border_color="#4b5563")
+        self.txt_logs.pack(fill="both", expand=True, padx=16, pady=(0,10))
+        # Clear Logs button
         clear_logs_frame = ctk.CTkFrame(logs_card, fg_color="transparent")
-        clear_logs_frame.pack(fill="x", padx=12, pady=(0,12))
+        clear_logs_frame.pack(fill="x", padx=16, pady=(0,16))
         clear_logs_btn = ctk.CTkButton(clear_logs_frame, text="Clear Logs", 
                                       command=lambda: self.txt_logs.delete("0.0","end"),
-                                      fg_color="transparent", hover_color="#222736",
-                                      border_width=1, border_color="#ef4444",
-                                      text_color="#ef4444", width=110, height=32,
-                                      font=ctk.CTkFont(size=11), corner_radius=8)
+                                      fg_color="#374151", hover_color="#4b5563",
+                                      text_color="#9ca3af", width=100, height=28,
+                                      font=ctk.CTkFont(size=10), corner_radius=6, border_width=0)
         clear_logs_btn.pack(side="right")
 
         # Database tab: professional multi-entity browser
@@ -1006,8 +987,8 @@ class App(ctk.CTk):
 
         btns = tk.Frame(dialog)
         btns.pack(fill="x", padx=12, pady=(0, 12))
-        tk.Button(btns, text="Use selected", bg="#4ade80", fg="#13151b", command=confirm).pack(side="left", padx=4)
-        tk.Button(btns, text="Cancel", command=cancel).pack(side="right", padx=4)
+        tk.Button(btns, text="Use selected", bg="#3b82f6", fg="white", command=confirm).pack(side="left", padx=4)
+        tk.Button(btns, text="Cancel", bg="#374151", fg="#9ca3af", command=cancel).pack(side="right", padx=4)
 
         dialog.protocol("WM_DELETE_WINDOW", cancel)
         self.wait_window(dialog)
@@ -1326,19 +1307,19 @@ class App(ctk.CTk):
 
     # ------------------- tab switching -------------------
     def _switch_tab(self, tab: str):
-        """Switch between Main and Logs tabs with Figma-style underline animation"""
+        """Switch between Main and Logs tabs"""
         if tab == "main":
             self.nb.set("main")
-            self.btn_main_nav.configure(text_color="#4ade80")
+            self.btn_main_nav.configure(text_color="#3b82f6")
             self.btn_logs_nav.configure(text_color="#9ca3af")
-            self.main_underline.configure(fg_color="#4ade80")
+            self.main_underline.configure(fg_color="#3b82f6")
             self.logs_underline.configure(fg_color="transparent")
         else:
             self.nb.set("output / logs")
             self.btn_main_nav.configure(text_color="#9ca3af")
-            self.btn_logs_nav.configure(text_color="#4ade80")
+            self.btn_logs_nav.configure(text_color="#3b82f6")
             self.main_underline.configure(fg_color="transparent")
-            self.logs_underline.configure(fg_color="#4ade80")
+            self.logs_underline.configure(fg_color="#3b82f6")
 
     # ------------------- custom list item helpers (Figma style) -------------------
     def _create_device_item(self, name: str, label: str, idx: int):
@@ -1364,8 +1345,8 @@ class App(ctk.CTk):
         # Checkbox on right
         var = ctk.BooleanVar(value=False)
         checkbox = ctk.CTkCheckBox(content, text="", variable=var, width=20,
-                                  fg_color="#4ade80", hover_color="#22c55e",
-                                  border_color="#374151", corner_radius=4,
+                                  fg_color="#3b82f6", hover_color="#2563eb",
+                                  border_color="#4b5563", corner_radius=4,
                                   command=lambda n=name, i=idx: self._on_device_item_click(n, i))
         checkbox.pack(side="right", padx=4)
         
@@ -1391,7 +1372,7 @@ class App(ctk.CTk):
         self.selected_device_name = name
         if name in self.device_items:
             item = self.device_items[name]
-            item["border"].configure(fg_color="#4ade80")
+            item["border"].configure(fg_color="#3b82f6")
             item["var"].set(True)
         
         # Trigger device selection logic
@@ -1429,8 +1410,8 @@ class App(ctk.CTk):
         # Checkbox on right
         var = ctk.BooleanVar(value=False)
         checkbox = ctk.CTkCheckBox(content, text="", variable=var, width=20,
-                                  fg_color="#4ade80", hover_color="#22c55e",
-                                  border_color="#374151", corner_radius=4,
+                                  fg_color="#3b82f6", hover_color="#2563eb",
+                                  border_color="#4b5563", corner_radius=4,
                                   command=lambda n=name, i=idx: self._on_template_item_click(n, i))
         checkbox.pack(side="right", padx=4)
         
@@ -1456,7 +1437,7 @@ class App(ctk.CTk):
         self.selected_template_name = name
         if name in self.template_items:
             item = self.template_items[name]
-            item["border"].configure(fg_color="#4ade80")
+            item["border"].configure(fg_color="#3b82f6")
             item["var"].set(True)
         
         # Show template content in preview
@@ -1480,14 +1461,14 @@ class App(ctk.CTk):
 
     # ------------------- conditional field enabling -------------------
     def _on_protocol_changed(self, value):
-        """Enable/disable fields based on selected protocol - Figma colors"""
+        """Enable/disable fields based on selected protocol"""
         protocol = value.lower()
         
-        # Figma design colors for disabled fields
-        disabled_color = "#222736"  # Same as card background
+        # Colors for field states
+        disabled_color = "#2d3748"  # Darker disabled
         disabled_text_color = "#4b5563"  # Muted gray
-        enabled_color = "#2b3040"  # Dark input background
-        enabled_label_color = "#ffffff"
+        enabled_color = "#374151"  # Input background
+        enabled_label_color = "#9ca3af"  # Grey headings
         
         if protocol == "telnet":
             # Enable only Network IP and Port

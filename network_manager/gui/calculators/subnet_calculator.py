@@ -13,10 +13,10 @@ class SubnetCalculator(ctk.CTkToplevel):
         self.geometry("900x600")
         self.configure(fg_color="#13151b")
 
-        ctk.CTkLabel(self, text="Subnet Calculator", font=("Segoe UI", 20, "bold"), text_color="#4ade80").pack(pady=10)
+        ctk.CTkLabel(self, text="Subnet Calculator", font=("Segoe UI", 20, "bold"), text_color="#9ca3af").pack(pady=10)
 
         # tab view
-        self.tabs = ctk.CTkTabview(self, width=850, height=500, fg_color="#222736")
+        self.tabs = ctk.CTkTabview(self, width=850, height=500, fg_color="#1a1f2e")
         self.tabs.pack(pady=10, expand=True)
 
         # tabs
@@ -25,25 +25,25 @@ class SubnetCalculator(ctk.CTkToplevel):
         self.tab_result = self.tabs.add("Results")
 
         # --- network info tab ---
-        ctk.CTkLabel(self.tab_info, text="Network (e.g. 192.168.10.0/24):", font=("Segoe UI", 14), text_color="#ffffff").grid(row=0, column=0, sticky="w", padx=10, pady=8)
-        self.entry_net = ctk.CTkEntry(self.tab_info, width=220, fg_color="#2b3040", border_color="#374151", text_color="#ffffff", corner_radius=8)
+        ctk.CTkLabel(self.tab_info, text="Network (e.g. 192.168.10.0/24):", font=("Segoe UI", 14), text_color="#9ca3af").grid(row=0, column=0, sticky="w", padx=10, pady=8)
+        self.entry_net = ctk.CTkEntry(self.tab_info, width=220, fg_color="#374151", border_color="#4b5563", border_width=1, text_color="#ffffff", corner_radius=6)
         self.entry_net.grid(row=0, column=1, padx=10)
 
-        ctk.CTkLabel(self.tab_info, text="Number of Departments:", font=("Segoe UI", 14), text_color="#ffffff").grid(row=1, column=0, sticky="w", padx=10, pady=8)
-        self.entry_dept = ctk.CTkEntry(self.tab_info, width=220, fg_color="#2b3040", border_color="#374151", text_color="#ffffff", corner_radius=8)
+        ctk.CTkLabel(self.tab_info, text="Number of Departments:", font=("Segoe UI", 14), text_color="#9ca3af").grid(row=1, column=0, sticky="w", padx=10, pady=8)
+        self.entry_dept = ctk.CTkEntry(self.tab_info, width=220, fg_color="#374151", border_color="#4b5563", border_width=1, text_color="#ffffff", corner_radius=6)
         self.entry_dept.grid(row=1, column=1, padx=10)
 
-        ctk.CTkButton(self.tab_info, text="Next ➜", fg_color="#3b82f6", hover_color="#2563eb", text_color="#ffffff", corner_radius=8, command=self.create_dept_tab).grid(row=2, column=1, pady=20, sticky="e")
+        ctk.CTkButton(self.tab_info, text="Next ➜", fg_color="#3b82f6", hover_color="#2563eb", text_color="#ffffff", corner_radius=6, border_width=0, command=self.create_dept_tab).grid(row=2, column=1, pady=20, sticky="e")
 
         # --- departments tab ---
-        self.dept_frame = ctk.CTkScrollableFrame(self.tab_dept, fg_color="#222736", width=780, height=350)
+        self.dept_frame = ctk.CTkScrollableFrame(self.tab_dept, fg_color="transparent", width=780, height=350)
         self.dept_frame.pack(pady=15)
 
-        self.generate_btn = ctk.CTkButton(self.tab_dept, text="Generate Subnets", fg_color="#4ade80", hover_color="#22c55e", text_color="#13151b", corner_radius=8, command=self.calculate_subnets)
+        self.generate_btn = ctk.CTkButton(self.tab_dept, text="Generate Subnets", fg_color="#3b82f6", hover_color="#2563eb", text_color="#ffffff", corner_radius=6, border_width=0, command=self.calculate_subnets)
         self.generate_btn.pack(pady=10)
 
         # --- results tab ---
-        self.result_frame = ctk.CTkFrame(self.tab_result, fg_color="#222736")
+        self.result_frame = ctk.CTkFrame(self.tab_result, fg_color="transparent", border_width=0)
         self.result_frame.pack(fill="both", expand=True, pady=10, padx=10)
 
         self.dept_entries = []
@@ -62,16 +62,16 @@ class SubnetCalculator(ctk.CTkToplevel):
             messagebox.showerror("Error", "Invalid department count")
             return
 
-        ctk.CTkLabel(self.dept_frame, text="Enter Department Info", font=("Segoe UI", 18, "bold"), text_color="#4ade80").pack(pady=10)
+        ctk.CTkLabel(self.dept_frame, text="Enter Department Info", font=("Segoe UI", 18, "bold"), text_color="#9ca3af").pack(pady=10)
 
         for i in range(self.dept_count):
             row = ctk.CTkFrame(self.dept_frame, fg_color="transparent")
             row.pack(fill="x", pady=5)
-            ctk.CTkLabel(row, text=f"Dept {i+1} Name:", width=100, text_color="#ffffff").pack(side="left", padx=6)
-            name_entry = ctk.CTkEntry(row, width=180, fg_color="#2b3040", border_color="#374151", text_color="#ffffff", corner_radius=8)
+            ctk.CTkLabel(row, text=f"Dept {i+1} Name:", width=100, text_color="#9ca3af").pack(side="left", padx=6)
+            name_entry = ctk.CTkEntry(row, width=180, fg_color="#374151", border_color="#4b5563", border_width=1, text_color="#ffffff", corner_radius=6)
             name_entry.pack(side="left", padx=6)
-            ctk.CTkLabel(row, text="Hosts:", width=70, text_color="#ffffff").pack(side="left", padx=6)
-            hosts_entry = ctk.CTkEntry(row, width=100, fg_color="#2b3040", border_color="#374151", text_color="#ffffff", corner_radius=8)
+            ctk.CTkLabel(row, text="Hosts:", width=70, text_color="#9ca3af").pack(side="left", padx=6)
+            hosts_entry = ctk.CTkEntry(row, width=100, fg_color="#374151", border_color="#4b5563", border_width=1, text_color="#ffffff", corner_radius=6)
             hosts_entry.pack(side="left", padx=6)
             self.dept_entries.append((name_entry, hosts_entry))
 

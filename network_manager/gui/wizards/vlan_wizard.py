@@ -23,8 +23,8 @@ class VlanGuiWindow(tk.Toplevel):
         self.tree.bind("<Double-1>", self.on_double_click)
         btns = tk.Frame(self)
         btns.pack(fill="x", pady=6)
-        tk.Button(btns, text="add row", bg="#4ade80", fg="#13151b", command=self.add_row).pack(side="left", padx=6)
-        tk.Button(btns, text="remove", bg="#ef4444", fg="white", command=self.remove_sel).pack(side="left", padx=6)
+        tk.Button(btns, text="add row", bg="#374151", fg="#9ca3af", command=self.add_row).pack(side="left", padx=6)
+        tk.Button(btns, text="remove", bg="#374151", fg="#9ca3af", command=self.remove_sel).pack(side="left", padx=6)
         tk.Button(btns, text="generate", bg="#3b82f6", fg="white", command=self.on_generate).pack(side="right", padx=6)
         self.add_row()
     
