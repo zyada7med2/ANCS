@@ -178,12 +178,19 @@ class App(ctk.CTk):
         self.logs_underline = ctk.CTkFrame(self.logs_tab_frame, height=3, fg_color="transparent")
         self.logs_underline.pack(fill="x", pady=(4,0))
         
-        # Create tabview for main and logs pages (custom nav buttons used instead of built-in tabs)
-        self.nb = ctk.CTkTabview(self, fg_color="#0D1117")
+        # Create tabview for main and logs pages (our custom nav buttons at top are used instead)
+        self.nb = ctk.CTkTabview(self, fg_color="#0D1117", 
+                                segmented_button_fg_color="#0D1117",
+                                segmented_button_selected_color="#0D1117",
+                                segmented_button_unselected_color="#0D1117",
+                                text_color="#0D1117")
         self.nb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         self.nb.add("main")
         self.nb.add("logs")
-        self.nb._segmented_button.pack_forget()  # Hide built-in tab buttons
+        # Completely remove the built-in tab buttons - we use our own navigation
+        self.nb._segmented_button.pack_forget()
+        self.nb._segmented_button.configure(height=0, corner_radius=0)
+        self.nb._segmented_button.grid_remove()
         self.tab_main = self.nb.tab("main")
         self.tab_logs = self.nb.tab("logs")
     
