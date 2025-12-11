@@ -15,7 +15,7 @@ class TextEditorPopup(tk.Toplevel):
         self.text.insert("1.0", initial)
         btnf = tk.Frame(self)
         btnf.pack(fill="x")
-        tk.Button(btnf, text="save", bg="#2d9cdb", fg="white", command=self.on_save).pack(side="right", padx=6, pady=6)
+        tk.Button(btnf, text="save", bg="#3b82f6", fg="white", command=self.on_save).pack(side="right", padx=6, pady=6)
         tk.Button(btnf, text="cancel", command=self.on_cancel).pack(side="right", padx=6, pady=6)
     
     def on_save(self):
