@@ -178,28 +178,20 @@ class App(ctk.CTk):
         self.logs_underline = ctk.CTkFrame(self.logs_tab_frame, height=3, fg_color="transparent")
         self.logs_underline.pack(fill="x", pady=(4,0))
         
-        # Create tabview - Figma exact colors
-        self.nb = ctk.CTkTabview(self, fg_color="#0D1117", segmented_button_fg_color="#0D1117",
-                                segmented_button_selected_color="#0D1117", 
-                                segmented_button_unselected_color="#0D1117")
-        self.nb.pack(fill="both", expand=True, padx=12, pady=8)
-        # Only add main and logs tabs - database tab code kept but hidden
+        # Create tabview for main and logs pages (custom nav buttons used instead of built-in tabs)
+        self.nb = ctk.CTkTabview(self, fg_color="#0D1117")
+        self.nb.pack(fill="both", expand=True, padx=12, pady=(0, 8))
         self.nb.add("main")
-        self.nb.add("output / logs")
-        # Hide the default tab buttons (we're using custom navigation)
-        self.nb._segmented_button.pack_forget()
-        # Database tab: keep code but don't show tab (commented out for future use)
-        # self.nb.add("database")
+        self.nb.add("logs")
+        self.nb._segmented_button.pack_forget()  # Hide built-in tab buttons
         self.tab_main = self.nb.tab("main")
-        self.tab_logs = self.nb.tab("output / logs")
-        # Keep database tab reference for future use (code remains intact)
-        # self.tab_db = self.nb.tab("database")
+        self.tab_logs = self.nb.tab("logs")
     
-        # LEFT SIDEBAR - Figma panel with rounded corners
-        left_container = ctk.CTkFrame(self.tab_main, width=280, fg_color="#1F2630", corner_radius=8, border_width=0)
+        # LEFT SIDEBAR - Figma panel with rounded corners (wider for long text)
+        left_container = ctk.CTkFrame(self.tab_main, width=320, fg_color="#1F2630", corner_radius=8, border_width=0)
         left_container.pack(side="left", fill="y", padx=(16,0), pady=16)
         left_container.pack_propagate(False)
-        left_scroll = ctk.CTkScrollableFrame(left_container, width=260, fg_color="transparent")
+        left_scroll = ctk.CTkScrollableFrame(left_container, width=300, fg_color="transparent")
         left_scroll.pack(fill="both", expand=True, padx=0, pady=0)
         left = left_scroll
         
@@ -1340,7 +1332,7 @@ class App(ctk.CTk):
             self.main_underline.configure(fg_color="#58A6FF")
             self.logs_underline.configure(fg_color="transparent")
         else:
-            self.nb.set("output / logs")
+            self.nb.set("logs")
             self.btn_main_nav.configure(text_color="#9BA3AF")
             self.btn_logs_nav.configure(text_color="#C9D1D9")
             self.main_underline.configure(fg_color="transparent")
