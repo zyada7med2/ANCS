@@ -40,7 +40,10 @@ class App(ctk.CTk):
         width = min(1180, screen_w - 80)
         height = min(720, screen_h - 80)
         self.geometry(f"{width}x{height}")
-        self.minsize(700, 450)  # Smaller minimum - global scroll handles overflow
+        self.minsize(650, 450)  # Smaller minimum - sidebar auto-hides when needed
+        
+        # Bind resize event for responsive sidebar
+        self.bind("<Configure>", self._on_window_resize)
 
         ctk.set_appearance_mode("dark")
         # Custom color theme matching Figma design
@@ -178,6 +181,13 @@ class App(ctk.CTk):
         self.logs_underline = ctk.CTkFrame(self.logs_tab_frame, height=3, fg_color="transparent")
         self.logs_underline.pack(fill="x", pady=(4,0))
         
+        # Toggle button for right sidebar (appears when sidebar is hidden)
+        self.btn_toggle_sidebar = ctk.CTkButton(nav_inner, text="☰ Panel", command=self._toggle_right_sidebar,
+                                                fg_color="transparent", hover_color="#1F2630", width=80, height=32,
+                                                font=ctk.CTkFont(family="Inter", size=14), text_color="#58A6FF",
+                                                border_width=1, border_color="#58A6FF", corner_radius=6)
+        # Initially hidden - will show when window is small
+        
         # Create tabview for main and logs pages (our custom nav buttons at top are used instead)
         self.nb = ctk.CTkTabview(self, fg_color="#0D1117", 
                                 segmented_button_fg_color="#0D1117",
@@ -194,59 +204,8 @@ class App(ctk.CTk):
         self.tab_main = self.nb.tab("main")
         self.tab_logs = self.nb.tab("logs")
     
-        # GLOBAL SCROLLABLE WRAPPER for main tab (scrollbars appear when window is too small)
-        self.main_canvas = tk.Canvas(self.tab_main, bg="#0D1117", highlightthickness=0)
-        self.main_scrollbar_y = ctk.CTkScrollbar(self.tab_main, orientation="vertical", command=self.main_canvas.yview,
-                                                  button_color="#3C4A5D", button_hover_color="#50627C")
-        self.main_scrollbar_x = ctk.CTkScrollbar(self.tab_main, orientation="horizontal", command=self.main_canvas.xview,
-                                                  button_color="#3C4A5D", button_hover_color="#50627C")
-        self.main_canvas.configure(yscrollcommand=self.main_scrollbar_y.set, xscrollcommand=self.main_scrollbar_x.set)
-        
-        # Pack scrollbars and canvas
-        self.main_scrollbar_y.pack(side="right", fill="y")
-        self.main_scrollbar_x.pack(side="bottom", fill="x")
-        self.main_canvas.pack(side="left", fill="both", expand=True)
-        
-        # Create inner frame that holds all content
-        self.main_content_frame = ctk.CTkFrame(self.main_canvas, fg_color="#0D1117")
-        self.main_canvas_window = self.main_canvas.create_window((0, 0), window=self.main_content_frame, anchor="nw")
-        
-        # Configure scroll region and hide scrollbars when not needed
-        def configure_scroll(event=None):
-            self.main_canvas.configure(scrollregion=self.main_canvas.bbox("all"))
-            # Show/hide scrollbars based on content size vs canvas size
-            content_width = self.main_content_frame.winfo_reqwidth()
-            content_height = self.main_content_frame.winfo_reqheight()
-            canvas_width = self.main_canvas.winfo_width()
-            canvas_height = self.main_canvas.winfo_height()
-            
-            if content_width <= canvas_width:
-                self.main_scrollbar_x.pack_forget()
-            else:
-                self.main_scrollbar_x.pack(side="bottom", fill="x")
-                
-            if content_height <= canvas_height:
-                self.main_scrollbar_y.pack_forget()
-            else:
-                self.main_scrollbar_y.pack(side="right", fill="y")
-        
-        self.main_content_frame.bind("<Configure>", configure_scroll)
-        self.main_canvas.bind("<Configure>", configure_scroll)
-        
-        # Enable mouse wheel scrolling
-        def on_mousewheel(event):
-            self.main_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
-        self.main_canvas.bind_all("<MouseWheel>", on_mousewheel)
-        
-        # Use main_content_frame as the parent for all main tab content
-        main_parent = self.main_content_frame
-        
-        # Set minimum content size to maintain layout (scrollbars appear if window is smaller)
-        main_parent.configure(width=1100, height=550)
-        main_parent.pack_propagate(False)
-    
         # LEFT SIDEBAR - Figma panel with rounded corners (wider for long text)
-        left_container = ctk.CTkFrame(main_parent, width=320, fg_color="#1F2630", corner_radius=8, border_width=0)
+        left_container = ctk.CTkFrame(self.tab_main, width=320, fg_color="#1F2630", corner_radius=8, border_width=0)
         left_container.pack(side="left", fill="y", padx=(16,0), pady=16)
         left_container.pack_propagate(False)
         left_scroll = ctk.CTkScrollableFrame(left_container, width=300, fg_color="transparent")
@@ -316,7 +275,7 @@ class App(ctk.CTk):
                      border_width=1, border_color="#58A6FF").pack(fill="x", padx=16, pady=(0,24))
 
         # CENTER AREA - Preview card floating in the middle
-        center = ctk.CTkFrame(main_parent, fg_color="transparent")
+        center = ctk.CTkFrame(self.tab_main, fg_color="transparent")
         center.pack(side="left", fill="both", expand=True, padx=16, pady=16)
 
         # Preview header with title and Figma styled buttons
@@ -394,10 +353,12 @@ class App(ctk.CTk):
         self.preview.bind("<Control-v>", paste_handler)
         self.preview.bind("<Command-v>", paste_handler)  # macOS
 
-        # RIGHT SIDEBAR - Figma panel with rounded corners
-        right = ctk.CTkFrame(main_parent, width=278, fg_color="#1F2630", corner_radius=8, border_width=0)
-        right.pack(side="right", fill="y", padx=(0,16), pady=16)
-        right.pack_propagate(False)
+        # RIGHT SIDEBAR - Figma panel with rounded corners (responsive - can be hidden)
+        self.right_sidebar = ctk.CTkFrame(self.tab_main, width=278, fg_color="#1F2630", corner_radius=8, border_width=0)
+        self.right_sidebar.pack(side="right", fill="y", padx=(0,16), pady=16)
+        self.right_sidebar.pack_propagate(False)
+        self.right_sidebar_visible = True
+        right = self.right_sidebar  # Keep compatibility with existing code
         
         # CONFIG STATUS SECTION - Figma Title/medium
         ctk.CTkLabel(right, text="Config Status", font=ctk.CTkFont(family="Inter", size=18, weight="bold"), 
@@ -1395,6 +1356,36 @@ class App(ctk.CTk):
             self.btn_logs_nav.configure(text_color="#C9D1D9")
             self.main_underline.configure(fg_color="transparent")
             self.logs_underline.configure(fg_color="#58A6FF")
+    
+    def _toggle_right_sidebar(self):
+        """Toggle the right sidebar visibility"""
+        if self.right_sidebar_visible:
+            self.right_sidebar.pack_forget()
+            self.right_sidebar_visible = False
+            self.btn_toggle_sidebar.configure(text="☰ Panel", text_color="#58A6FF")
+        else:
+            self.right_sidebar.pack(side="right", fill="y", padx=(0,16), pady=16)
+            self.right_sidebar_visible = True
+            self.btn_toggle_sidebar.configure(text="✕ Panel", text_color="#9BA3AF")
+    
+    def _on_window_resize(self, event):
+        """Handle window resize - show/hide sidebar toggle button"""
+        if event.widget == self:
+            width = event.width
+            if width < 950:
+                # Show toggle button, auto-hide sidebar if first time going small
+                if not self.btn_toggle_sidebar.winfo_ismapped():
+                    self.btn_toggle_sidebar.pack(side="right", padx=(20, 0))
+                if self.right_sidebar_visible and width < 850:
+                    self.right_sidebar.pack_forget()
+                    self.right_sidebar_visible = False
+            else:
+                # Hide toggle button, show sidebar
+                if self.btn_toggle_sidebar.winfo_ismapped():
+                    self.btn_toggle_sidebar.pack_forget()
+                if not self.right_sidebar_visible:
+                    self.right_sidebar.pack(side="right", fill="y", padx=(0,16), pady=16)
+                    self.right_sidebar_visible = True
 
     # ------------------- custom list item helpers (Figma style) -------------------
     def _create_device_item(self, name: str, label: str, idx: int):
