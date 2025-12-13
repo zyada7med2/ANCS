@@ -2,57 +2,42 @@
 
 **Auto Network Configuration System**
 
-A desktop application for network device configuration management with GNS3 integration.
+A modern desktop application for network device configuration management with GNS3 integration.
 
-## Project Structure
+![ANCS Screenshot](screenshots/main-ui.png)
 
-```
-network_manager/
-├── main.py                 # Entry point - run this to start the app
-├── config.py              # Configuration constants and database setup
-├── models/
-│   ├── __init__.py
-│   └── devices.py         # Device model classes (Router, Switch, CoreSwitch)
-├── network/
-│   ├── __init__.py
-│   ├── sender.py          # Network communication (Serial, Telnet, SSH)
-│   └── gns3.py            # GNS3 API connector
-├── gui/
-│   ├── __init__.py
-│   ├── app.py            # Main application window
-│   ├── wizards/
-│   │   ├── __init__.py
-│   │   ├── vlan_wizard.py    # VLAN configuration wizard
-│   │   └── stp_wizard.py     # STP configuration wizard
-│   ├── calculators/
-│   │   ├── __init__.py
-│   │   └── subnet_calculator.py  # Subnet calculator GUI
-│   └── dialogs/
-│       ├── __init__.py
-│       └── text_editor.py      # Text editor popup
-└── requirements.txt       # Python dependencies
+## ✨ Features
+
+- **Device Management** - Create and manage router, switch, and core switch configurations
+- **Template System** - Create reusable configuration templates
+- **GNS3 Integration** - Auto-import devices from GNS3 projects
+- **Network Communication** - Send configurations via Serial, Telnet, or SSH
+- **Configuration Wizards** - GUI wizards for VLAN and STP setup
+- **Subnet Calculator** - Calculate and plan network subnets
+- **Config Database** - SQLite storage for device and configuration persistence
+- **Modern Dark UI** - Clean, responsive interface built with CustomTkinter
+
+## 🚀 Installation
+
+1. Clone the repository:
+```bash
+git clone https://github.com/zyada7med2/ANCS.git
+cd ANCS/network_manager
 ```
 
-## Installation
-
-1. Install dependencies:
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Run the application:
+3. Run the application:
 ```bash
-python -m network_manager.main
+python main.py
 ```
 
-Or from the project root:
-```bash
-python network_manager/main.py
-```
+## 📦 Building Executable
 
-## Building Executable
-
-To create an executable using cx_Freeze:
+To create a standalone executable using cx_Freeze:
 
 ```bash
 python setup_build.py build
@@ -60,20 +45,34 @@ python setup_build.py build
 
 The executable will be in the `build/exe.win-amd64-3.x/` directory.
 
-## Features
+## 🏗️ Project Structure
 
-- **Device Management**: Create and manage router, switch, and core switch configurations
-- **Template System**: Create reusable configuration templates
-- **GNS3 Integration**: Auto-import devices from GNS3 projects
-- **Network Communication**: Send configurations via Serial, Telnet, or SSH
-- **Wizards**: GUI wizards for VLAN and STP configuration
-- **Subnet Calculator**: Calculate and plan network subnets
-- **Database**: SQLite database for device and configuration persistence
+```
+network_manager/
+├── main.py                 # Entry point
+├── config.py               # Configuration constants
+├── models/
+│   └── devices.py          # Device models (Router, Switch, CoreSwitch)
+├── network/
+│   ├── sender.py           # Network communication (Serial, Telnet, SSH)
+│   └── gns3.py             # GNS3 API connector
+├── gui/
+│   ├── app.py              # Main application window
+│   ├── wizards/            # VLAN & STP configuration wizards
+│   ├── calculators/        # Subnet calculator
+│   └── dialogs/            # Popup dialogs
+└── requirements.txt
+```
 
-## Requirements
+## 📋 Requirements
 
 - Python 3.7+
 - customtkinter
-- sqlite3 (built-in)
-- Optional: paramiko (for SSH), pyserial (for serial), requests (for GNS3)
+- paramiko (SSH)
+- pyserial (Serial)
+- requests (GNS3 API)
+
+## 📄 License
+
+MIT License
 
