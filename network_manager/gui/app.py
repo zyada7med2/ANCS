@@ -85,11 +85,7 @@ class App(ctk.CTk):
 
         self._build_ui()
 
-        # defaults workspace devices
-        self.add_device_instance("router", "router1")
-        self.add_device_instance("switch", "switch1")
-        self.add_device_instance("core switch", "core-sw1")
-        self.refresh_device_list()
+        # No default devices - workspace populated only from GNS3 project import
 
         # try auto-connect to gns3 in background
         threading.Thread(target=self._auto_connect_gns3, daemon=True).start()
@@ -952,7 +948,7 @@ class App(ctk.CTk):
         choice = self._prompt_guided_device_choice()
         if not choice:
             return
-        name, model, _ = choice
+        name, model, meta = choice
         if isinstance(model, RouterModel):
             device_role = "router"
         elif isinstance(model, CoreSwitchModel):
@@ -969,7 +965,11 @@ class App(ctk.CTk):
             )
             if not messagebox.askyesno("Layer 2 device", msg, parent=self):
                 return
-        win = GuidedSetupWizard(self, name, model, device_role=device_role)
+        win = GuidedSetupWizard(
+            self, name, model,
+            device_role=device_role,
+            known_interfaces=meta.get("interfaces", []),
+        )
         self.wait_window(win)
         self.on_device_select()
         try:
@@ -983,48 +983,99 @@ class App(ctk.CTk):
         )
 
     def _prompt_guided_device_choice(self):
+        BG      = "#0D1117"
+        SIDEBAR = "#161B22"
+        CARD    = "#1F2630"
+        TEXT    = "#C9D1D9"
+        MUTED   = "#8B949E"
+        ACCENT  = "#58A6FF"
+        BORDER  = "#30363D"
+
         dialog = tk.Toplevel(self)
-        dialog.title("Pick the device to configure")
-        dialog.geometry("420x360")
+        dialog.title("Guided Setup — Select Device")
+        dialog.geometry("480x420")
         dialog.resizable(False, False)
         dialog.transient(self)
         dialog.grab_set()
+        dialog.configure(bg=BG)
 
-        tk.Label(dialog, text="Which device should we configure first?", font=("Segoe UI", 12, "bold")).pack(anchor="w", padx=12, pady=(12, 4))
-        tk.Label(dialog, text="Tip: start with the router/core switch that handles routing, DHCP, and ACLs.", wraplength=380, justify="left").pack(anchor="w", padx=12, pady=(0, 6))
+        tk.Label(dialog, text="Which device do you want to configure?",
+                 font=("Segoe UI", 13, "bold"), fg=TEXT, bg=BG).pack(
+            anchor="w", padx=18, pady=(18, 4))
+        tk.Label(dialog,
+                 text="Recommended: start with the router or core switch (handles routing, DHCP and ACLs).\n"
+                      "Access switches can be configured afterwards.",
+                 wraplength=440, justify="left", fg=MUTED, bg=BG,
+                 font=("Segoe UI", 9)).pack(anchor="w", padx=18, pady=(0, 10))
 
-        listbox = tk.Listbox(dialog, activestyle="none")
-        listbox.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        # Device cards (one per device)
+        canvas_outer = tk.Frame(dialog, bg=BG)
+        canvas_outer.pack(fill="both", expand=True, padx=18, pady=(0, 8))
 
-        device_labels = []
-        for idx, (name, model, meta) in enumerate(self.devices):
-            if isinstance(model, (RouterModel, CoreSwitchModel)):
-                role = "Gateway (Routing + DHCP)"
+        listbox = tk.Listbox(
+            canvas_outer,
+            activestyle="none",
+            bg=CARD, fg=TEXT,
+            selectbackground=ACCENT, selectforeground="#fff",
+            borderwidth=0, highlightthickness=1,
+            highlightbackground=BORDER,
+            font=("Segoe UI", 10),
+        )
+        listbox.pack(fill="both", expand=True)
+
+        role_icons = {
+            "router":  "🔀",
+            "core":    "🔶",
+            "access":  "🔷",
+        }
+        for name, model, meta in self.devices:
+            if isinstance(model, RouterModel):
+                role = "Router / Gateway  (Routing + DHCP + ACL)"
+                icon = "🔀"
+            elif isinstance(model, CoreSwitchModel):
+                role = "Core Switch  (Layer 3 routing)"
+                icon = "🔶"
             else:
-                role = "Access (Layer 2)"
-            device_labels.append((idx, role))
-            listbox.insert("end", f"{name}  ·  {role}")
-        listbox.select_set(0)
+                role = "Access Switch  (Layer 2 only)"
+                icon = "🔷"
+            listbox.insert("end", f"  {icon}  {name}  —  {role}")
+
+        if listbox.size() > 0:
+            listbox.select_set(0)
 
         choice = {"value": None}
 
-        def confirm():
+        def confirm(_e=None):
             sel = listbox.curselection()
             if not sel:
-                messagebox.showinfo("info", "select a device first", parent=dialog)
+                messagebox.showinfo("Select device", "Please click a device first.", parent=dialog)
                 return
-            idx = sel[0]
-            choice["value"] = self.devices[idx]
+            choice["value"] = self.devices[sel[0]]
             dialog.destroy()
 
         def cancel():
             choice["value"] = None
             dialog.destroy()
 
-        btns = tk.Frame(dialog)
-        btns.pack(fill="x", padx=12, pady=(0, 12))
-        tk.Button(btns, text="Use selected", bg="#3b82f6", fg="white", command=confirm).pack(side="left", padx=4)
-        tk.Button(btns, text="Cancel", bg="#374151", fg="#9ca3af", command=cancel).pack(side="right", padx=4)
+        listbox.bind("<Double-1>", confirm)
+
+        btns = tk.Frame(dialog, bg=BG)
+        btns.pack(fill="x", padx=18, pady=(0, 16))
+        tk.Button(
+            btns, text="Configure Selected  →",
+            command=confirm,
+            fg="#fff", bg=ACCENT,
+            activebackground=ACCENT, activeforeground="#fff",
+            font=("Segoe UI", 10, "bold"), padx=16, pady=6,
+            relief="flat", cursor="hand2",
+        ).pack(side="left")
+        tk.Button(
+            btns, text="Cancel",
+            command=cancel,
+            fg=MUTED, bg=CARD,
+            activebackground=SIDEBAR, activeforeground=TEXT,
+            padx=12, pady=6, relief="flat", cursor="hand2",
+        ).pack(side="right")
 
         dialog.protocol("WM_DELETE_WINDOW", cancel)
         self.wait_window(dialog)
@@ -1450,6 +1501,19 @@ class App(ctk.CTk):
             dname, model, meta = self.devices[idx]
             self.current_device = (dname, model, meta)
             self._refresh_template_list()
+            # Auto-fill connection details from GNS3 metadata
+            if meta.get("gns3_node"):
+                host = meta.get("console_host", "localhost")
+                port = str(meta.get("console_port", ""))
+                try:
+                    self.ent_host.delete(0, "end")
+                    self.ent_host.insert(0, host)
+                    self.ent_port.delete(0, "end")
+                    self.ent_port.insert(0, port)
+                    self.send_method.set("Telnet")
+                    self._on_protocol_changed("Telnet")
+                except Exception:
+                    pass
             # Update preview header
             try:
                 self.preview.delete("0.0", "end")
@@ -1744,20 +1808,24 @@ class App(ctk.CTk):
                         ntype = 'router'
                     else:
                         ntype = 'switch'
-                    # Check if device already exists in database by node_id
-                    try:
-                        cur.execute("SELECT name FROM devices WHERE node_id=? AND project_id=?", (node_id, project_id))
-                        existing = cur.fetchone()
-                        if existing:
-                            # Device already exists, skip import
-                            continue
-                    except Exception:
-                        pass  # If check fails, proceed with import
+                    # Skip only if device already in workspace (not just DB)
+                    already_in_workspace = any(
+                        d[2].get("node_id") == node_id and d[2].get("project_id") == project_id
+                        for d in self.devices
+                    )
+                    if already_in_workspace:
+                        continue
                     
                     base = name; dev_name = base; i = 1
                     while any(d[0]==dev_name for d in self.devices):
                         dev_name = f"{base}-{i}"; i+=1
                     meta = {"gns3_node": True, "project_id": project_id, "node_id": node_id, "console_host": console_host, "console_port": str(console_port)}
+                    # Fetch real interface names from GNS3 so the wizard uses correct ports
+                    try:
+                        ports_data = self.gns3.get_node_ports(project_id, node_id)
+                        meta["interfaces"] = [p["name"] for p in ports_data if p.get("name")]
+                    except Exception:
+                        meta["interfaces"] = []
                     self.add_device_instance(ntype, dev_name, metadata=meta)
                     ts = time.strftime("%Y-%m-%d %H:%M:%S")
                     try:
@@ -1816,16 +1884,42 @@ class App(ctk.CTk):
         node = nodes[sel-1]
         node_id = node.get("node_id") or node.get("id")
         
-        # Check if device already exists in database
+        # If already in workspace, skip
+        already_in_workspace = any(
+            d[2].get("node_id") == node_id and d[2].get("project_id") == project_id
+            for d in self.devices
+        )
+        if already_in_workspace:
+            messagebox.showinfo("Already in workspace", "This device is already in the workspace.")
+            return
+        # If in DB but not workspace, load from DB and add to workspace
         try:
-            cur.execute("SELECT name FROM devices WHERE node_id=? AND project_id=?", (node_id, project_id))
+            cur.execute("SELECT name, type, ip, port FROM devices WHERE node_id=? AND project_id=?", (node_id, project_id))
             existing = cur.fetchone()
             if existing:
-                messagebox.showinfo("Already Imported", f"This device '{existing[0]}' has already been imported from GNS3.", parent=self)
+                dev_name, dtype, console_host, console_port = existing
+                dtype = (dtype or "router").strip().lower()
+                # Map class names (RouterModel) to keys
+                type_map = {"routermodel": "router", "switchmodel": "switch", "coreswitchmodel": "core switch"}
+                dtype = type_map.get(dtype, dtype)
+                if dtype not in self.device_types:
+                    dtype = "router"
+                meta = {"gns3_node": True, "project_id": project_id, "node_id": node_id, "console_host": console_host or "localhost", "console_port": str(console_port or "")}
+                try:
+                    ports_data = self.gns3.get_node_ports(project_id, node_id)
+                    meta["interfaces"] = [p["name"] for p in ports_data if p.get("name")]
+                except Exception:
+                    meta["interfaces"] = []
+                base = dev_name; name = base; i = 1
+                while any(d[0] == name for d in self.devices):
+                    name = f"{base}-{i}"; i += 1
+                self.add_device_instance(dtype, name, metadata=meta)
+                self.refresh_device_list()
+                messagebox.showinfo("gns3", f"Added '{name}' to workspace (was in database)")
                 return
         except Exception:
             pass
-        
+
         console_host = node.get("console_host", "localhost")
         console_port = node.get("console") or node.get("console_port") or ""
         name = node.get("name") or f"node-{str(node_id or '')[:6]}"
@@ -1835,6 +1929,11 @@ class App(ctk.CTk):
         if dtype not in self.device_types:
             messagebox.showerror("error","unknown type"); return
         meta = {"gns3_node": True, "project_id": project_id, "node_id": node_id, "console_host": console_host, "console_port": console_port}
+        try:
+            ports_data = self.gns3.get_node_ports(project_id, node_id)
+            meta["interfaces"] = [p["name"] for p in ports_data if p.get("name")]
+        except Exception:
+            meta["interfaces"] = []
         base = name; dev_name = base; i = 1
         while any(d[0]==dev_name for d in self.devices):
             dev_name = f"{base}-{i}"; i+=1

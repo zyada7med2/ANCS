@@ -28,3 +28,18 @@ class GNS3Connector:
         r.raise_for_status()
         return r.json()
 
+    def get_node_ports(self, project_id: str, node_id: str):
+        """
+        Return the list of port dicts for a node from the GNS3 API.
+        Each dict contains at minimum: 'name', 'adapter_number', 'port_number'.
+        Example names: 'Ethernet0/0', 'FastEthernet1/0', 'GigabitEthernet0/0'.
+        """
+        if requests is None:
+            raise RuntimeError("requests not installed")
+        r = requests.get(
+            f"{self.server_url}/v2/projects/{project_id}/nodes/{node_id}/ports",
+            timeout=5,
+        )
+        r.raise_for_status()
+        return r.json()
+
