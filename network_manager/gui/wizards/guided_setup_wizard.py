@@ -115,14 +115,23 @@ class GuidedSetupWizard(tk.Toplevel):
         device_model,
         device_role: str = "router",
         known_interfaces: list = None,
+        headless: bool = False,
+        project_context: dict = None,
     ):
         super().__init__(parent)
-        self.title("Guided Setup — Smart Wizard")
-        self.geometry("960x620")
-        self.resizable(True, True)
-        self.minsize(800, 520)
-        self.configure(bg=self.THEME["bg"])
-        self._setup_ttk_theme()
+
+        self.headless = headless
+
+        if headless:
+            # Invisible window used purely to call _write_templates()
+            self.withdraw()
+        else:
+            self.title("Guided Setup — Smart Wizard")
+            self.geometry("960x620")
+            self.resizable(True, True)
+            self.minsize(800, 520)
+            self.configure(bg=self.THEME["bg"])
+            self._setup_ttk_theme()
 
         self.parent            = parent
         self.device_name       = device_name
@@ -130,6 +139,7 @@ class GuidedSetupWizard(tk.Toplevel):
         self.device_role       = device_role   # "router" | "core" | "access"
         self.routing_mode      = "device"      # "device" | "external"
         self.known_interfaces: list = known_interfaces or []
+        self.project_context:  dict = project_context or {}
 
         # ── data buckets (populated step-by-step or by preset) ──
         self.identity_data: Dict[str, str]  = {}
@@ -154,9 +164,10 @@ class GuidedSetupWizard(tk.Toplevel):
         self.current_step = 0
         self.steps: List[Step] = []
 
-        self._prompt_routing_mode()
-        self._build_steps()
-        self._build_layout()
+        if not headless:
+            self._prompt_routing_mode()
+            self._build_steps()
+            self._build_layout()
         self._render_step()
 
     # ════════════════════════ routing mode dialog ══════════════════════════════
@@ -264,6 +275,48 @@ class GuidedSetupWizard(tk.Toplevel):
         tk.Button(frm, text="Got it", command=win.destroy,
                   fg="#fff", bg=t["accent"], relief="flat",
                   padx=12, pady=4).pack(pady=(14, 0))
+
+    # ════════════════════════ suggestion banner ═══════════════════════════════
+    def _show_suggestion_banner(self, parent: tk.Widget,
+                                message: str,
+                                on_accept=None) -> tk.Frame:
+        """
+        Renders a dismissable coloured suggestion strip at the top of `parent`.
+
+        If `on_accept` is provided a [Use] button appears; it calls on_accept()
+        then destroys the banner.  A [✕] button always dismisses without action.
+        """
+        t = self.THEME
+        strip = tk.Frame(parent, bg="#1a3a5c", padx=10, pady=6)
+        strip.pack(fill="x", pady=(0, 8))
+
+        tk.Label(
+            strip,
+            text="💡  " + message,
+            fg="#90c8f8", bg="#1a3a5c",
+            font=("Segoe UI", 9), justify="left", wraplength=580,
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+
+        def dismiss():
+            strip.destroy()
+
+        if on_accept:
+            tk.Button(
+                strip, text="Use", command=lambda: (on_accept(), dismiss()),
+                fg="#fff", bg=t["accent"], activebackground=t["accent"],
+                activeforeground="#fff", font=("Segoe UI", 9, "bold"),
+                padx=8, pady=2, relief="flat", cursor="hand2",
+            ).pack(side="right", padx=(6, 2))
+
+        tk.Button(
+            strip, text="✕", command=dismiss,
+            fg=t["muted"], bg="#1a3a5c", activebackground="#1a3a5c",
+            activeforeground=t["text"], font=("Segoe UI", 9),
+            padx=4, pady=2, relief="flat", cursor="hand2",
+        ).pack(side="right")
+
+        return strip
 
     # ════════════════════════ preset helpers ══════════════════════════════════
     def _auto_dhcp_from_routing(self, dns: str = "8.8.8.8") -> List[Dict]:
@@ -693,7 +746,30 @@ class GuidedSetupWizard(tk.Toplevel):
                 "Ports are auto-assigned — just confirm the VLAN names and uplink port."
             )
 
-        self._lbl(body, blurb, muted=True).pack(anchor="w", pady=(0, 16))
+        self._lbl(body, blurb, muted=True).pack(anchor="w", pady=(0, 12))
+
+        # ── Cross-device context summary banner ──
+        ctx = self.project_context
+        if ctx.get("vlans") or ctx.get("routing_entries") or ctx.get("rip_enabled"):
+            parts = []
+            src = ctx.get("routing_source") or ctx.get("vlan_source") or "another device"
+            if ctx.get("vlans"):
+                vnames = ", ".join(f"{v['name']} {v['id']}" for v in ctx["vlans"][:3])
+                extra  = f" +{len(ctx['vlans'])-3} more" if len(ctx["vlans"]) > 3 else ""
+                parts.append(f"{len(ctx['vlans'])} VLANs ({vnames}{extra})")
+            if ctx.get("dhcp_pools"):
+                parts.append("DHCP")
+            if ctx.get("rip_enabled"):
+                parts.append("RIP")
+            if ctx.get("routing_entries"):
+                parts.append(f"{len(ctx['routing_entries'])} SVI/subinterfaces")
+            summary = ", ".join(parts)
+            self._show_suggestion_banner(
+                body,
+                f"Already configured in this project — {src}: {summary}. "
+                "Smart suggestions will appear as you proceed.",
+            )
+
         self._lbl(body, "One-click presets:", bold=True).pack(anchor="w", pady=(0, 6))
 
         for key, (name, desc) in PRESET_CATALOGUE.items():
@@ -733,17 +809,31 @@ class GuidedSetupWizard(tk.Toplevel):
     # ══════════════════════════════════════════════════════════════════════════
     def _build_step_identity(self, body):
         t = self.THEME
+        ctx = self.project_context
 
+        # Pre-fill domain from context if not yet set
+        current_domain = self.identity_data.get("domain", "") or ctx.get("domain", "")
         self._hn_var  = tk.StringVar(value=self.identity_data.get("hostname", self.device_name))
-        self._dom_var = tk.StringVar(value=self.identity_data.get("domain",   ""))
+        self._dom_var = tk.StringVar(value=current_domain)
         self._pw_var  = tk.StringVar(value=self.identity_data.get("enable",   ""))
+
+        # Password suggestion banner
+        ctx_pw = ctx.get("enable_pw", "")
+        if ctx_pw and not self._pw_var.get():
+            def _use_pw():
+                self._pw_var.set(ctx_pw)
+            src = ctx.get("routing_source") or ctx.get("vlan_source") or "another device"
+            self._show_suggestion_banner(
+                body,
+                f"Other devices use enable password from {src} — use the same for consistency?",
+                on_accept=_use_pw,
+            )
 
         def row(label, var, help_term=None, show_pw=False):
             f = tk.Frame(body, bg=t["card"])
             f.pack(fill="x", pady=6)
             tk.Label(f, text=label, width=34, anchor="w",
                      fg=t["text"], bg=t["card"]).pack(side="left")
-            kw = {"show": "*"} if show_pw else {}
             e = self._entry(f, textvariable=var, width=30)
             if show_pw:
                 e.config(show="*")
@@ -776,7 +866,31 @@ class GuidedSetupWizard(tk.Toplevel):
     #  STEP: VLANs  (core / access)
     # ══════════════════════════════════════════════════════════════════════════
     def _build_step_vlans(self, body):
-        t = self.THEME
+        t   = self.THEME
+        ctx = self.project_context
+
+        # ── Auto-fill VLANs from context if none set yet ──
+        if ctx.get("vlans") and not self.vlans:
+            def _use_ctx_vlans():
+                self.vlans = [
+                    {"id": v["id"], "name": v["name"], "ports": ""}
+                    for v in ctx["vlans"]
+                ]
+                self.vlan_count_var.set(len(self.vlans))
+                # trigger rebuild happens via trace
+            src = ctx.get("vlan_source") or ctx.get("routing_source") or "another device"
+            vnames = ", ".join(f"{v['name']} {v['id']}" for v in ctx["vlans"][:3])
+            self._show_suggestion_banner(
+                body,
+                f"Found {len(ctx['vlans'])} VLANs from {src} ({vnames}). "
+                "Port assignments will be auto-set for this device.",
+                on_accept=_use_ctx_vlans,
+            )
+            # Silently pre-load so the user just has to hit Next
+            self.vlans = [
+                {"id": v["id"], "name": v["name"], "ports": ""}
+                for v in ctx["vlans"]
+            ]
 
         top = tk.Frame(body, bg=t["card"])
         top.pack(fill="x", pady=(0, 10))
@@ -793,12 +907,88 @@ class GuidedSetupWizard(tk.Toplevel):
         ).pack(side="left", padx=8)
         self._lbl(cnt_f, "(ports are auto-assigned — just set the names)", muted=True).pack(side="left")
 
-        self._section_hdr(body, [("VLAN ID", 9), ("Name", 22), ("Ports  (e.g. Et0/0-3)", 30)])
+        # ── Column headers: extra "Assign Ports" column only for access/core ──
+        has_picker = bool(self.known_interfaces) and self.device_role in ("access", "core")
+        cols = [("VLAN ID", 9), ("Name", 22)]
+        if has_picker:
+            cols.append(("Assign Ports (optional)", 34))
+        else:
+            cols.append(("Ports  (e.g. Et0/0-3)", 30))
+        self._section_hdr(body, cols)
 
         rows_frame = tk.Frame(body, bg=t["card"])
         rows_frame.pack(fill="both", expand=True)
         self.vlan_rows_frame  = rows_frame
         self.vlan_row_entries = []
+
+        def _open_port_picker(ports_var: tk.StringVar, btn: tk.Button, row_idx: int):
+            """Pop a small floating window with one checkbox per interface."""
+            popup = tk.Toplevel(self)
+            popup.title("Select ports")
+            popup.configure(bg=t["sidebar"])
+            popup.resizable(False, False)
+            popup.transient(self)
+            popup.grab_set()
+
+            tk.Label(popup, text="Tick the ports for this VLAN:",
+                     fg=t["muted"], bg=t["sidebar"],
+                     font=("Segoe UI", 9)).pack(anchor="w", padx=12, pady=(10, 4))
+
+            # Determine which ports are already assigned to OTHER VLANs
+            already_used: set = set()
+            for j, (_, _, pv) in enumerate(self.vlan_row_entries):
+                if j != row_idx:
+                    for p in pv.get().replace(",", " ").split():
+                        already_used.add(p.strip())
+
+            # Current selection for THIS row
+            current = set(ports_var.get().replace(",", " ").split())
+
+            check_vars: dict = {}
+            for iface in self.known_interfaces:
+                var = tk.BooleanVar(value=(iface in current))
+                row = tk.Frame(popup, bg=t["sidebar"])
+                row.pack(fill="x", padx=12, pady=1)
+                state = "normal"
+                label_extra = ""
+                if iface in already_used and iface not in current:
+                    state   = "disabled"
+                    label_extra = "  (used)"
+                tk.Checkbutton(
+                    row, variable=var,
+                    bg=t["sidebar"], activebackground=t["sidebar"],
+                    selectcolor=t["card"], state=state,
+                ).pack(side="left")
+                tk.Label(
+                    row,
+                    text=iface + label_extra,
+                    fg=t["muted"] if state == "disabled" else t["text"],
+                    bg=t["sidebar"], font=("Segoe UI", 9),
+                ).pack(side="left")
+                check_vars[iface] = var
+
+            def _apply():
+                selected = [iface for iface, v in check_vars.items() if v.get()]
+                ports_var.set(",".join(selected) if selected else "auto")
+                btn.config(text=_btn_label(ports_var.get()))
+                popup.destroy()
+
+            tk.Button(
+                popup, text="Apply",
+                command=_apply,
+                fg="#fff", bg=t["accent"],
+                activebackground=t["accent"], activeforeground="#fff",
+                font=("Segoe UI", 9, "bold"), padx=14, pady=4,
+                relief="flat", cursor="hand2",
+            ).pack(pady=(8, 10))
+
+        def _btn_label(val: str) -> str:
+            if not val or val == "auto":
+                return "Auto-assign  ▾"
+            parts = val.split(",")
+            if len(parts) <= 2:
+                return f"{val}  ▾"
+            return f"{parts[0]}, +{len(parts)-1} more  ▾"
 
         def rebuild(*_):
             for w in self.vlan_rows_frame.winfo_children():
@@ -822,13 +1012,32 @@ class GuidedSetupWizard(tk.Toplevel):
                 name_v  = tk.StringVar(value=vname)
                 ports_v = tk.StringVar(value=vport)
 
-                self._entry(rf, textvariable=id_v,    width=9).pack(side="left", padx=5, pady=3)
-                self._entry(rf, textvariable=name_v,  width=22).pack(side="left", padx=5)
-                self._entry(rf, textvariable=ports_v, width=30).pack(side="left", padx=5)
+                self._entry(rf, textvariable=id_v,   width=9).pack(side="left", padx=5, pady=3)
+                self._entry(rf, textvariable=name_v, width=22).pack(side="left", padx=5)
+
+                if has_picker:
+                    # Dropdown-style button that opens port picker
+                    btn = tk.Button(
+                        rf,
+                        text=_btn_label(vport),
+                        fg=t["text"], bg=t["sidebar"],
+                        activebackground=t["card"], activeforeground=t["text"],
+                        font=("Segoe UI", 9), width=30,
+                        relief="flat", cursor="hand2", anchor="w",
+                    )
+                    btn.config(command=lambda pv=ports_v, b=btn, idx=i: _open_port_picker(pv, b, idx))
+                    btn.pack(side="left", padx=5)
+                else:
+                    self._entry(rf, textvariable=ports_v, width=30).pack(side="left", padx=5)
+
                 self.vlan_row_entries.append((id_v, name_v, ports_v))
 
         self.vlan_count_var.trace_add("write", rebuild)
         rebuild()
+
+        if has_picker:
+            self._lbl(body, "Tip: Click each row's port button to pick specific ports, or leave as 'Auto-assign'.",
+                      muted=True).pack(anchor="w", pady=(6, 0))
 
     def _auto_ports(self, idx: int) -> str:
         if self.known_interfaces:
@@ -880,7 +1089,8 @@ class GuidedSetupWizard(tk.Toplevel):
     #  STEP: Gateways / SVIs  (core switch)
     # ══════════════════════════════════════════════════════════════════════════
     def _build_step_routing(self, body):
-        t = self.THEME
+        t   = self.THEME
+        ctx = self.project_context
 
         if self.routing_mode != "device":
             self._lbl(body,
@@ -892,11 +1102,24 @@ class GuidedSetupWizard(tk.Toplevel):
         top.pack(fill="x", pady=(0, 10))
         self._help_link(top, "SVI").pack(side="left")
 
+        # ── Context banner for SVI/routing ──
+        if ctx.get("routing_entries") and not self.routing_entries:
+            src = ctx.get("routing_source") or "another device"
+            def _use_ctx_svi():
+                self.routing_entries = list(ctx["routing_entries"])
+            self._show_suggestion_banner(
+                body,
+                f"Matched {src} subinterface IPs — SVIs will mirror the router's gateway addresses.",
+                on_accept=_use_ctx_svi,
+            )
+            self.routing_entries = list(ctx["routing_entries"])
+
         self._lbl(body, "IP addressing scheme", bold=True).pack(anchor="w", pady=(0, 4))
         scheme_f = tk.Frame(body, bg=t["card"])
         scheme_f.pack(anchor="w", pady=(0, 12))
         self._lbl(scheme_f, "First two octets:").pack(side="left")
-        self.ip_scheme_var = tk.StringVar(value="192.168")
+        default_scheme = ctx.get("ip_scheme", "192.168")
+        self.ip_scheme_var = tk.StringVar(value=default_scheme)
         self._entry(scheme_f, textvariable=self.ip_scheme_var, width=12).pack(side="left", padx=8)
         self._lbl(scheme_f, ".VLANID.1   (e.g. VLAN 10 → 192.168.10.1 / 24)", muted=True).pack(side="left")
 
@@ -950,11 +1173,35 @@ class GuidedSetupWizard(tk.Toplevel):
     #  STEP: Router subinterfaces  (router)
     # ══════════════════════════════════════════════════════════════════════════
     def _build_step_router_subinterfaces(self, body):
-        t = self.THEME
+        t   = self.THEME
+        ctx = self.project_context
 
         top = tk.Frame(body, bg=t["card"])
         top.pack(fill="x", pady=(0, 10))
         self._help_link(top, "Subinterface").pack(side="left")
+
+        # ── Context banner for subinterfaces ──
+        if ctx.get("routing_entries") and not self.routing_entries:
+            src = ctx.get("routing_source") or "another device"
+            def _use_ctx_routing():
+                self.routing_entries = list(ctx["routing_entries"])
+                self.vlans = [{"id": r["vlan"], "name": r["name"], "ports": ""} for r in self.routing_entries]
+            self._show_suggestion_banner(
+                body,
+                f"Matched SVIs from {src} — subinterface IPs are consistent with the rest of the network.",
+                on_accept=_use_ctx_routing,
+            )
+            # Silently pre-load
+            self.routing_entries = list(ctx["routing_entries"])
+            self.vlans = [{"id": r["vlan"], "name": r["name"], "ports": ""} for r in self.routing_entries]
+        elif ctx.get("vlans") and not self.routing_entries:
+            src = ctx.get("vlan_source") or "another device"
+            self._show_suggestion_banner(
+                body,
+                f"Found VLAN database from {src} — generating matching subinterface IPs.",
+            )
+            if not self.vlans:
+                self.vlans = [{"id": v["id"], "name": v["name"], "ports": ""} for v in ctx["vlans"]]
 
         # ── physical interface ──
         iface_f = tk.Frame(body, bg=t["card"])
@@ -995,12 +1242,13 @@ class GuidedSetupWizard(tk.Toplevel):
         else:
             self.sub_count_var = None
 
-        # ── IP scheme ──
+        # ── IP scheme — derive from context if available ──
         scheme_f = tk.Frame(body, bg=t["card"])
         scheme_f.pack(fill="x", pady=(0, 10))
         tk.Label(scheme_f, text="IP scheme (first two octets):",
                  width=36, anchor="w", fg=t["text"], bg=t["card"]).pack(side="left")
-        self.ip_scheme_var = tk.StringVar(value="192.168")
+        default_scheme = ctx.get("ip_scheme", "192.168")
+        self.ip_scheme_var = tk.StringVar(value=default_scheme)
         self._entry(scheme_f, textvariable=self.ip_scheme_var, width=12).pack(side="left", padx=6)
         self._lbl(scheme_f, ".VLANID.1/24", muted=True).pack(side="left")
 
@@ -1073,8 +1321,24 @@ class GuidedSetupWizard(tk.Toplevel):
     #  STEP: DHCP  (router)
     # ══════════════════════════════════════════════════════════════════════════
     def _build_step_dhcp(self, body):
-        t = self.THEME
+        t   = self.THEME
+        ctx = self.project_context
         self._help_link(body, "DHCP pool").pack(anchor="w", pady=(0, 8))
+
+        # ── Context banners for DHCP ──
+        if ctx.get("dhcp_pools"):
+            src = ctx.get("dhcp_source_device") or "another device"
+            self._show_suggestion_banner(
+                body,
+                f"DHCP is already configured on {src}. "
+                "All pools are unchecked below — enable only if this device should also serve DHCP.",
+            )
+        elif ctx.get("routing_entries"):
+            src = ctx.get("routing_source") or "another device"
+            self._show_suggestion_banner(
+                body,
+                f"Pool addresses match the {src} SVIs — gateway IPs are consistent with the network.",
+            )
 
         self._lbl(
             body,
@@ -1116,7 +1380,9 @@ class GuidedSetupWizard(tk.Toplevel):
             rf = tk.Frame(body, bg=bg, padx=10, pady=8)
             rf.pack(fill="x", pady=2)
 
-            var = tk.BooleanVar(value=True)
+            # Default unchecked if another device already handles DHCP
+            default_checked = not bool(ctx.get("dhcp_pools"))
+            var = tk.BooleanVar(value=default_checked)
             tk.Checkbutton(
                 rf, variable=var, bg=bg,
                 activebackground=bg, selectcolor=t["card"],
@@ -1159,7 +1425,26 @@ class GuidedSetupWizard(tk.Toplevel):
     #  STEP: Static Routes  (router)
     # ══════════════════════════════════════════════════════════════════════════
     def _build_step_static_routes(self, body):
-        t = self.THEME
+        t   = self.THEME
+        ctx = self.project_context
+
+        # ── Context banner for static routes ──
+        if ctx.get("isp_gateway"):
+            src = ctx.get("routing_source") or "another device"
+            self._show_suggestion_banner(
+                body,
+                f"Using the same ISP gateway as {src} ({ctx['isp_gateway']}).",
+            )
+
+        # For core switch: suggest default route toward the router's IP
+        if self.device_role == "core" and ctx.get("routing_entries") and not ctx.get("isp_gateway"):
+            router_ip = ctx["routing_entries"][0].get("ip", "")
+            if router_ip:
+                src = ctx.get("routing_source") or "the router"
+                self._show_suggestion_banner(
+                    body,
+                    f"Suggested default route through {src} ({router_ip}).",
+                )
 
         self._lbl(
             body,
@@ -1185,8 +1470,16 @@ class GuidedSetupWizard(tk.Toplevel):
         isp_f.pack(anchor="w", pady=(6, 0))
         tk.Label(isp_f, text="ISP / upstream gateway IP:",
                  width=28, anchor="w", fg=t["text"], bg=t["sidebar"]).pack(side="left")
+        # Pre-fill from context or existing data
         existing_isp = self.static_routes[0].get("next-hop", "") if self.static_routes else ""
-        self.isp_gw_var = tk.StringVar(value=existing_isp or "10.0.0.1")
+        if not existing_isp:
+            if ctx.get("isp_gateway"):
+                existing_isp = ctx["isp_gateway"]
+            elif self.device_role == "core" and ctx.get("routing_entries"):
+                existing_isp = ctx["routing_entries"][0].get("ip", "10.0.0.1")
+            else:
+                existing_isp = "10.0.0.1"
+        self.isp_gw_var = tk.StringVar(value=existing_isp)
         self._entry(isp_f, textvariable=self.isp_gw_var, width=18).pack(side="left", padx=6)
 
         # Extra routes
@@ -1264,7 +1557,17 @@ class GuidedSetupWizard(tk.Toplevel):
     #  STEP: RIPv2  (router)
     # ══════════════════════════════════════════════════════════════════════════
     def _build_step_rip(self, body):
-        t = self.THEME
+        t   = self.THEME
+        ctx = self.project_context
+
+        # ── Context banner for RIP ──
+        if ctx.get("rip_enabled") and not self.enable_rip:
+            src = ctx.get("routing_source") or "another device"
+            self._show_suggestion_banner(
+                body,
+                f"RIP is already enabled on {src} — enabling here keeps your routing protocol consistent.",
+            )
+            self.enable_rip = True
 
         self._lbl(
             body,
@@ -1299,11 +1602,21 @@ class GuidedSetupWizard(tk.Toplevel):
     #  STEP: Uplinks  (access switch)
     # ══════════════════════════════════════════════════════════════════════════
     def _build_step_uplinks(self, body):
-        t = self.THEME
+        t   = self.THEME
+        ctx = self.project_context
 
         top = tk.Frame(body, bg=t["card"])
         top.pack(fill="x", pady=(0, 8))
         self._help_link(top, "Trunk").pack(side="left")
+
+        # ── Context banner for uplinks ──
+        ctx_vlan_ids = ",".join(v["id"] for v in ctx["vlans"]) if ctx.get("vlans") else ""
+        if ctx_vlan_ids:
+            src = ctx.get("vlan_source") or ctx.get("routing_source") or "another device"
+            self._show_suggestion_banner(
+                body,
+                f"Trunk will carry VLANs {ctx_vlan_ids} (matched from {src}).",
+            )
 
         self._lbl(
             body,
@@ -1326,7 +1639,9 @@ class GuidedSetupWizard(tk.Toplevel):
         allowed_f.pack(fill="x", pady=(0, 10))
         tk.Label(allowed_f, text="Allowed VLANs on this trunk:", width=30, anchor="w",
                  fg=t["text"], bg=t["card"]).pack(side="left")
-        self.uplink_vlans_var = tk.StringVar(value=ex0.get("allowed vlans", "all"))
+        # Use context VLANs if available, otherwise fall back to existing or "all"
+        default_allowed = ex0.get("allowed vlans") or ctx_vlan_ids or "all"
+        self.uplink_vlans_var = tk.StringVar(value=default_allowed)
         self._entry(allowed_f, textvariable=self.uplink_vlans_var, width=22).pack(side="left", padx=6)
         self._lbl(allowed_f, "(e.g. 10,20  or  all)", muted=True).pack(side="left")
 
@@ -1361,6 +1676,13 @@ class GuidedSetupWizard(tk.Toplevel):
     # ══════════════════════════════════════════════════════════════════════════
     def _build_step_acl(self, body):
         self._help_link(body, "ACL").pack(anchor="w", pady=(0, 8))
+        ctx = self.project_context
+        if ctx.get("routing_entries") or ctx.get("vlans"):
+            src = ctx.get("routing_source") or ctx.get("vlan_source") or "another device"
+            self._show_suggestion_banner(
+                body,
+                f"ACL rules are generated from the network's VLAN subnets (matched from {src}).",
+            )
         self._build_acl_scenarios(body, context="gateway")
 
     def _build_step_acl_access(self, body):

@@ -262,7 +262,13 @@ class App(ctk.CTk):
         ctk.CTkButton(left, text="🧙 Guided Setup", command=self.guided_setup,
                      fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
                      font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=36, 
-                     border_width=1, border_color="#58A6FF").pack(fill="x", padx=16, pady=(8,8))
+                     border_width=1, border_color="#58A6FF").pack(fill="x", padx=16, pady=(8,4))
+
+        # Bulk Deploy button
+        ctk.CTkButton(left, text="⚡ Bulk Deploy", command=self.open_bulk_deploy,
+                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
+                     font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=36,
+                     border_width=1, border_color="#58A6FF").pack(fill="x", padx=16, pady=(0,8))
         
         # Subnet Calculator GUI button - Figma outlined style
         ctk.CTkButton(left, text="🔢 Subnet Calculator", command=lambda: SubnetCalculator(self),
@@ -941,6 +947,138 @@ class App(ctk.CTk):
             self.current_device[1].set_template("stp_wizard_gui", win.result)
             self.on_device_select()
     
+    # ──────────────────────────────────────────────────────────────────────────
+    # Cross-device context extraction
+    # ──────────────────────────────────────────────────────────────────────────
+    def _build_project_context(self, exclude_name: str) -> dict:
+        """
+        Scan all guided_* templates from every device except `exclude_name`.
+        Returns a rich context dict used by GuidedSetupWizard to pre-fill steps.
+        """
+        import re
+
+        ctx = {
+            "vlans":            [],
+            "routing_entries":  [],
+            "dhcp_pools":       [],
+            "acl_rules":        [],
+            "static_routes":    [],
+            "isp_gateway":      "",
+            "rip_enabled":      False,
+            "domain":           "",
+            "enable_pw":        "",
+            "ip_scheme":        "192.168",
+            "vlan_source":      "",
+            "routing_source":   "",
+            "dhcp_source_device": "",
+        }
+
+        for dname, model, _meta in self.devices:
+            if dname == exclude_name:
+                continue
+            tmpls = model.templates
+
+            # ── VLANs ──
+            if not ctx["vlans"] and "guided_vlans" in tmpls:
+                text = tmpls["guided_vlans"]
+                for m in re.finditer(r"vlan\s+(\d+)\s*\nname\s+(\S+)", text, re.IGNORECASE):
+                    ctx["vlans"].append({"id": m.group(1), "name": m.group(2)})
+                if ctx["vlans"]:
+                    ctx["vlan_source"] = dname
+
+            # ── Routing / SVIs ──
+            if not ctx["routing_entries"] and "guided_routing" in tmpls:
+                text = tmpls["guided_routing"]
+                # match: ip address 192.168.10.1 255.255.255.0  (under interface Vlan10 or .10)
+                for m in re.finditer(
+                    r"(?:interface\s+\S*?(\d+)[.\s].*?\n.*?)?ip\s+address\s+([\d.]+)\s+([\d.]+)",
+                    text, re.IGNORECASE | re.DOTALL,
+                ):
+                    ip   = m.group(2)
+                    mask = m.group(3)
+                    if ip and mask:
+                        # derive VLAN ID from IP third octet
+                        parts = ip.split(".")
+                        vid   = parts[2] if len(parts) == 4 else ""
+                        ctx["routing_entries"].append({
+                            "vlan": vid, "name": f"VLAN{vid}", "ip": ip, "mask": mask
+                        })
+                        # derive ip_scheme
+                        if len(parts) >= 2:
+                            ctx["ip_scheme"] = f"{parts[0]}.{parts[1]}"
+                if ctx["routing_entries"]:
+                    ctx["routing_source"] = dname
+                    # Also extract VLAN names from guided_vlans of the same device
+                    if "guided_vlans" in tmpls:
+                        vtext = tmpls["guided_vlans"]
+                        vlan_names: dict = {}
+                        for m in re.finditer(r"vlan\s+(\d+)\s*\nname\s+(\S+)", vtext, re.IGNORECASE):
+                            vlan_names[m.group(1)] = m.group(2)
+                        for entry in ctx["routing_entries"]:
+                            if entry["vlan"] in vlan_names:
+                                entry["name"] = vlan_names[entry["vlan"]]
+
+            # ── DHCP ──
+            if not ctx["dhcp_pools"] and "guided_dhcp" in tmpls:
+                text = tmpls["guided_dhcp"]
+                pools = []
+                for pool_block in re.split(r"ip dhcp pool\s+", text, flags=re.IGNORECASE):
+                    if not pool_block.strip():
+                        continue
+                    pname = pool_block.split()[0] if pool_block.split() else ""
+                    net_m = re.search(r"network\s+([\d.]+)\s+([\d.]+)", pool_block, re.IGNORECASE)
+                    gw_m  = re.search(r"default-router\s+([\d.]+)", pool_block, re.IGNORECASE)
+                    dns_m = re.search(r"dns-server\s+([\d.]+)", pool_block, re.IGNORECASE)
+                    if net_m:
+                        pools.append({
+                            "pool":    pname,
+                            "network": net_m.group(1),
+                            "mask":    net_m.group(2),
+                            "gateway": gw_m.group(1) if gw_m else "",
+                            "dns":     dns_m.group(1) if dns_m else "8.8.8.8",
+                        })
+                if pools:
+                    ctx["dhcp_pools"] = pools
+                    ctx["dhcp_source_device"] = dname
+
+            # ── Static routes / ISP gateway ──
+            if not ctx["isp_gateway"] and "guided_static_routes" in tmpls:
+                text = tmpls["guided_static_routes"]
+                m = re.search(r"ip\s+route\s+0\.0\.0\.0\s+0\.0\.0\.0\s+([\d.]+)", text, re.IGNORECASE)
+                if m:
+                    ctx["isp_gateway"] = m.group(1)
+                    ctx["static_routes"].append({
+                        "network": "0.0.0.0", "mask": "0.0.0.0",
+                        "next-hop": m.group(1), "description": "Default route to ISP"
+                    })
+
+            # ── RIP ──
+            if not ctx["rip_enabled"] and "guided_rip" in tmpls:
+                text = tmpls["guided_rip"]
+                if re.search(r"router\s+rip", text, re.IGNORECASE):
+                    ctx["rip_enabled"] = True
+
+            # ── Identity hints (domain, enable password) ──
+            if "guided_identity" in tmpls:
+                text = tmpls["guided_identity"]
+                if not ctx["domain"]:
+                    dm = re.search(r"ip\s+domain[-\s]name\s+(\S+)", text, re.IGNORECASE)
+                    if dm:
+                        ctx["domain"] = dm.group(1)
+                if not ctx["enable_pw"]:
+                    em = re.search(r"enable\s+secret\s+(\S+)", text, re.IGNORECASE)
+                    if em:
+                        ctx["enable_pw"] = em.group(1)
+
+        return ctx
+
+    def open_bulk_deploy(self):
+        if not self.devices:
+            messagebox.showinfo("info", "Import devices from GNS3 first.")
+            return
+        from .bulk_deploy import BulkDeployPanel
+        BulkDeployPanel(self, self.devices)
+
     def guided_setup(self):
         if not self.devices:
             messagebox.showinfo("info", "add a device first")
@@ -965,10 +1103,15 @@ class App(ctk.CTk):
             )
             if not messagebox.askyesno("Layer 2 device", msg, parent=self):
                 return
+
+        # Build cross-device context from already-configured devices
+        project_context = self._build_project_context(exclude_name=name)
+
         win = GuidedSetupWizard(
             self, name, model,
             device_role=device_role,
             known_interfaces=meta.get("interfaces", []),
+            project_context=project_context,
         )
         self.wait_window(win)
         self.on_device_select()
@@ -981,6 +1124,91 @@ class App(ctk.CTk):
             "Guided templates were saved for this device.\nSelect any 'guided_*' template or keep the current preview to review.",
             parent=self,
         )
+
+        # ── Post-wizard: offer to apply to similar unconfigured devices ──
+        self._offer_apply_to_similar(name, model, device_role, win)
+
+    def _offer_apply_to_similar(self, configured_name: str, configured_model, device_role: str, win):
+        """
+        After the wizard closes, if other unconfigured devices of the same role
+        exist, offer a one-click apply of consistent configs (VLANs+uplinks for
+        switches; VLANs for core; identity hints for routers).
+        """
+        # Find unconfigured devices of a compatible type
+        if device_role == "access":
+            targets = [
+                (n, m, mt) for n, m, mt in self.devices
+                if isinstance(m, SwitchModel) and n != configured_name
+                and not any(k.startswith("guided_") for k in m.templates)
+            ]
+            apply_what = "VLANs + trunk uplink"
+        elif device_role == "core":
+            targets = [
+                (n, m, mt) for n, m, mt in self.devices
+                if isinstance(m, (SwitchModel, CoreSwitchModel)) and n != configured_name
+                and not any(k.startswith("guided_") for k in m.templates)
+            ]
+            apply_what = "VLANs"
+        elif device_role == "router":
+            targets = [
+                (n, m, mt) for n, m, mt in self.devices
+                if isinstance(m, (RouterModel, CoreSwitchModel)) and n != configured_name
+                and not any(k.startswith("guided_") for k in m.templates)
+            ]
+            apply_what = "domain name and admin password"
+        else:
+            return
+
+        if not targets:
+            return
+
+        names_str = ", ".join(n for n, _, _ in targets[:5])
+        if len(targets) > 5:
+            names_str += f" and {len(targets) - 5} more"
+
+        answer = messagebox.askyesno(
+            "Apply to similar devices",
+            f"{len(targets)} other unconfigured device(s) found:\n  {names_str}\n\n"
+            f"Apply the same {apply_what} to them now?",
+            parent=self,
+        )
+        if not answer:
+            return
+
+        # Use headless wizard instances to write consistent templates
+        for tname, tmodel, tmeta in targets:
+            role = (
+                "router" if isinstance(tmodel, RouterModel)
+                else "core" if isinstance(tmodel, CoreSwitchModel)
+                else "access"
+            )
+            headless = GuidedSetupWizard(
+                self, tname, tmodel,
+                device_role=role,
+                known_interfaces=tmeta.get("interfaces", []),
+                headless=True,
+            )
+            headless.vlans           = list(win.vlans)
+            headless.identity_data   = {
+                "hostname": tname,
+                "domain":   win.identity_data.get("domain", ""),
+                "enable":   win.identity_data.get("enable", "ChangeMe123!"),
+            }
+            if device_role in ("access", "core"):
+                # Assign uplinks using this device's last known interface or default
+                ifaces = tmeta.get("interfaces", [])
+                uplink_port = ifaces[-1] if ifaces else ("Ethernet3/3" if role == "access" else "FastEthernet1/0")
+                headless.uplinks = [{"ports": uplink_port, "mode": "trunk",
+                                     "allowed vlans": ",".join(v["id"] for v in win.vlans) or "all"}]
+            headless._write_templates()
+            headless.destroy()
+
+        messagebox.showinfo(
+            "Done",
+            f"Config applied to {len(targets)} device(s):\n  {names_str}",
+            parent=self,
+        )
+        self.on_device_select()
 
     def _prompt_guided_device_choice(self):
         BG      = "#0D1117"
