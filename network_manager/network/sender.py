@@ -249,6 +249,84 @@ class Sender:
             log_fn(f"[telnet] error: {e}")
             return False
 
+    # ─────────────────────────── verification ────────────────────────────────
+
+    @staticmethod
+    async def _verify_telnet_async(
+        log_fn, host: str, port: int, commands: list[str], timeout: int = 10
+    ) -> dict[str, str]:
+        """
+        Open a new Telnet connection, run each show command, and capture output.
+        Returns {command: raw_output_text}.
+        """
+        reader, writer = await asyncio.wait_for(
+            telnetlib3.open_connection(host, port), timeout=timeout
+        )
+
+        async def write_line(line: str):
+            writer.write(line + "\r\n")
+            await asyncio.sleep(0.15)
+
+        async def read_until_prompt(timeout_sec: float = 3.0) -> str:
+            buf = ""
+            deadline = asyncio.get_event_loop().time() + timeout_sec
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
+                    if chunk:
+                        buf += chunk
+                        # Stop when we see a router/switch prompt (ends with > or #)
+                        stripped = buf.rstrip()
+                        if stripped and stripped[-1] in (">", "#"):
+                            break
+                except asyncio.TimeoutError:
+                    break
+            return buf
+
+        results: dict[str, str] = {}
+        try:
+            # Wait for initial prompt
+            await read_until_prompt(3.0)
+            await write_line("terminal length 0")
+            await read_until_prompt(2.0)
+
+            for cmd in commands:
+                log_fn(f"[verify] running: {cmd}")
+                await write_line(cmd)
+                output = await read_until_prompt(5.0)
+                results[cmd] = output
+                log_fn(f"[verify] output ({len(output)} chars)")
+
+            writer.close()
+        except Exception as exc:
+            log_fn(f"[verify] error during verification: {exc}")
+            try:
+                writer.close()
+            except Exception:
+                pass
+        return results
+
+    @staticmethod
+    def verify_telnet(
+        log_fn, host: str, port: int, commands: list[str], timeout: int = 10
+    ) -> dict[str, str]:
+        """
+        Connect via Telnet, run `commands`, and return {command: raw_output}.
+        Designed to run after a successful config send.
+        """
+        if telnetlib3 is None:
+            log_fn("[verify] telnetlib3 not installed — skipping verification")
+            return {}
+        try:
+            return asyncio.run(
+                Sender._verify_telnet_async(log_fn, host, port, commands, timeout)
+            )
+        except Exception as exc:
+            log_fn(f"[verify] failed: {exc}")
+            return {}
+
+    # ─────────────────────────────────────────────────────────────────────────
+
     @staticmethod
     def send_ssh(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0):
         if paramiko is None:

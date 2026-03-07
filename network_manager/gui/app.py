@@ -23,6 +23,9 @@ from ..network import Sender, GNS3Connector
 from .dialogs import TextEditorPopup
 from .wizards import VlanGuiWindow, StpGuiWindow, GuidedSetupWizard
 from .calculators import SubnetCalculator
+from .topology_viewer import TopologyViewer
+from .monitor import DeviceMonitor
+from .terminal_panel import TerminalPanel
 
 # Optional libs
 try:
@@ -221,15 +224,15 @@ class App(ctk.CTk):
         self.device_items = {}
         self.selected_device_name = None
 
-        # Device buttons - Figma outlined style
+        # Device buttons — Tier 3 (flat/muted utility)
         dbbtns = ctk.CTkFrame(left, fg_color="transparent")
         dbbtns.pack(fill="x", padx=16, pady=(8,24))
         ctk.CTkButton(dbbtns, text="+ Add", command=self.add_device_prompt,
-                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
-                     font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=32, 
-                     border_width=1, border_color="#58A6FF").pack(side="left", expand=True, padx=(0,8))
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=32,
+                     border_width=0).pack(side="left", expand=True, padx=(0,8))
         ctk.CTkButton(dbbtns, text="Remove", command=self.remove_selected_device,
-                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
                      font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=32,
                      border_width=0).pack(side="left", expand=True, padx=(0,0))
 
@@ -246,35 +249,64 @@ class App(ctk.CTk):
         self.template_items = {}
         self.selected_template_name = None
 
-        # Template buttons - Figma outlined style
+        # Template buttons — Tier 3 (flat/muted utility)
         tbtns = ctk.CTkFrame(left, fg_color="transparent")
         tbtns.pack(fill="x", padx=16, pady=(8,16))
         ctk.CTkButton(tbtns, text="+ Add", command=self.add_template_dialog,
-                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
-                     font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=32, 
-                     border_width=1, border_color="#58A6FF").pack(side="left", expand=True, padx=(0,8))
-        ctk.CTkButton(tbtns, text="Edit", command=self.edit_template_dialog,
-                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
                      font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=32,
-                     border_width=1, border_color="#58A6FF").pack(side="left", expand=True, padx=(0,0))
+                     border_width=0).pack(side="left", expand=True, padx=(0,8))
+        ctk.CTkButton(tbtns, text="Edit", command=self.edit_template_dialog,
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=32,
+                     border_width=0).pack(side="left", expand=True, padx=(0,0))
         
-        # Guided Setup Wizard button - Figma outlined style
+        # Left sidebar — ordered by importance (most important first)
+        # 1. Guided Setup — Tier 1 teal (start here)
         ctk.CTkButton(left, text="🧙 Guided Setup", command=self.guided_setup,
-                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
-                     font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=36, 
-                     border_width=1, border_color="#58A6FF").pack(fill="x", padx=16, pady=(8,4))
+                     fg_color="#0d9488", hover_color="#0f766e", text_color="white",
+                     font=ctk.CTkFont(family="Inter", size=14, weight="bold"), corner_radius=8, height=36,
+                     border_width=0).pack(fill="x", padx=16, pady=(8,4))
 
-        # Bulk Deploy button
-        ctk.CTkButton(left, text="⚡ Bulk Deploy", command=self.open_bulk_deploy,
+        # 2. Deploy All — Tier 1 solid blue
+        ctk.CTkButton(left, text="🚀 Deploy All (Ordered)", command=self.deploy_all_ordered,
+                     fg_color="#58A6FF", hover_color="#4A90E8", text_color="white",
+                     font=ctk.CTkFont(family="Inter", size=14, weight="bold"), corner_radius=8, height=36,
+                     border_width=0).pack(fill="x", padx=16, pady=(0,4))
+
+        # 3. Monitor Devices — Tier 2 outlined blue
+        ctk.CTkButton(left, text="📊 Monitor Devices", command=self.open_monitor,
                      fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
                      font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=36,
                      border_width=1, border_color="#58A6FF").pack(fill="x", padx=16, pady=(0,8))
-        
-        # Subnet Calculator GUI button - Figma outlined style
-        ctk.CTkButton(left, text="🔢 Subnet Calculator", command=lambda: SubnetCalculator(self),
-                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
+
+        # 4. Topology — Tier 3 flat/muted
+        ctk.CTkButton(left, text="🗺 Topology", command=self.open_topology,
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
                      font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=36,
-                     border_width=1, border_color="#58A6FF").pack(fill="x", padx=16, pady=(0,24))
+                     border_width=0).pack(fill="x", padx=16, pady=(0,4))
+
+        # 5. Subnet Calculator — Tier 3 flat/muted
+        ctk.CTkButton(left, text="🔢 Subnet Calculator", command=lambda: SubnetCalculator(self),
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=36,
+                     border_width=0).pack(fill="x", padx=16, pady=(0,4))
+
+        # 6. Send History — Tier 3 flat/muted
+        ctk.CTkButton(left, text="📋 Send History", command=self.open_audit_log,
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
+                     font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, height=36,
+                     border_width=0).pack(fill="x", padx=16, pady=(0,24))
+
+        # 7. Rollback — Tier 3 (shown only when device has snapshots)
+        self.btn_rollback = ctk.CTkButton(
+            left, text="↩ Rollback Config", command=self.rollback_device,
+            fg_color="#3d2020", hover_color="#4f2929", text_color="#f87171",
+            font=ctk.CTkFont(family="Inter", size=13), corner_radius=8, height=36,
+            border_width=0,
+        )
+        self.btn_rollback.pack(fill="x", padx=16, pady=(0,24))
+        self.btn_rollback.pack_forget()  # hidden until a device with snapshots is selected
 
         # CENTER AREA - Preview card floating in the middle
         center = ctk.CTkFrame(self.tab_main, fg_color="transparent")
@@ -286,14 +318,15 @@ class App(ctk.CTk):
         ctk.CTkLabel(topc, text="Preview", font=ctk.CTkFont(family="Inter", size=24, weight="bold"), text_color="#C9D1D9").pack(side="left")
         gframe = ctk.CTkFrame(topc, fg_color="transparent")
         gframe.pack(side="right")
-        ctk.CTkButton(gframe, text="Save config to db", 
+        # Export/Import — Tier 2 outlined blue (lighter)
+        ctk.CTkButton(gframe, text="📤 Export Project",
                      fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
-                     command=self.save_config_to_db, width=130, height=40,
-                     font=ctk.CTkFont(family="Inter", size=16), corner_radius=8, 
+                     command=self.export_project, width=140, height=40,
+                     font=ctk.CTkFont(family="Inter", size=16), corner_radius=8,
                      border_width=1, border_color="#58A6FF").pack(side="left", padx=(0, 16))
-        ctk.CTkButton(gframe, text="View saved configs", 
+        ctk.CTkButton(gframe, text="📥 Import Project",
                      fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
-                     command=self.view_saved_configs, width=140, height=40,
+                     command=self.import_project, width=140, height=40,
                      font=ctk.CTkFont(family="Inter", size=16), corner_radius=8,
                      border_width=1, border_color="#58A6FF").pack(side="left")
 
@@ -312,14 +345,14 @@ class App(ctk.CTk):
         bottom_btn_frame = ctk.CTkFrame(preview_holder, fg_color="transparent")
         bottom_btn_frame.pack(fill="x", padx=16, pady=(0, 24))
         
-        # Generate button - Figma filled blue
+        # Generate button — Tier 1 solid blue (lighter)
         ctk.CTkButton(
-            bottom_btn_frame, 
-            text="Generate", 
+            bottom_btn_frame,
+            text="Generate",
             command=self.generate_full,
             fg_color="#58A6FF",
             hover_color="#4A90E8",
-            text_color="#F0F2F4",
+            text_color="white",
             width=120,
             height=48,
             font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
@@ -381,17 +414,17 @@ class App(ctk.CTk):
                                            padx=16, pady=4)
         self.lbl_gns3_status.pack(side="right")
         
-        # Import and Refresh buttons - Figma outlined style
+        # GNS3 Import — Tier 1 solid blue (lighter); Refresh — Tier 3 flat/muted
         gns3_controls = ctk.CTkFrame(right, fg_color="transparent")
         gns3_controls.pack(fill="x", padx=16, pady=(0, 24))
         ctk.CTkButton(gns3_controls, text="Import", command=self.gns3_list_projects,
-                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
-                     width=100, height=32, font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, 
-                     border_width=1, border_color="#58A6FF").pack(side="left", padx=(0, 16))
-        ctk.CTkButton(gns3_controls, text="Refresh", command=self.refresh_gns3_connection, 
-                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
+                     fg_color="#58A6FF", hover_color="#4A90E8", text_color="white",
+                     width=100, height=32, font=ctk.CTkFont(family="Inter", size=14, weight="bold"), corner_radius=8,
+                     border_width=0).pack(side="left", padx=(0, 16))
+        ctk.CTkButton(gns3_controls, text="Refresh", command=self.refresh_gns3_connection,
+                     fg_color="#374151", hover_color="#4b5563", text_color="#9ca3af",
                      width=100, height=32, font=ctk.CTkFont(family="Inter", size=14), corner_radius=8,
-                     border_width=1, border_color="#58A6FF").pack(side="left")
+                     border_width=0).pack(side="left")
         
         # SEND / CONNECT SECTION - Figma Title/medium
         ctk.CTkLabel(right, text="Send / Connect", font=ctk.CTkFont(family="Inter", size=18, weight="bold"), 
@@ -470,12 +503,24 @@ class App(ctk.CTk):
                                       corner_radius=8, text_color="#FFFFFF", placeholder_text_color="#9BA3AF")
         self.ent_enable.pack(side="left", fill="x", expand=True)
 
-        # Send button - Figma filled blue
-        ctk.CTkButton(right, text="Send", command=self.send_now, 
-                     fg_color="#58A6FF", hover_color="#4A90E8", text_color="#F0F2F4",
+        # Send — Tier 1 solid blue (primary action, lighter)
+        ctk.CTkButton(right, text="Send", command=self.send_now,
+                     fg_color="#58A6FF", hover_color="#4A90E8", text_color="white",
                      height=40, font=ctk.CTkFont(family="Inter", size=16, weight="bold"),
-                     corner_radius=8, border_width=0).pack(fill="x", padx=16, pady=(24,24))
-        
+                     corner_radius=8, border_width=0).pack(fill="x", padx=16, pady=(24,8))
+
+        # Save Credentials — Tier 2 outlined blue (lighter)
+        ctk.CTkButton(right, text="💾 Save Credentials", command=self.save_credentials,
+                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
+                     height=36, font=ctk.CTkFont(family="Inter", size=13), corner_radius=8,
+                     border_width=1, border_color="#58A6FF").pack(fill="x", padx=16, pady=(0,8))
+
+        # Open Terminal — Tier 2 outlined blue (lighter)
+        ctk.CTkButton(right, text="💻 Open Terminal", command=self.open_terminal,
+                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
+                     height=36, font=ctk.CTkFont(family="Inter", size=13), corner_radius=8,
+                     border_width=1, border_color="#58A6FF").pack(fill="x", padx=16, pady=(0,24))
+
         # Store references for conditional enabling
         self.serial_widgets = [self.lbl_serial_title, self.ent_serial_port, self.ent_serial_baud]
         self.network_widgets = [self.lbl_network_title, self.ent_host, self.ent_port, self.ent_user, self.ent_pass, self.ent_enable, self.enable_checkbox]
@@ -483,25 +528,66 @@ class App(ctk.CTk):
         # Initialize field states based on default protocol
         self._on_protocol_changed("Telnet")
 
-        # LOGS TAB - Figma styled
+        # LOGS TAB - device-filtered history + runtime output
         logs_card = ctk.CTkFrame(self.tab_logs, fg_color="#1F2630", corner_radius=8, border_width=0)
         logs_card.pack(fill="both", expand=True, padx=16, pady=16)
-        
-        ctk.CTkLabel(logs_card, text="Output", font=ctk.CTkFont(family="Inter", size=24, weight="bold"),
-                    text_color="#C9D1D9").pack(anchor="nw", padx=24, pady=(24,16))
-        
+
+        # Top: device filter dropdown + refresh
+        logs_top = ctk.CTkFrame(logs_card, fg_color="transparent")
+        logs_top.pack(fill="x", padx=24, pady=(24,12))
+        ctk.CTkLabel(logs_top, text="Logs", font=ctk.CTkFont(family="Inter", size=24, weight="bold"),
+                    text_color="#C9D1D9").pack(side="left")
+        self.logs_device_var = ctk.StringVar(value="All")
+        self.logs_device_dropdown = ctk.CTkOptionMenu(
+            logs_top, variable=self.logs_device_var, values=["All"],
+            fg_color="#2B323F", button_color="#28313E", button_hover_color="#3C4A5D",
+            text_color="#FFFFFF", font=ctk.CTkFont(family="Inter", size=14),
+            corner_radius=8, height=36, width=200,
+            command=lambda _: self._refresh_logs_history()
+        )
+        self.logs_device_dropdown.pack(side="left", padx=(24,8))
+        ctk.CTkButton(logs_top, text="Refresh", command=self._refresh_logs_history,
+                     fg_color="transparent", hover_color="#28313E", text_color="#58A6FF",
+                     width=90, height=36, font=ctk.CTkFont(family="Inter", size=14),
+                     corner_radius=8, border_width=1, border_color="#58A6FF").pack(side="left")
+
+        # Log history table (from DB)
+        logs_history_frame = ctk.CTkFrame(logs_card, fg_color="transparent")
+        logs_history_frame.pack(fill="x", padx=24, pady=(0,8))
+        ctk.CTkLabel(logs_history_frame, text="History (by device)", font=ctk.CTkFont(family="Inter", size=14, weight="bold"),
+                    text_color="#9ca3af").pack(anchor="w")
+        self.logs_history_tree = None
+        try:
+            self._logs_history_container = ctk.CTkFrame(logs_history_frame, fg_color="#161B22", corner_radius=8)
+            self._logs_history_container.pack(fill="x", pady=(4,0))
+            self.logs_history_tree = ttk.Treeview(
+                self._logs_history_container, columns=("id", "device", "action", "time"), show="headings",
+                height=6
+            )
+            for h, w in [("id", 50), ("device", 140), ("action", 180), ("time", 150)]:
+                self.logs_history_tree.heading(h, text=h)
+                self.logs_history_tree.column(h, width=w, anchor="w")
+            sb = ttk.Scrollbar(self._logs_history_container, orient="vertical", command=self.logs_history_tree.yview)
+            self.logs_history_tree.configure(yscrollcommand=sb.set)
+            self.logs_history_tree.pack(side="left", fill="both", expand=True)
+            sb.pack(side="right", fill="y")
+        except Exception:
+            pass
+
+        # Runtime output section
+        ctk.CTkLabel(logs_card, text="Live output", font=ctk.CTkFont(family="Inter", size=14, weight="bold"),
+                    text_color="#9ca3af").pack(anchor="nw", padx=24, pady=(16,8))
         self.txt_logs = ctk.CTkTextbox(logs_card, font=ctk.CTkFont(family="Consolas", size=14),
                                       fg_color="#161B22", text_color="#FFFFFF",
                                       corner_radius=8, border_width=0)
         self.txt_logs.pack(fill="both", expand=True, padx=24, pady=(0,16))
-        # Clear Logs button
         clear_logs_frame = ctk.CTkFrame(logs_card, fg_color="transparent")
         clear_logs_frame.pack(fill="x", padx=24, pady=(0,24))
-        clear_logs_btn = ctk.CTkButton(clear_logs_frame, text="Clear Logs", 
+        clear_logs_btn = ctk.CTkButton(clear_logs_frame, text="Clear output",
                                       command=lambda: self.txt_logs.delete("0.0","end"),
                                       fg_color="transparent", hover_color="#28313E",
                                       text_color="#58A6FF", width=120, height=32,
-                                      font=ctk.CTkFont(family="Inter", size=14), corner_radius=8, 
+                                      font=ctk.CTkFont(family="Inter", size=14), corner_radius=8,
                                       border_width=1, border_color="#58A6FF")
         clear_logs_btn.pack(side="right")
 
@@ -1072,12 +1158,50 @@ class App(ctk.CTk):
 
         return ctx
 
-    def open_bulk_deploy(self):
-        if not self.devices:
-            messagebox.showinfo("info", "Import devices from GNS3 first.")
+    def open_topology(self):
+        """Open the topology visualizer for the active GNS3 project."""
+        project_id = getattr(self, "gns3_project_id", None)
+        if not project_id:
+            messagebox.showinfo(
+                "Topology",
+                "No GNS3 project loaded.\n\n"
+                "Connect to GNS3 and import devices first.",
+                parent=self,
+            )
             return
-        from .bulk_deploy import BulkDeployPanel
-        BulkDeployPanel(self, self.devices)
+        try:
+            connector = GNS3Connector()
+            TopologyViewer(self, connector, project_id, self.devices)
+        except Exception as exc:
+            messagebox.showerror("Topology Error", str(exc), parent=self)
+
+    def rollback_device(self):
+        """Restore the last wizard snapshot for the selected device."""
+        if not self.current_device:
+            messagebox.showinfo("Info", "Select a device first.")
+            return
+        name, model, meta = self.current_device
+        if not model.has_snapshots():
+            messagebox.showinfo("Info", "No rollback snapshot available for this device.")
+            return
+        if not messagebox.askyesno(
+            "Rollback Config",
+            f"Restore the previous configuration for '{name}'?\n\n"
+            "This will undo the last Guided Setup run.",
+            parent=self,
+        ):
+            return
+        model.restore_snapshot()
+        self._refresh_template_list()
+        # Hide the button if no more snapshots remain
+        if not model.has_snapshots():
+            self.btn_rollback.pack_forget()
+        messagebox.showinfo(
+            "Rollback Complete",
+            f"Previous configuration restored for '{name}'.\n"
+            "Select a template and press Send to re-deploy.",
+            parent=self,
+        )
 
     def guided_setup(self):
         if not self.devices:
@@ -1152,7 +1276,7 @@ class App(ctk.CTk):
         elif device_role == "router":
             targets = [
                 (n, m, mt) for n, m, mt in self.devices
-                if isinstance(m, (RouterModel, CoreSwitchModel)) and n != configured_name
+                if isinstance(m, RouterModel) and n != configured_name
                 and not any(k.startswith("guided_") for k in m.templates)
             ]
             apply_what = "domain name and admin password"
@@ -1515,6 +1639,53 @@ class App(ctk.CTk):
         for r in rows:
             self.tree_logs.insert("", "end", values=r)
 
+    def _refresh_logs_history(self):
+        """Refresh the Logs tab device dropdown and history table from DB."""
+        if not hasattr(self, "logs_history_tree") or self.logs_history_tree is None:
+            return
+        if not hasattr(self, "logs_device_dropdown"):
+            return
+        try:
+            # Get distinct devices that have logs
+            cur.execute("""
+                SELECT DISTINCT COALESCE(d.name, '(no device)') AS dev_name
+                FROM logs l
+                LEFT JOIN devices d ON l.device_id = d.id
+                ORDER BY dev_name
+            """)
+            devices = ["All"] + [r[0] for r in cur.fetchall() if r[0]]
+            devices = list(dict.fromkeys(devices))  # preserve order, remove dupes
+            self.logs_device_dropdown.configure(values=devices)
+            sel = self.logs_device_var.get()
+            if sel not in devices:
+                self.logs_device_var.set("All")
+                sel = "All"
+
+            # Populate history tree
+            for i in self.logs_history_tree.get_children():
+                self.logs_history_tree.delete(i)
+            if sel == "All":
+                cur.execute("""
+                    SELECT l.id, COALESCE(d.name,'—'), l.action, l.created_at
+                    FROM logs l
+                    LEFT JOIN devices d ON l.device_id = d.id
+                    ORDER BY l.id DESC
+                    LIMIT 500
+                """)
+            else:
+                cur.execute("""
+                    SELECT l.id, COALESCE(d.name,'—'), l.action, l.created_at
+                    FROM logs l
+                    LEFT JOIN devices d ON l.device_id = d.id
+                    WHERE COALESCE(d.name, '(no device)') = ?
+                    ORDER BY l.id DESC
+                    LIMIT 500
+                """, (sel,))
+            for row in cur.fetchall():
+                self.logs_history_tree.insert("", "end", values=row)
+        except Exception:
+            pass
+
     def refresh_ai_models_tree(self):
         if self.tree_ai_models is None:
             return  # Database tab UI not initialized
@@ -1635,6 +1806,7 @@ class App(ctk.CTk):
             self.btn_logs_nav.configure(text_color="#C9D1D9")
             self.main_underline.configure(fg_color="transparent")
             self.logs_underline.configure(fg_color="#58A6FF")
+            self._refresh_logs_history()
     
     def _toggle_right_sidebar(self):
         """Toggle the right sidebar visibility"""
@@ -1742,10 +1914,20 @@ class App(ctk.CTk):
                     self._on_protocol_changed("Telnet")
                 except Exception:
                     pass
+            # Load saved credentials (fills any previously-saved form values)
+            self._load_credentials(dname)
             # Update preview header
             try:
                 self.preview.delete("0.0", "end")
                 self.preview.insert("0.0", f"! device: {dname}\n")
+            except Exception:
+                pass
+            # Show/hide rollback button based on whether snapshots exist
+            try:
+                if model.has_snapshots():
+                    self.btn_rollback.pack(fill="x", padx=16, pady=(0, 24))
+                else:
+                    self.btn_rollback.pack_forget()
             except Exception:
                 pass
     
@@ -1890,6 +2072,20 @@ class App(ctk.CTk):
         content = self.preview.get("0.0","end").strip()
         if not content:
             messagebox.showinfo("info","nothing to send"); return
+
+        # Pre-send validation check
+        try:
+            from .validators import ConfigValidator
+            warnings = ConfigValidator.check_all(self.devices)
+            if warnings:
+                msg = "The following issues were detected:\n\n" + "\n".join(
+                    f"• {w}" for w in warnings
+                ) + "\n\nSend anyway?"
+                if not messagebox.askokcancel("Config Warnings", msg, parent=self):
+                    return
+        except Exception:
+            pass  # validator errors should never block sending
+
         method = self.send_method.get().lower()
         if method == "serial":
             port = self.ent_serial_port.get().strip()
@@ -1930,6 +2126,8 @@ class App(ctk.CTk):
         self.log(f"serial finished: {ok}")
         if ok:
             self.clear_preview()
+            device_name = self.current_device[0] if self.current_device else "unknown"
+            self._write_audit_log(device_name, "serial", f"port={port} baud={baud}", config_content=content)
 
     def _thread_telnet(self, host, port, user, pw, enable, content):
         self.log(f"starting telnet to {host}:{port}")
@@ -1937,6 +2135,22 @@ class App(ctk.CTk):
         self.log(f"telnet finished: {ok}")
         if ok:
             self.clear_preview()
+            device_name = self.current_device[0] if self.current_device else "unknown"
+            self._write_audit_log(device_name, "telnet", f"host={host} port={port}", config_content=content)
+            # Determine which show commands to run based on current device role
+            cmds = ["show ip interface brief"]
+            try:
+                if self.current_device:
+                    from ..models.devices import CoreSwitchModel, SwitchModel
+                    _, mdl, _ = self.current_device
+                    if isinstance(mdl, (CoreSwitchModel, SwitchModel)):
+                        cmds.append("show vlan-switch")
+            except Exception:
+                pass
+            self.log("[verify] running post-send verification...")
+            results = Sender.verify_telnet(self.log, host, port, cmds)
+            if results:
+                self.after(0, lambda r=results: self._show_verify_dialog(r))
 
     def _thread_ssh(self, host, port, user, pw, enable, content):
         self.log(f"starting ssh to {host}:{port} as {user}")
@@ -1944,6 +2158,946 @@ class App(ctk.CTk):
         self.log(f"ssh finished: {ok}")
         if ok:
             self.clear_preview()
+            device_name = self.current_device[0] if self.current_device else "unknown"
+            self._write_audit_log(device_name, "ssh", f"host={host} port={port} user={user}", config_content=content)
+
+    def _show_verify_dialog(self, results: dict):
+        """Display a post-send verification window with color-coded interface status."""
+        import tkinter as tk
+        import re
+
+        t = {
+            "bg":      "#0D1117",
+            "card":    "#1F2630",
+            "sidebar": "#161B22",
+            "text":    "#C9D1D9",
+            "muted":   "#8B949E",
+            "success": "#3FB950",
+            "danger":  "#F85149",
+            "warn":    "#D29922",
+            "border":  "#30363D",
+        }
+
+        win = tk.Toplevel(self)
+        win.title("Post-Send Verification")
+        win.geometry("680x520")
+        win.resizable(True, True)
+        win.configure(bg=t["bg"])
+
+        # Title bar
+        hdr = tk.Frame(win, bg=t["card"], pady=12)
+        hdr.pack(fill="x")
+        tk.Label(
+            hdr, text="Config Verification Results",
+            font=("Segoe UI", 14, "bold"), fg=t["text"], bg=t["card"],
+        ).pack(side="left", padx=16)
+
+        # Scrollable results area
+        canvas = tk.Canvas(win, bg=t["bg"], highlightthickness=0)
+        scrollbar = tk.Scrollbar(win, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(fill="both", expand=True, padx=16, pady=12)
+
+        inner = tk.Frame(canvas, bg=t["bg"])
+        canvas_window = canvas.create_window((0, 0), window=inner, anchor="nw")
+
+        def _on_frame_configure(event):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        inner.bind("<Configure>", _on_frame_configure)
+
+        def _on_canvas_configure(event):
+            canvas.itemconfig(canvas_window, width=event.width)
+        canvas.bind("<Configure>", _on_canvas_configure)
+
+        def _render_interface_table(parent, raw: str):
+            """Parse 'show ip interface brief' and render a color-coded table."""
+            lines = [l for l in raw.splitlines() if l.strip()]
+            # Find the header line
+            header_idx = next(
+                (i for i, l in enumerate(lines) if "Interface" in l and "Status" in l),
+                None,
+            )
+            if header_idx is None:
+                tk.Label(parent, text=raw[:800], fg=t["muted"], bg=t["bg"],
+                         font=("Courier New", 10), justify="left", anchor="w",
+                         wraplength=580).pack(anchor="w")
+                return
+
+            # Header row
+            hf = tk.Frame(parent, bg=t["card"])
+            hf.pack(fill="x", pady=(0, 2))
+            for col, w in [("Interface", 22), ("IP Address", 18), ("Status", 12), ("Protocol", 12)]:
+                tk.Label(hf, text=col, fg=t["muted"], bg=t["card"],
+                         font=("Segoe UI", 10, "bold"), width=w, anchor="w").pack(side="left")
+
+            iface_re = re.compile(
+                r"^(\S+)\s+(\S+)\s+\S+\s+\S+\s+(\S+)\s+(\S+)", re.IGNORECASE
+            )
+            for line in lines[header_idx + 1:]:
+                m = iface_re.match(line.strip())
+                if not m:
+                    continue
+                iface, ip, status, protocol = m.group(1), m.group(2), m.group(3), m.group(4)
+                is_up = protocol.lower() == "up"
+                row_bg  = t["card"] if is_up else "#2a1a1a"
+                dot_col = t["success"] if is_up else t["danger"]
+
+                rf = tk.Frame(parent, bg=row_bg)
+                rf.pack(fill="x", pady=1)
+                tk.Label(rf, text="●", fg=dot_col, bg=row_bg,
+                         font=("Segoe UI", 9)).pack(side="left", padx=(4, 0))
+                for val, w in [(iface, 20), (ip, 18), (status, 12), (protocol, 12)]:
+                    tk.Label(rf, text=val, fg=t["text"], bg=row_bg,
+                             font=("Courier New", 10), width=w, anchor="w").pack(side="left")
+
+        def _render_vlan_table(parent, raw: str):
+            """Parse 'show vlan-switch' / 'show vlan brief' and render a simple table."""
+            if re.search(r"(Invalid input|% Invalid|% Incomplete)", raw, re.IGNORECASE):
+                tk.Label(parent, text="VLAN command not supported on this device.",
+                         fg=t["muted"], bg=t["bg"], font=("Segoe UI", 10)).pack(anchor="w", padx=4, pady=4)
+                return
+            lines = [l for l in raw.splitlines() if l.strip()]
+            header_idx = next(
+                (i for i, l in enumerate(lines) if "VLAN" in l and "Name" in l),
+                None,
+            )
+            if header_idx is None:
+                tk.Label(parent, text=raw[:800], fg=t["muted"], bg=t["bg"],
+                         font=("Courier New", 10), justify="left", anchor="w",
+                         wraplength=580).pack(anchor="w")
+                return
+
+            hf = tk.Frame(parent, bg=t["card"])
+            hf.pack(fill="x", pady=(0, 2))
+            for col, w in [("VLAN", 8), ("Name", 28), ("Status", 12)]:
+                tk.Label(hf, text=col, fg=t["muted"], bg=t["card"],
+                         font=("Segoe UI", 10, "bold"), width=w, anchor="w").pack(side="left")
+
+            vlan_re = re.compile(r"^(\d+)\s+(\S+)\s+(\S+)", re.IGNORECASE)
+            for line in lines[header_idx + 1:]:
+                m = vlan_re.match(line.strip())
+                if not m:
+                    continue
+                vid, name, status = m.group(1), m.group(2), m.group(3)
+                is_active = "active" in status.lower()
+                row_bg  = t["card"] if is_active else "#2a1a1a"
+                dot_col = t["success"] if is_active else t["warn"]
+
+                rf = tk.Frame(parent, bg=row_bg)
+                rf.pack(fill="x", pady=1)
+                tk.Label(rf, text="●", fg=dot_col, bg=row_bg,
+                         font=("Segoe UI", 9)).pack(side="left", padx=(4, 0))
+                for val, w in [(vid, 6), (name, 26), (status, 12)]:
+                    tk.Label(rf, text=val, fg=t["text"], bg=row_bg,
+                             font=("Courier New", 10), width=w, anchor="w").pack(side="left")
+
+        _cmd_labels = {
+            "show ip interface brief": "Network Interfaces",
+            "show vlan-switch":        "VLAN Membership",
+            "show vlan brief":         "VLAN Membership",
+        }
+
+        for cmd, raw in results.items():
+            label = _cmd_labels.get(cmd, cmd)
+            sec = tk.Frame(inner, bg=t["sidebar"], pady=6)
+            sec.pack(fill="x", pady=(8, 4))
+            tk.Label(sec, text=f"  {label}", font=("Segoe UI", 11, "bold"),
+                     fg=t["success"], bg=t["sidebar"]).pack(side="left", padx=12)
+
+            if "interface brief" in cmd:
+                _render_interface_table(inner, raw)
+            elif "vlan" in cmd:
+                _render_vlan_table(inner, raw)
+            else:
+                tk.Label(inner, text=raw[:1000], fg=t["text"], bg=t["bg"],
+                         font=("Courier New", 10), justify="left", anchor="w",
+                         wraplength=580).pack(anchor="w", padx=4)
+
+        tk.Button(
+            win, text="Close", command=win.destroy,
+            bg="#238636", fg="white", relief="flat", padx=20, pady=6,
+            font=("Segoe UI", 11),
+        ).pack(pady=12)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Credential Manager
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def save_credentials(self):
+        """Save current form values to the credentials table for the selected device."""
+        if not self.selected_device_name:
+            messagebox.showinfo("Save Credentials", "Select a device first.", parent=self)
+            return
+        try:
+            host = self.ent_host.get().strip()
+            port = self.ent_port.get().strip()
+            username = self.ent_user.get().strip()
+            password = self.ent_pass.get().strip()
+            enable = self.ent_enable.get().strip()
+            protocol = self.send_method.get().lower()
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            cur.execute(
+                """INSERT INTO credentials
+                   (device_name, host, port, username, password, enable_password, protocol, updated_at)
+                   VALUES (?,?,?,?,?,?,?,?)
+                   ON CONFLICT(device_name) DO UPDATE SET
+                   host=excluded.host, port=excluded.port,
+                   username=excluded.username, password=excluded.password,
+                   enable_password=excluded.enable_password,
+                   protocol=excluded.protocol, updated_at=excluded.updated_at""",
+                (self.selected_device_name, host, port, username, password, enable, protocol, ts)
+            )
+            conn.commit()
+            messagebox.showinfo(
+                "Credentials Saved",
+                f"Credentials for '{self.selected_device_name}' saved.\n"
+                "They will be auto-loaded next time you select this device.",
+                parent=self
+            )
+            self.log(f"[creds] saved credentials for {self.selected_device_name}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Could not save credentials:\n{e}", parent=self)
+
+    def _load_credentials(self, device_name: str):
+        """Auto-fill connection form from saved credentials for device_name."""
+        try:
+            cur.execute(
+                "SELECT host, port, username, password, enable_password, protocol "
+                "FROM credentials WHERE device_name=?",
+                (device_name,)
+            )
+            row = cur.fetchone()
+            if not row:
+                return
+            host, port, username, password, enable, protocol = row
+            # Only fill fields that have a saved non-empty value
+            if host:
+                self.ent_host.configure(state="normal")
+                self.ent_host.delete(0, "end")
+                self.ent_host.insert(0, host)
+            if port:
+                self.ent_port.configure(state="normal")
+                self.ent_port.delete(0, "end")
+                self.ent_port.insert(0, port)
+            if username:
+                self.ent_user.configure(state="normal")
+                self.ent_user.delete(0, "end")
+                self.ent_user.insert(0, username)
+            if password:
+                self.ent_pass.configure(state="normal")
+                self.ent_pass.delete(0, "end")
+                self.ent_pass.insert(0, password)
+            if enable:
+                self.ent_enable.configure(state="normal")
+                self.ent_enable.delete(0, "end")
+                self.ent_enable.insert(0, enable)
+            if protocol and protocol in ("telnet", "serial", "ssh"):
+                self.send_method.set(protocol.capitalize() if protocol != "ssh" else "SSH")
+                self._on_protocol_changed(protocol.capitalize() if protocol != "ssh" else "SSH")
+        except Exception:
+            pass  # never break device selection due to credential errors
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Export / Import Project
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def export_project(self):
+        """Export all workspace devices and templates to a .ancs JSON file."""
+        if not self.devices:
+            messagebox.showinfo("Export", "No devices to export.", parent=self)
+            return
+        filepath = filedialog.asksaveasfilename(
+            title="Export ANCS Project",
+            defaultextension=".ancs",
+            filetypes=[("ANCS Project", "*.ancs"), ("JSON", "*.json"), ("All files", "*.*")],
+            parent=self
+        )
+        if not filepath:
+            return
+        try:
+            export_data = {
+                "version": "1.0",
+                "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "devices": []
+            }
+            # Map model class to type key
+            type_map = {
+                "RouterModel":     "router",
+                "SwitchModel":     "switch",
+                "CoreSwitchModel": "core switch",
+            }
+            for name, model, meta in self.devices:
+                type_key = type_map.get(model.__class__.__name__, "router")
+                # Exclude non-serialisable metadata values
+                safe_meta = {
+                    k: v for k, v in meta.items()
+                    if isinstance(v, (str, int, float, bool, list, type(None)))
+                }
+                export_data["devices"].append({
+                    "name":      name,
+                    "type_key":  type_key,
+                    "metadata":  safe_meta,
+                    "templates": dict(model.templates),
+                })
+            with open(filepath, "w", encoding="utf-8") as f:
+                json.dump(export_data, f, indent=2)
+            messagebox.showinfo(
+                "Export Complete",
+                f"Exported {len(self.devices)} device(s) to:\n{filepath}",
+                parent=self
+            )
+            self.log(f"[export] saved project to {filepath}")
+        except Exception as e:
+            messagebox.showerror("Export Error", str(e), parent=self)
+
+    def import_project(self):
+        """Import devices and templates from a previously exported .ancs file."""
+        filepath = filedialog.askopenfilename(
+            title="Import ANCS Project",
+            filetypes=[("ANCS Project", "*.ancs"), ("JSON", "*.json"), ("All files", "*.*")],
+            parent=self
+        )
+        if not filepath:
+            return
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception as e:
+            messagebox.showerror("Import Error", f"Could not read file:\n{e}", parent=self)
+            return
+
+        devices_data = data.get("devices", [])
+        if not devices_data:
+            messagebox.showinfo("Import", "No devices found in file.", parent=self)
+            return
+
+        if self.devices:
+            if not messagebox.askyesno(
+                "Import Project",
+                f"This will add {len(devices_data)} device(s) to the current workspace.\n"
+                "Devices with duplicate names will be skipped.\n\nContinue?",
+                parent=self
+            ):
+                return
+
+        added = 0
+        skipped = 0
+        for dev in devices_data:
+            name     = dev.get("name", "unnamed")
+            type_key = dev.get("type_key", "router").lower()
+            meta     = dev.get("metadata", {})
+            templates = dev.get("templates", {})
+
+            if type_key not in self.device_types:
+                type_key = "router"
+
+            # Skip if name already exists
+            if any(d[0] == name for d in self.devices):
+                skipped += 1
+                continue
+
+            self.add_device_instance(type_key, name, metadata=meta)
+            # Restore templates
+            _, model, _ = self.devices[-1]
+            for tname, ttext in templates.items():
+                model.set_template(tname, ttext)
+            added += 1
+
+        self.refresh_device_list()
+        messagebox.showinfo(
+            "Import Complete",
+            f"Imported {added} device(s)."
+            + (f"\nSkipped {skipped} duplicate(s)." if skipped else ""),
+            parent=self
+        )
+        self.log(f"[import] loaded {added} device(s) from {filepath}")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Sequential Multi-Device Deploy
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def deploy_all_ordered(self):
+        """Deploy configs to all devices in dependency order: Router → Core → Access."""
+        if not self.devices:
+            messagebox.showinfo("Deploy All", "No devices in workspace.", parent=self)
+            return
+
+        # Sort by role priority
+        def _priority(item):
+            _, model, __ = item
+            if isinstance(model, RouterModel):
+                return 0
+            elif isinstance(model, CoreSwitchModel):
+                return 1
+            return 2
+
+        ordered = sorted(self.devices, key=_priority)
+
+        # Build deploy list with connection info
+        deploy_list = []
+        for name, model, meta in ordered:
+            config = model.build_full_config().strip()
+            if not config or config.startswith("!"):
+                # Check if there's any real content
+                lines = [l for l in config.splitlines() if l.strip() and not l.strip().startswith("!")]
+                if not lines:
+                    deploy_list.append((name, model, meta, None, None, "no config"))
+                    continue
+
+            host = meta.get("console_host") or meta.get("ip", "")
+            port_raw = meta.get("console_port") or meta.get("port", "")
+
+            # Also check saved credentials for connection info
+            if not host:
+                try:
+                    cur.execute(
+                        "SELECT host, port FROM credentials WHERE device_name=?", (name,)
+                    )
+                    row = cur.fetchone()
+                    if row and row[0]:
+                        host, port_raw = row[0], row[1]
+                except Exception:
+                    pass
+
+            if not host:
+                deploy_list.append((name, model, meta, None, None, "no host"))
+                continue
+
+            try:
+                port = int(port_raw)
+            except (ValueError, TypeError):
+                deploy_list.append((name, model, meta, None, None, f"bad port: {port_raw}"))
+                continue
+
+            deploy_list.append((name, model, meta, host, port, "ready"))
+
+        self._show_deploy_progress_window(deploy_list)
+
+    def _show_deploy_progress_window(self, deploy_list: list):
+        """Show a progress dialog and start sequential deployment."""
+        t = {
+            "bg":      "#0D1117",
+            "card":    "#1F2630",
+            "text":    "#C9D1D9",
+            "muted":   "#8B949E",
+            "success": "#3FB950",
+            "danger":  "#F85149",
+            "warn":    "#D29922",
+            "accent":  "#58A6FF",
+        }
+
+        win = tk.Toplevel(self)
+        win.title("Deploy All — Progress")
+        win.geometry("560x460")
+        win.resizable(True, True)
+        win.configure(bg=t["bg"])
+        win.transient(self)
+
+        tk.Label(
+            win, text="Deploying configurations (Router → Core → Access)…",
+            font=("Segoe UI", 12, "bold"), fg=t["text"], bg=t["bg"]
+        ).pack(anchor="w", padx=16, pady=(16, 8))
+
+        # Progress table
+        table_frame = tk.Frame(win, bg=t["card"])
+        table_frame.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+
+        canvas = tk.Canvas(table_frame, bg=t["card"], highlightthickness=0)
+        vsb = tk.Scrollbar(table_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=vsb.set)
+        vsb.pack(side="right", fill="y")
+        canvas.pack(fill="both", expand=True)
+
+        inner = tk.Frame(canvas, bg=t["card"])
+        cwin = canvas.create_window((0, 0), window=inner, anchor="nw")
+        inner.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(cwin, width=e.width))
+
+        # Header row
+        hdr_f = tk.Frame(inner, bg=t["bg"])
+        hdr_f.pack(fill="x", padx=4, pady=(4, 2))
+        for col, w in [("Device", 22), ("Role", 14), ("Status", 20)]:
+            tk.Label(
+                hdr_f, text=col, fg=t["muted"], bg=t["bg"],
+                font=("Segoe UI", 9, "bold"), width=w, anchor="w"
+            ).pack(side="left")
+
+        # Status labels per device
+        status_labels = {}
+        role_names = {0: "Router", 1: "Core SW", 2: "Access SW"}
+        for name, model, meta, host, port, state in deploy_list:
+            priority = 0 if isinstance(model, RouterModel) else (1 if isinstance(model, CoreSwitchModel) else 2)
+            role_str = role_names.get(priority, "Unknown")
+
+            rf = tk.Frame(inner, bg=t["card"])
+            rf.pack(fill="x", padx=4, pady=1)
+            tk.Label(rf, text=name, fg=t["text"], bg=t["card"],
+                     font=("Courier New", 10), width=22, anchor="w").pack(side="left")
+            tk.Label(rf, text=role_str, fg=t["muted"], bg=t["card"],
+                     font=("Segoe UI", 9), width=14, anchor="w").pack(side="left")
+            init_color = t["muted"] if state == "ready" else t["danger"]
+            init_text  = "queued" if state == "ready" else state
+            lbl = tk.Label(rf, text=init_text, fg=init_color, bg=t["card"],
+                           font=("Segoe UI", 9), width=20, anchor="w")
+            lbl.pack(side="left")
+            status_labels[name] = lbl
+
+        # Log area
+        lbl_log = tk.Label(win, text="Log:", fg=t["muted"], bg=t["bg"],
+                           font=("Segoe UI", 10))
+        lbl_log.pack(anchor="w", padx=16)
+        txt_log = tk.Text(
+            win, height=6,
+            bg=t["card"], fg=t["text"],
+            font=("Courier New", 9), relief="flat", borderwidth=0,
+            state="disabled"
+        )
+        txt_log.pack(fill="x", padx=16, pady=(0, 8))
+
+        def _log(msg: str):
+            try:
+                txt_log.configure(state="normal")
+                txt_log.insert("end", f"{time.strftime('%H:%M:%S')}  {msg}\n")
+                txt_log.see("end")
+                txt_log.configure(state="disabled")
+            except Exception:
+                pass
+
+        btn_close = tk.Button(
+            win, text="Close", command=win.destroy,
+            bg=t["card"], fg=t["muted"],
+            relief="flat", padx=20, pady=6,
+            font=("Segoe UI", 10)
+        )
+        btn_close.pack(pady=(0, 12))
+
+        def _deploy_worker():
+            for name, model, meta, host, port, state in deploy_list:
+                if state != "ready":
+                    _log(f"SKIP  {name}  ({state})")
+                    continue
+
+                lbl = status_labels.get(name)
+                if lbl:
+                    win.after(0, lambda l=lbl: l.configure(text="sending…", fg=t["warn"]))
+
+                config = model.build_full_config()
+                _log(f"SEND  {name}  →  {host}:{port}")
+
+                try:
+                    ok = Sender.send_telnet(
+                        _log, host, port, "", "", "", config
+                    )
+                    status = "✓ done" if ok else "✗ failed"
+                    color  = t["success"] if ok else t["danger"]
+                    if ok:
+                        self._write_audit_log(name, "telnet", f"deploy-all host={host}:{port}", config_content=config)
+                except Exception as exc:
+                    status = f"error: {exc}"
+                    color  = t["danger"]
+                    ok     = False
+
+                _log(f"  → {status}")
+                if lbl:
+                    win.after(0, lambda l=lbl, s=status, c=color: l.configure(text=s, fg=c))
+
+            _log("─── all done ───")
+            win.after(0, lambda: btn_close.configure(bg="#238636", fg="white"))
+
+        threading.Thread(target=_deploy_worker, daemon=True).start()
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Monitor & Terminal launchers
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def open_monitor(self):
+        """Open the real-time device interface monitor."""
+        if not self.devices:
+            messagebox.showinfo("Monitor", "No devices in workspace.", parent=self)
+            return
+        DeviceMonitor(self, self.devices)
+
+    def open_terminal(self):
+        """Open an interactive CLI terminal for the currently selected device."""
+        if not self.current_device:
+            messagebox.showinfo("Terminal", "Select a device first.", parent=self)
+            return
+        name, model, meta = self.current_device
+        host = meta.get("console_host") or meta.get("ip", "")
+        port_raw = meta.get("console_port") or meta.get("port", "")
+
+        # Fall back to form values if metadata is empty
+        if not host:
+            host = self.ent_host.get().strip()
+        if not port_raw:
+            port_raw = self.ent_port.get().strip()
+
+        if not host:
+            messagebox.showerror(
+                "Terminal",
+                "No host/IP set for this device.\n"
+                "Fill in the Host field in the right panel or import from GNS3.",
+                parent=self
+            )
+            return
+        try:
+            port = int(port_raw or "23")
+        except ValueError:
+            messagebox.showerror("Terminal", f"Invalid port: {port_raw}", parent=self)
+            return
+
+        TerminalPanel(self, name, host, port)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # Audit Log helper
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _write_audit_log(self, device_name: str, protocol: str, details: str = "", config_content: str = ""):
+        """Write a successful config-send event to the logs table. Stores full config in details for Send History."""
+        try:
+            cur.execute("SELECT id FROM devices WHERE name=?", (device_name,))
+            row = cur.fetchone()
+            device_id = row[0] if row else None
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            # Store metadata + full config: metadata on first line, config below (for backward compat, details can be short)
+            stored = details or ""
+            if config_content:
+                stored = (details + "\n\n--- CONFIG SENT ---\n" + config_content) if details else config_content
+            cur.execute(
+                "INSERT INTO logs (action, device_id, details, severity, created_at) "
+                "VALUES (?,?,?,?,?)",
+                (f"config_sent_{protocol}", device_id, stored, "info", ts)
+            )
+            conn.commit()
+        except Exception:
+            pass  # audit log errors must never crash the app
+
+    def open_audit_log(self):
+        """Open a window showing the full config-send history from the logs table. Selecting a row shows the config that was sent."""
+        t = {
+            "bg":    "#0D1117", "card":  "#1F2630",
+            "text":  "#C9D1D9", "muted": "#8B949E",
+            "success": "#3FB950", "danger": "#F85149",
+            "accent": "#58A6FF",
+        }
+        win = tk.Toplevel(self)
+        win.title("Send History / Audit Log")
+        win.geometry("800x600")
+        win.resizable(True, True)
+        win.configure(bg=t["bg"])
+
+        tk.Label(
+            win, text="  Config Send History",
+            font=("Segoe UI", 14, "bold"), fg=t["text"], bg=t["bg"]
+        ).pack(anchor="w", padx=16, pady=(14, 4))
+        tk.Label(
+            win,
+            text="Select a row to see the config that was sent. New sends store the full config.",
+            font=("Segoe UI", 9), fg=t["muted"], bg=t["bg"]
+        ).pack(anchor="w", padx=16, pady=(0, 8))
+
+        # Top: tree of send history
+        tree_frame = tk.Frame(win, bg=t["bg"])
+        tree_frame.pack(fill="both", expand=True, padx=16, pady=(0, 4))
+        cols = ("id", "device", "action", "time")
+        tree = ttk.Treeview(tree_frame, columns=cols, show="headings", height=8)
+        for h, w in [("id", 50), ("device", 180), ("action", 200), ("time", 160)]:
+            tree.heading(h, text=h)
+            tree.column(h, width=w, anchor="w")
+        vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        tree.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+
+        # Bottom: config preview when row selected
+        tk.Label(win, text="  Config sent (select a row above)", font=("Segoe UI", 10, "bold"),
+                fg=t["muted"], bg=t["bg"]).pack(anchor="w", padx=16, pady=(8, 4))
+        config_frame = tk.Frame(win, bg=t["card"], relief="flat")
+        config_frame.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+        config_text = tk.Text(config_frame, wrap="none", font=("Consolas", 10), bg="#161B22", fg=t["text"],
+                             insertbackground=t["text"], relief="flat", padx=12, pady=8)
+        config_sb = ttk.Scrollbar(config_frame, orient="vertical", command=config_text.yview)
+        config_sb_x = ttk.Scrollbar(config_frame, orient="horizontal", command=config_text.xview)
+        config_text.configure(yscrollcommand=config_sb.set, xscrollcommand=config_sb_x.set)
+        config_text.pack(side="left", fill="both", expand=True)
+        config_sb.pack(side="right", fill="y")
+        config_sb_x.pack(side="bottom", fill="x")
+
+        def _extract_config(details: str) -> str:
+            if "--- CONFIG SENT ---" in details:
+                return details.split("--- CONFIG SENT ---", 1)[1].strip()
+            return details or "(no config stored for older entries)"
+
+        def _on_select(_):
+            sel = tree.selection()
+            config_text.delete("1.0", "end")
+            if not sel:
+                config_text.insert("1.0", "Select a row to view the config that was sent.")
+                return
+            item = tree.item(sel[0])
+            vals = item.get("values", ())
+            if len(vals) < 1:
+                return
+            log_id = vals[0]
+            try:
+                cur.execute("SELECT details FROM logs WHERE id=?", (log_id,))
+                row = cur.fetchone()
+                if row:
+                    config_text.insert("1.0", _extract_config(row[0] or ""))
+                else:
+                    config_text.insert("1.0", "(entry not found)")
+            except Exception:
+                config_text.insert("1.0", "(error loading)")
+
+        tree.bind("<<TreeviewSelect>>", _on_select)
+
+        def _refresh():
+            for row in tree.get_children():
+                tree.delete(row)
+            config_text.delete("1.0", "end")
+            config_text.insert("1.0", "Select a row to view the config that was sent.")
+            try:
+                cur.execute("""
+                    SELECT l.id, COALESCE(d.name,'—'), l.action, l.created_at
+                    FROM logs l
+                    LEFT JOIN devices d ON l.device_id = d.id
+                    WHERE l.action LIKE 'config_sent_%'
+                    ORDER BY l.id DESC
+                    LIMIT 200
+                """)
+                for row in cur.fetchall():
+                    tree.insert("", "end", values=row)
+            except Exception as e:
+                tree.insert("", "end", values=("", "", f"Error: {e}", ""))
+
+        _refresh()
+
+        btn_f = tk.Frame(win, bg=t["bg"])
+        btn_f.pack(fill="x", padx=16, pady=(0, 12))
+        tk.Button(
+            btn_f, text="Refresh", command=_refresh,
+            bg=t["accent"], fg="white", relief="flat",
+            font=("Segoe UI", 10), padx=16, pady=4, cursor="hand2"
+        ).pack(side="left")
+        tk.Button(
+            btn_f, text="Close", command=win.destroy,
+            bg=t["card"], fg=t["muted"], relief="flat",
+            font=("Segoe UI", 10), padx=16, pady=4, cursor="hand2"
+        ).pack(side="right")
+
+    # ─────────────────────────────────────────────────────────────────────────
+    # AI Config Assistant
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def open_ai_assistant(self):
+        """Open the AI Config Assistant window."""
+        t = {
+            "bg":      "#0D1117", "card":  "#1F2630",
+            "sidebar": "#161B22", "text":  "#C9D1D9",
+            "muted":   "#8B949E", "accent": "#58A6FF",
+            "success": "#3FB950", "danger": "#F85149",
+            "input_bg": "#161B22",
+        }
+        win = tk.Toplevel(self)
+        win.title("AI Config Assistant")
+        win.geometry("740x580")
+        win.minsize(560, 420)
+        win.resizable(True, True)
+        win.configure(bg=t["bg"])
+
+        # Header
+        hdr = tk.Frame(win, bg=t["card"], pady=10)
+        hdr.pack(fill="x")
+        tk.Label(
+            hdr, text="  🤖 AI Config Assistant",
+            font=("Segoe UI", 14, "bold"), fg=t["text"], bg=t["card"]
+        ).pack(side="left")
+        tk.Label(
+            hdr, text="Describe what you want — get IOS CLI config",
+            font=("Segoe UI", 9), fg=t["muted"], bg=t["card"]
+        ).pack(side="left", padx=10)
+
+        # API Key row
+        key_row = tk.Frame(win, bg=t["bg"])
+        key_row.pack(fill="x", padx=16, pady=(12, 4))
+        tk.Label(key_row, text="OpenAI API Key:", fg=t["muted"], bg=t["bg"],
+                 font=("Segoe UI", 9)).pack(side="left")
+        ent_key = tk.Entry(key_row, bg=t["sidebar"], fg=t["text"],
+                           show="*", font=("Courier New", 10),
+                           relief="flat", insertbackground=t["text"], width=40)
+        ent_key.pack(side="left", padx=(8, 0))
+
+        # Try to load saved key
+        try:
+            cur.execute("SELECT details FROM logs WHERE action='ai_api_key' ORDER BY id DESC LIMIT 1")
+            r = cur.fetchone()
+            if r and r[0]:
+                ent_key.insert(0, r[0])
+        except Exception:
+            pass
+
+        def _save_key():
+            k = ent_key.get().strip()
+            if k:
+                try:
+                    cur.execute(
+                        "INSERT INTO logs (action, details, severity, created_at) VALUES (?,?,?,?)",
+                        ("ai_api_key", k, "info", time.strftime("%Y-%m-%d %H:%M:%S"))
+                    )
+                    conn.commit()
+                except Exception:
+                    pass
+
+        tk.Button(key_row, text="Save", command=_save_key,
+                  bg=t["accent"], fg="white", relief="flat",
+                  font=("Segoe UI", 9), padx=8, pady=2,
+                  cursor="hand2").pack(side="left", padx=8)
+
+        # Prompt area
+        tk.Label(win, text="Describe what you want:", fg=t["muted"], bg=t["bg"],
+                 font=("Segoe UI", 10)).pack(anchor="w", padx=16, pady=(8, 2))
+        ent_prompt = tk.Text(
+            win, height=4, bg=t["sidebar"], fg=t["text"],
+            font=("Segoe UI", 11), relief="flat", borderwidth=0,
+            insertbackground=t["text"], wrap="word"
+        )
+        ent_prompt.pack(fill="x", padx=16, pady=(0, 4))
+
+        # Example prompts
+        examples = [
+            "Block all traffic from VLAN 10 to VLAN 20 using an ACL",
+            "Configure OSPF area 0 on all router interfaces",
+            "Create a DHCP pool for 192.168.10.0/24 with gateway 192.168.10.1",
+            "Set up SSH access with local authentication",
+        ]
+        ex_frame = tk.Frame(win, bg=t["bg"])
+        ex_frame.pack(fill="x", padx=16, pady=(0, 8))
+        tk.Label(ex_frame, text="Examples:", fg=t["muted"], bg=t["bg"],
+                 font=("Segoe UI", 8)).pack(anchor="w")
+        for ex in examples:
+            tk.Button(
+                ex_frame, text=f"  {ex}",
+                command=lambda e=ex: (ent_prompt.delete("1.0", "end"), ent_prompt.insert("1.0", e)),
+                bg=t["card"], fg=t["accent"], relief="flat",
+                font=("Segoe UI", 8), cursor="hand2", anchor="w"
+            ).pack(fill="x", pady=1)
+
+        # Output area
+        tk.Label(win, text="Generated Config:", fg=t["muted"], bg=t["bg"],
+                 font=("Segoe UI", 10)).pack(anchor="w", padx=16, pady=(4, 2))
+        txt_output = tk.Text(
+            win, bg=t["input_bg"], fg=t["text"],
+            font=("Courier New", 11), relief="flat", borderwidth=0,
+            insertbackground=t["text"], wrap="word", state="disabled"
+        )
+        txt_output.pack(fill="both", expand=True, padx=16, pady=(0, 8))
+
+        def _set_output(text: str):
+            txt_output.configure(state="normal")
+            txt_output.delete("1.0", "end")
+            txt_output.insert("1.0", text)
+            txt_output.configure(state="disabled")
+
+        def _generate():
+            prompt = ent_prompt.get("1.0", "end").strip()
+            if not prompt:
+                return
+            api_key = ent_key.get().strip()
+            if not api_key:
+                _set_output(
+                    "! No API key provided.\n"
+                    "! Enter your OpenAI API key in the field above and click Save.\n"
+                    "! You can get a key at: https://platform.openai.com/api-keys\n\n"
+                    "! Without an API key, here are some manual hints:\n"
+                    "! - ACL: access-list 100 deny ip 192.168.10.0 0.0.0.255 192.168.20.0 0.0.0.255\n"
+                    "! - DHCP: ip dhcp pool VLAN10\\n  network 192.168.10.0 255.255.255.0\n"
+                    "! - OSPF: router ospf 1\\n  network 0.0.0.0 255.255.255.255 area 0\n"
+                    "! - SSH: ip ssh version 2\\n  line vty 0 4\\n  transport input ssh"
+                )
+                return
+
+            btn_gen.configure(text="Generating…", state="disabled")
+
+            def _worker():
+                try:
+                    import urllib.request
+                    import json as _json
+                    system_msg = (
+                        "You are a Cisco IOS network configuration expert. "
+                        "When the user describes a network configuration task, "
+                        "respond ONLY with the exact IOS CLI commands (no explanations, "
+                        "no markdown, just the raw commands). "
+                        "Use 'configure terminal' and 'end' to wrap the config block."
+                    )
+                    body = _json.dumps({
+                        "model": "gpt-3.5-turbo",
+                        "messages": [
+                            {"role": "system", "content": system_msg},
+                            {"role": "user", "content": prompt}
+                        ],
+                        "max_tokens": 512,
+                        "temperature": 0.2,
+                    }).encode("utf-8")
+                    req = urllib.request.Request(
+                        "https://api.openai.com/v1/chat/completions",
+                        data=body,
+                        headers={
+                            "Content-Type": "application/json",
+                            "Authorization": f"Bearer {api_key}",
+                        },
+                        method="POST"
+                    )
+                    with urllib.request.urlopen(req, timeout=30) as resp:
+                        result = _json.loads(resp.read().decode("utf-8"))
+                    text = result["choices"][0]["message"]["content"].strip()
+                    win.after(0, lambda: _set_output(text))
+                    win.after(0, lambda: btn_gen.configure(
+                        text="Generate", state="normal"
+                    ))
+                except Exception as exc:
+                    err = f"! API error: {exc}\n! Check your API key and internet connection."
+                    win.after(0, lambda: _set_output(err))
+                    win.after(0, lambda: btn_gen.configure(
+                        text="Generate", state="normal"
+                    ))
+
+            threading.Thread(target=_worker, daemon=True).start()
+
+        def _insert_into_preview():
+            content = txt_output.get("1.0", "end").strip()
+            if not content or content.startswith("!"):
+                lines = [l for l in content.splitlines() if not l.strip().startswith("!")]
+                content = "\n".join(lines).strip()
+            if content:
+                self.preview.insert("end", "\n" + content + "\n")
+                self.log("[ai] inserted AI-generated config into preview")
+
+        btn_row = tk.Frame(win, bg=t["bg"])
+        btn_row.pack(fill="x", padx=16, pady=(0, 12))
+        btn_gen = tk.Button(
+            btn_row, text="Generate",
+            command=_generate,
+            bg=t["accent"], fg="white", relief="flat",
+            font=("Segoe UI", 11, "bold"), padx=20, pady=6, cursor="hand2"
+        )
+        btn_gen.pack(side="left")
+        tk.Button(
+            btn_row, text="Insert into Preview",
+            command=_insert_into_preview,
+            bg="#238636", fg="white", relief="flat",
+            font=("Segoe UI", 10), padx=16, pady=6, cursor="hand2"
+        ).pack(side="left", padx=8)
+        tk.Button(
+            btn_row, text="Close", command=win.destroy,
+            bg=t["card"], fg=t["muted"], relief="flat",
+            font=("Segoe UI", 10), padx=16, pady=6, cursor="hand2"
+        ).pack(side="right")
+
+    # ─────────────────────────────────────────────────────────────────────────
 
     # ------------------- GNS3 integration -------------------
     def refresh_gns3_connection(self):
@@ -1984,16 +3138,17 @@ class App(ctk.CTk):
                 last_project_id = self.last_gns3_project.get('project_id') or self.last_gns3_project.get('projectId') or self.last_gns3_project.get('id')
                 if current_project_id != last_project_id:
                     self.log(f"[gns3] detected project change: {self.last_gns3_project.get('name')} -> {proj.get('name')}")
-            
-            self.gns3 = g
-            self.last_gns3_project = proj
-            # Update GNS3 status label (now in main page top right)
-            if hasattr(self, 'lbl_gns3_status'):
-                self.lbl_gns3_status.configure(text=f"auto-connected to gns3, project: {proj.get('name')}")
-            # import nodes
+
             try:
+                self.gns3 = g
+                self.last_gns3_project = proj
+                # Update GNS3 status label (now in main page top right)
+                if hasattr(self, 'lbl_gns3_status'):
+                    self.lbl_gns3_status.configure(text=f"auto-connected to gns3, project: {proj.get('name')}")
+                # import nodes
                 # FIX: Use .get() with fallback for project_id
                 project_id = proj.get('project_id') or proj.get('projectId') or proj.get('id')
+                self.gns3_project_id = project_id  # store for topology viewer
                 if not project_id:
                     if hasattr(self, 'lbl_gns3_status'):
                         self.lbl_gns3_status.configure(text="gns3 project missing project_id")
@@ -2013,6 +3168,14 @@ class App(ctk.CTk):
                     console_type = node.get('console_type', '')
                     properties = node.get('properties') or {}
                     image_name = properties.get('image') or properties.get('platform') or properties.get('hw_model') or ''
+
+                    # Skip non-configurable GNS3 node types (PCs, clouds, hubs, etc.)
+                    _SKIP_TYPES = {"vpcs", "cloud", "nat", "ethernet_switch", "ethernet_hub",
+                                   "frame_relay_switch", "atm_switch"}
+                    if raw_node_type.lower() in _SKIP_TYPES:
+                        self.log(f"[gns3] skipping non-network node: {name} ({raw_node_type})")
+                        continue
+
                     self.log(f"[gns3] node {name}: type={raw_node_type} platform={raw_platform} category={raw_category}")
                     self.log(f"[gns3] node {name}: console={console_type} image={image_name}")
                     node_type_field = (raw_node_type or '') + ' ' + (raw_platform or '')
@@ -2103,6 +3266,12 @@ class App(ctk.CTk):
             nodes = self.gns3.get_nodes(project_id)
         except Exception as e:
             messagebox.showerror("gns3 error", str(e)); return
+        _SKIP_TYPES = {"vpcs", "cloud", "nat", "ethernet_switch", "ethernet_hub",
+                       "frame_relay_switch", "atm_switch"}
+        nodes = [n for n in nodes if n.get('node_type', '').lower() not in _SKIP_TYPES]
+        if not nodes:
+            messagebox.showinfo("GNS3", "No configurable network devices found in this project.\n(PCs, clouds, and hubs are excluded.)")
+            return
         labels = []
         for i,n in enumerate(nodes):
             ch = f"{i+1}. {n.get('name')}  ({n.get('node_type')})  console:{n.get('console_host','localhost')}:{n.get('console') or n.get('console_port') or ''}"

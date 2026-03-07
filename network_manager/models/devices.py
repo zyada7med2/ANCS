@@ -1,12 +1,14 @@
 """
 Device model classes for routers, switches, and core switches
 """
+import copy
 
 
 class DeviceModel:
     def __init__(self, name: str):
         self.name = name
         self.templates: dict[str, str] = {}
+        self.snapshots: list[dict[str, str]] = []
 
     def get_template_names(self):
         return list(self.templates.keys())
@@ -23,6 +25,23 @@ class DeviceModel:
             out.append(f"! ===== {k} =====")
             out.append(self.get_template(k))
         return "\n".join(out)
+
+    def snapshot_templates(self):
+        """Save a deep copy of current templates (max 5 snapshots)."""
+        if self.templates:
+            self.snapshots.append(copy.deepcopy(self.templates))
+            if len(self.snapshots) > 5:
+                self.snapshots.pop(0)
+
+    def restore_snapshot(self) -> bool:
+        """Restore the most recent snapshot. Returns True if successful."""
+        if not self.snapshots:
+            return False
+        self.templates = self.snapshots.pop()
+        return True
+
+    def has_snapshots(self) -> bool:
+        return bool(self.snapshots)
 
 
 class RouterModel(DeviceModel):

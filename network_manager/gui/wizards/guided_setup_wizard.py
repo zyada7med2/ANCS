@@ -626,6 +626,8 @@ class GuidedSetupWizard(tk.Toplevel):
 
     # ════════════════════════ step render / navigation ═════════════════════════
     def _render_step(self):
+        if not hasattr(self, "content"):
+            return  # headless mode — no layout, nothing to render
         t = self.THEME
         for child in self.content.winfo_children():
             child.destroy()
@@ -1625,12 +1627,24 @@ class GuidedSetupWizard(tk.Toplevel):
             muted=True,
         ).pack(anchor="w", pady=(0, 12))
 
-        default_port = "Ethernet3/3" if self.device_role == "access" else "FastEthernet1/0"
         ex0 = self.uplinks[0] if self.uplinks else {}
+        # Separate existing uplinks vs downlinks (tagged in mode field)
+        ex_downlinks = [u for u in self.uplinks if u.get("_downlink")]
+
+        if self.device_role == "core":
+            uplink_label   = "Uplink to router (trunk port):"
+            default_port   = "FastEthernet1/0"
+            downlink_label = "Downlink trunk ports to access switches:"
+            downlink_hint  = "Comma-separated ports, e.g. FastEthernet1/1,FastEthernet1/2"
+        else:
+            uplink_label   = "Uplink to core switch or router (trunk port):"
+            default_port   = "Ethernet3/3"
+            downlink_label = "Second uplink port (optional):"
+            downlink_hint  = "Leave blank if not needed"
 
         # Primary uplink
         primary = self._card(body)
-        tk.Label(primary, text="Primary uplink port:", width=24, anchor="w",
+        tk.Label(primary, text=uplink_label, width=34, anchor="w",
                  fg=t["text"], bg=t["sidebar"]).pack(side="left")
         self.uplink_port_var = tk.StringVar(value=ex0.get("ports", default_port))
         self._entry(primary, textvariable=self.uplink_port_var, width=22).pack(side="left", padx=6)
@@ -1639,36 +1653,41 @@ class GuidedSetupWizard(tk.Toplevel):
         allowed_f.pack(fill="x", pady=(0, 10))
         tk.Label(allowed_f, text="Allowed VLANs on this trunk:", width=30, anchor="w",
                  fg=t["text"], bg=t["card"]).pack(side="left")
-        # Use context VLANs if available, otherwise fall back to existing or "all"
         default_allowed = ex0.get("allowed vlans") or ctx_vlan_ids or "all"
         self.uplink_vlans_var = tk.StringVar(value=default_allowed)
         self._entry(allowed_f, textvariable=self.uplink_vlans_var, width=22).pack(side="left", padx=6)
         self._lbl(allowed_f, "(e.g. 10,20  or  all)", muted=True).pack(side="left")
 
-        # Optional second uplink
-        self._lbl(body, "Second uplink port (optional):", bold=True).pack(anchor="w", pady=(8, 4))
-        ex1 = self.uplinks[1] if len(self.uplinks) > 1 else {}
+        # Downlinks / second uplink
+        self._lbl(body, downlink_label, bold=True).pack(anchor="w", pady=(8, 4))
+        ex1 = ex_downlinks[0] if ex_downlinks else (self.uplinks[1] if len(self.uplinks) > 1 else {})
         sec_f = tk.Frame(body, bg=t["card"])
         sec_f.pack(anchor="w", fill="x")
-        tk.Label(sec_f, text="Port:", width=8, anchor="w",
+        tk.Label(sec_f, text="Port(s):", width=10, anchor="w",
                  fg=t["text"], bg=t["card"]).pack(side="left")
         self.uplink2_port_var = tk.StringVar(value=ex1.get("ports", ""))
-        self._entry(sec_f, textvariable=self.uplink2_port_var, width=22).pack(side="left", padx=6)
-        self._lbl(sec_f, "(leave blank if not needed)", muted=True).pack(side="left")
+        self._entry(sec_f, textvariable=self.uplink2_port_var, width=28).pack(side="left", padx=6)
+        self._lbl(sec_f, f"({downlink_hint})", muted=True).pack(side="left")
 
     def _validate_uplinks(self) -> bool:
         self.uplinks = []
         port = getattr(self, "uplink_port_var", None)
         port = port.get().strip() if port else ""
+        allowed = getattr(self, "uplink_vlans_var", None)
+        allowed = (allowed.get().strip() if allowed else "") or "all"
         if port:
-            allowed = getattr(self, "uplink_vlans_var", None)
-            allowed = allowed.get().strip() if allowed else "all"
             self.uplinks.append({"ports": port, "mode": "trunk", "allowed vlans": allowed})
+
         port2 = getattr(self, "uplink2_port_var", None)
-        port2 = port2.get().strip() if port2 else ""
+        port2 = (port2.get().strip() if port2 else "")
         if port2:
-            self.uplinks.append({"ports": port2, "mode": "trunk",
-                                  "allowed vlans": allowed if self.uplinks else "all"})
+            # For core switch, port2 are downlink trunks; store comma-sep in one entry
+            # _render_uplink_block expands comma-separated ports automatically
+            self.uplinks.append({
+                "ports": port2, "mode": "trunk",
+                "allowed vlans": allowed,
+                "_downlink": self.device_role == "core",
+            })
         return True
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1901,6 +1920,7 @@ class GuidedSetupWizard(tk.Toplevel):
 
     def _cleanup_default_templates(self):
         """Remove any previous guided_* templates so old data never bleeds in."""
+        self.device_model.snapshot_templates()
         for key in list(self.device_model.templates.keys()):
             if key.startswith("guided_"):
                 del self.device_model.templates[key]
@@ -1942,40 +1962,68 @@ class GuidedSetupWizard(tk.Toplevel):
     def _render_identity_block(self) -> str:
         if not self.identity_data:
             return ""
-        lines = ["configure terminal",
-                 f"hostname {self.identity_data.get('hostname', self.device_name)}"]
+        lines = [
+            "configure terminal",
+            f"hostname {self.identity_data.get('hostname', self.device_name)}",
+        ]
         if self.identity_data.get("domain"):
             lines.append(f"ip domain-name {self.identity_data['domain']}")
-        lines += [f"enable secret {self.identity_data.get('enable')}", "exit"]
+        lines += [
+            f"enable secret {self.identity_data.get('enable')}",
+            "!",
+            "end",
+        ]
         return "\n".join(lines)
 
     def _render_vlan_block(self) -> str:
         if self.device_role == "router" or not self.vlans:
             return ""
+
         lines = []
-        old_syntax = (self.device_role == "core")
-        if old_syntax:
+
+        if self.device_role == "core":
+            # Older Catalyst / IOS images (3550, 3560 with older IOS) use vlan database
             lines.append("vlan database")
             for v in self.vlans:
                 name = v.get("name") or f"VLAN{v.get('id')}"
                 lines.append(f"vlan {v.get('id')} name {name}")
-            lines += ["exit", "!", "configure terminal"]
+            lines += ["exit", "!"]
+            # Port assignments go into configure terminal
+            lines.append("configure terminal")
             for v in self.vlans:
-                for iface in self._expand_ports_to_list(v.get("ports", "")):
-                    lines += [f"interface {iface}", "switchport mode access",
-                              f"switchport access vlan {v.get('id')}", "no shutdown", "exit"]
-            lines.append("exit")
+                ports_str = v.get("ports", "")
+                if not ports_str or ports_str.strip().lower() in ("auto", ""):
+                    continue
+                for iface in self._expand_ports_to_list(ports_str):
+                    lines += [
+                        f"interface {iface}",
+                        " switchport mode access",
+                        f" switchport access vlan {v.get('id')}",
+                        " no shutdown",
+                        "exit",
+                    ]
+            lines += ["!", "end"]
         else:
+            # Access switches — standard IOS / IOU L2 syntax
             lines.append("configure terminal")
             for v in self.vlans:
                 name = v.get("name") or f"VLAN{v.get('id')}"
-                lines += [f"vlan {v.get('id')}", f"name {name}", "exit"]
+                lines += [f"vlan {v.get('id')}", f" name {name}", "exit"]
             lines.append("!")
             for v in self.vlans:
-                for iface in self._expand_ports_to_list(v.get("ports", "")):
-                    lines += [f"interface {iface}", "switchport mode access",
-                              f"switchport access vlan {v.get('id')}", "no shutdown", "exit"]
-            lines.append("exit")
+                ports_str = v.get("ports", "")
+                if not ports_str or ports_str.strip().lower() in ("auto", ""):
+                    continue
+                for iface in self._expand_ports_to_list(ports_str):
+                    lines += [
+                        f"interface {iface}",
+                        " switchport mode access",
+                        f" switchport access vlan {v.get('id')}",
+                        " no shutdown",
+                        "exit",
+                    ]
+            lines += ["!", "end"]
+
         return "\n".join(lines)
 
     def _render_uplink_block(self) -> str:
@@ -1988,19 +2036,24 @@ class GuidedSetupWizard(tk.Toplevel):
             allowed = link.get("allowed vlans", "all")
             if not ports:
                 continue
-            lines.append(f"interface {ports}")
-            if mode == "trunk":
-                if self.device_role in ("access", "core"):
-                    lines.append("switchport trunk encapsulation dot1q")
-                lines.append("switchport mode trunk")
-                if allowed and allowed.lower() != "all":
-                    lines.append(f"switchport trunk allowed vlan {allowed}")
-            else:
-                lines.append("switchport mode access")
-                if allowed and allowed.lower() != "all":
-                    lines.append(f"switchport access vlan {allowed}")
-            lines.append("exit")
-        lines.append("exit")
+            # Expand comma-separated port list (e.g. downlink trunks on core switch)
+            for port in [p.strip() for p in ports.split(",") if p.strip()]:
+                lines.append(f"interface {port}")
+                if mode == "trunk":
+                    # dot1q encapsulation needed on older IOS before setting trunk mode
+                    lines.append(" switchport trunk encapsulation dot1q")
+                    lines.append(" switchport mode trunk")
+                    if allowed and allowed.lower() != "all":
+                        lines.append(f" switchport trunk allowed vlan {allowed}")
+                    else:
+                        lines.append(" switchport trunk allowed vlan all")
+                else:
+                    lines.append(" switchport mode access")
+                    if allowed and allowed.lower() != "all":
+                        lines.append(f" switchport access vlan {allowed}")
+                lines.append(" no shutdown")
+                lines.append("exit")
+        lines += ["!", "end"]
         return "\n".join(lines)
 
     def _render_routing_block(self) -> str:
@@ -2015,25 +2068,37 @@ class GuidedSetupWizard(tk.Toplevel):
             ip   = e.get("ip")
             mask = e.get("mask", "255.255.255.0")
             if vlan and ip:
-                lines += [f"interface Vlan{vlan}", f"ip address {ip} {mask}",
-                          "no shutdown", "exit"]
-        lines.append("exit")
+                lines += [
+                    f"interface Vlan{vlan}",
+                    f" ip address {ip} {mask}",
+                    " no shutdown",
+                    "exit",
+                ]
+        lines += ["!", "end"]
         return "\n".join(lines)
 
     def _render_router_on_stick_block(self) -> str:
         if not self.router_interface or not self.routing_entries:
             return ""
-        lines = ["configure terminal",
-                 f"interface {self.router_interface}", "no shutdown", "exit"]
+        lines = [
+            "configure terminal",
+            f"interface {self.router_interface}",
+            " no shutdown",
+            "exit",
+        ]
         for e in self.routing_entries:
             vlan = e.get("vlan")
             ip   = e.get("ip")
             mask = e.get("mask", "255.255.255.0")
             if vlan and ip:
-                lines += [f"interface {self.router_interface}.{vlan}",
-                          f"encapsulation dot1Q {vlan}",
-                          f"ip address {ip} {mask}", "exit"]
-        lines.append("exit")
+                lines += [
+                    f"interface {self.router_interface}.{vlan}",
+                    f" encapsulation dot1Q {vlan}",
+                    f" ip address {ip} {mask}",
+                    " no shutdown",
+                    "exit",
+                ]
+        lines += ["!", "end"]
         return "\n".join(lines)
 
     def _render_static_routes_block(self) -> str:
@@ -2050,23 +2115,24 @@ class GuidedSetupWizard(tk.Toplevel):
             if desc:
                 lines.append(f"! {desc}")
             lines.append(f"ip route {net} {mask} {nh}")
-        lines.append("exit")
+        lines += ["!", "end"]
         return "\n".join(lines)
 
     def _render_rip_block(self) -> str:
         if not self.enable_rip:
             return ""
-        lines = ["configure terminal", "router rip", "version 2", "no auto-summary"]
+        lines = ["configure terminal", "router rip", " version 2", " no auto-summary"]
         seen = set()
         for e in self.routing_entries:
             ip = e.get("ip", "")
             p  = ip.split(".")
             if len(p) == 4:
+                # RIP network command uses classful network
                 net = f"{p[0]}.{p[1]}.{p[2]}.0"
                 if net not in seen:
                     seen.add(net)
-                    lines.append(f"network {net}")
-        lines += ["exit", "exit"]
+                    lines.append(f" network {net}")
+        lines += ["exit", "!", "end"]
         return "\n".join(lines)
 
     def _render_dhcp_block(self) -> str:
@@ -2078,7 +2144,7 @@ class GuidedSetupWizard(tk.Toplevel):
             start = pool.get("start",   "")
             end   = pool.get("end",     "")
 
-            # Exclude: gateway → (start - 1)
+            # Exclude gateway and static range (.1 through .49) from pool
             if gw and start:
                 p = start.split(".")
                 try:
@@ -2091,8 +2157,10 @@ class GuidedSetupWizard(tk.Toplevel):
                         lines.append(f"ip dhcp excluded-address {gw}")
                 except (IndexError, ValueError):
                     pass
+            elif gw:
+                lines.append(f"ip dhcp excluded-address {gw}")
 
-            # Exclude: (end + 1) → 254
+            # Exclude end+1 through 254 (broadcast protection)
             if end:
                 p = end.split(".")
                 try:
@@ -2103,33 +2171,63 @@ class GuidedSetupWizard(tk.Toplevel):
                 except (IndexError, ValueError):
                     pass
 
-            lines.append(f"ip dhcp pool {pool.get('pool')}")
-            lines.append(f"network {pool.get('network')} {pool.get('mask')}")
+            lines.append(f"ip dhcp pool {pool.get('pool', 'POOL')}")
+            lines.append(f" network {pool.get('network')} {pool.get('mask', '255.255.255.0')}")
             if gw:
-                lines.append(f"default-router {gw}")
+                lines.append(f" default-router {gw}")
             if pool.get("dns"):
-                lines.append(f"dns-server {pool['dns']}")
+                lines.append(f" dns-server {pool['dns']}")
             lines.append("exit")
-        lines.append("exit")
+        lines += ["!", "end"]
         return "\n".join(lines)
 
     def _render_acl_block(self) -> str:
         if not self.acl_rules:
             return ""
+        acl_num = self.acl_rules[0].get("acl #", "101")
         lines = ["configure terminal"]
+        is_extended = int(acl_num) >= 100  # Standard: 1-99, Extended: 100-199
+
+        # Build the numbered ACL — use correct syntax for standard vs extended
         for rule in self.acl_rules:
             num    = rule.get("acl #", "101")
             action = rule.get("action", "permit")
             src    = rule.get("source", "any")
             wc     = rule.get("wildcard", "")
-            remark = rule.get("remark",   "")
+            remark = rule.get("remark", "")
             if remark:
                 lines.append(f"access-list {num} remark {remark}")
-            if src.lower() == "any":
-                lines.append(f"access-list {num} {action} any")
+            if is_extended:
+                # Extended ACL syntax needs protocol + dst
+                if src.lower() == "any":
+                    lines.append(f"access-list {num} {action} ip any any")
+                else:
+                    lines.append(f"access-list {num} {action} ip {src} {wc} any")
             else:
-                lines.append(f"access-list {num} {action} {src} {wc}")
-        lines.append("exit")
+                # Standard ACL syntax — no protocol or dst keyword
+                if src.lower() == "any":
+                    lines.append(f"access-list {num} {action} any")
+                else:
+                    lines.append(f"access-list {num} {action} {src} {wc}")
+        lines.append("!")
+
+        # Only apply ACL to interfaces for extended ACLs (100-199) used for inter-VLAN filtering
+        # Standard ACLs (1-99) are applied manually by the user to specific interfaces
+        if is_extended and self.routing_entries:
+            for e in self.routing_entries:
+                vlan = e.get("vlan")
+                if not vlan:
+                    continue
+                if self.device_role == "router" and self.router_interface:
+                    iface = f"{self.router_interface}.{vlan}"
+                else:
+                    iface = f"Vlan{vlan}"
+                lines += [
+                    f"interface {iface}",
+                    f" ip access-group {acl_num} in",
+                    "exit",
+                ]
+        lines += ["!", "end"]
         return "\n".join(lines)
 
     # kept for any remaining callers

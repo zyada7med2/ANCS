@@ -43,3 +43,18 @@ class GNS3Connector:
         r.raise_for_status()
         return r.json()
 
+    def get_links(self, project_id: str):
+        """
+        Return the list of link dicts for a project from the GNS3 API.
+        Each dict has a 'nodes' list with two endpoint dicts, each containing:
+          'node_id', 'adapter_number', 'port_number', 'label' (optional).
+        """
+        if requests is None:
+            raise RuntimeError("requests not installed")
+        r = requests.get(
+            f"{self.server_url}/v2/projects/{project_id}/links",
+            timeout=5,
+        )
+        r.raise_for_status()
+        return r.json()
+

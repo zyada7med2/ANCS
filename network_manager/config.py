@@ -161,6 +161,20 @@ CREATE TABLE IF NOT EXISTS training_data (
 """)
 
 
+cur.execute("""
+CREATE TABLE IF NOT EXISTS credentials (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_name TEXT UNIQUE NOT NULL,
+    host TEXT DEFAULT '',
+    port TEXT DEFAULT '',
+    username TEXT DEFAULT '',
+    password TEXT DEFAULT '',
+    enable_password TEXT DEFAULT '',
+    protocol TEXT DEFAULT 'telnet',
+    updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+)
+""")
+
 # Helpful indexes for performance on common lookups / filters
 cur.execute("CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status)")
 cur.execute("CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip)")
