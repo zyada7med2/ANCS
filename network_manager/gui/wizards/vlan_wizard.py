@@ -3,13 +3,16 @@ VLAN configuration GUI wizard
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
+from ..utils import apply_responsive_geometry
 
 
 class VlanGuiWindow(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("vlan gui wizard")
-        self.geometry("700x460")
+        self.transient(parent)
+        self.grab_set()
+        apply_responsive_geometry(self, 700, 460)
         self.result = None
         frame = tk.Frame(self)
         frame.pack(fill="both", expand=True, padx=8, pady=8)
@@ -39,7 +42,7 @@ class VlanGuiWindow(tk.Toplevel):
                     col_index = int(column.replace("#", "")) - 1
                     if col_index >= 0:
                         self.edit_cell_popup(item, col_index)
-                except:
+                except Exception:
                     pass
     
     def edit_cell_popup(self, item, column):

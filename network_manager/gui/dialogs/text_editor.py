@@ -2,13 +2,17 @@
 Text editor popup dialog
 """
 import tkinter as tk
+from ..utils import apply_responsive_geometry
 
 
 class TextEditorPopup(tk.Toplevel):
     def __init__(self, parent, title="edit", initial=""):
         super().__init__(parent)
         self.title(title)
-        self.geometry("760x480")
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+        apply_responsive_geometry(self, 760, 480)
         self.result = None
         self.text = tk.Text(self, wrap="none", font=("Courier", 11))
         self.text.pack(fill="both", expand=True)

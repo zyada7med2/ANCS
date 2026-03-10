@@ -3,13 +3,16 @@ STP (Spanning Tree Protocol) configuration GUI wizard
 """
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
+from ..utils import apply_responsive_geometry
 
 
 class StpGuiWindow(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
         self.title("stp gui wizard")
-        self.geometry("750x480")
+        self.transient(parent)
+        self.grab_set()
+        apply_responsive_geometry(self, 750, 480)
         self.result = None
 
         frame = tk.Frame(self)
@@ -47,7 +50,7 @@ class StpGuiWindow(tk.Toplevel):
                     col_index = int(column.replace("#", "")) - 1
                     if col_index >= 0:
                         self.edit_cell_popup(item, col_index)
-                except:
+                except Exception:
                     pass
     
     def edit_cell_popup(self, item, column):
