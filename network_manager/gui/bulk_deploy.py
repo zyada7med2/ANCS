@@ -3,6 +3,7 @@ Smart Bulk Operations — topology detection, config suggestion, and parallel de
 """
 from __future__ import annotations
 
+import hashlib
 import threading
 import time
 from typing import List, Dict, Tuple, Any
@@ -13,6 +14,40 @@ from tkinter import messagebox
 
 from ..models import RouterModel, SwitchModel, CoreSwitchModel  # noqa: F401
 from ..network import Sender
+from .utils import apply_responsive_geometry
+from ..config import conn, cur, db_lock
+
+
+def _config_hash(text: str) -> str:
+    """Return a short SHA-256 hex digest of a config string."""
+    return hashlib.sha256(text.encode("utf-8", errors="replace")).hexdigest()
+
+
+def _load_deployed_hash(device_name: str) -> str:
+    """Fetch the last-deployed config hash from the database (empty string if none)."""
+    try:
+        with db_lock:
+            cur.execute(
+                "SELECT deployed_config_hash FROM devices WHERE name=?",
+                (device_name,),
+            )
+            row = cur.fetchone()
+            return (row[0] or "") if row else ""
+    except Exception:
+        return ""
+
+
+def _save_deployed_hash(device_name: str, config_hash: str) -> None:
+    """Persist a successfully-deployed config hash to the database."""
+    try:
+        with db_lock:
+            cur.execute(
+                "UPDATE devices SET deployed_config_hash=? WHERE name=?",
+                (config_hash, device_name),
+            )
+            conn.commit()
+    except Exception:
+        pass
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Theme constants (match main app)
@@ -317,12 +352,15 @@ class BulkDeployPanel(ctk.CTkToplevel):
         self.devices    = devices
 
         self.title("Smart Bulk Deploy")
-        self.geometry("900x680")
         self.resizable(True, True)
-        self.minsize(700, 500)
-        self.configure(fg_color=_BG)
+        # transient() must be set BEFORE geometry so the window manager can
+        # position the dialog relative to the parent on multi-monitor setups.
         self.transient(parent)
+        apply_responsive_geometry(self, 900, 680, min_w=700, min_h=500)
+        self.configure(fg_color=_BG)
         self.grab_set()
+        self._deploy_running = False
+        self.protocol("WM_DELETE_WINDOW", self._on_close_request)
 
         # Detect topology and build suggestions
         self.topology = TopologyDetector(devices).detect()
@@ -410,6 +448,20 @@ class BulkDeployPanel(ctk.CTkToplevel):
         )
         self.log_box.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
 
+        # Force re-deploy toggle
+        force_row = ctk.CTkFrame(right, fg_color="transparent")
+        force_row.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 4))
+        self._force_redeploy_var = ctk.BooleanVar(value=False)
+        ctk.CTkCheckBox(
+            force_row,
+            text="Force re-deploy (ignore 'already deployed' check)",
+            variable=self._force_redeploy_var,
+            font=ctk.CTkFont(family=_FONT, size=11),
+            text_color=_MUTED,
+            fg_color=_YELLOW,
+            hover_color="#b07800",
+        ).pack(side="left")
+
         # Deploy All button
         self.deploy_btn = ctk.CTkButton(
             right,
@@ -422,7 +474,7 @@ class BulkDeployPanel(ctk.CTkToplevel):
             corner_radius=8,
             height=40,
         )
-        self.deploy_btn.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 12))
+        self.deploy_btn.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 6))
 
         # Generate-only button (no send)
         ctk.CTkButton(
@@ -437,13 +489,27 @@ class BulkDeployPanel(ctk.CTkToplevel):
             height=34,
             border_width=1,
             border_color=_ACCENT,
-        ).grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 16))
+        ).grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 16))
 
     def _build_plan_card(self, parent, idx: int, plan: dict):
         name, model, meta = plan["device"]
         role   = plan["role"]
         icon   = _ROLE_ICONS.get(role, "🔲")
-        bkts   = plan["buckets"]
+
+        # Determine initial deploy status by comparing stored vs current hash
+        stored_hash = _load_deployed_hash(name)
+        current_hash = _config_hash(model.build_full_config()) if model.templates else ""
+        if not stored_hash:
+            init_status, init_color = "● Not deployed", _ACCENT
+            should_include = True
+        elif current_hash == stored_hash:
+            init_status, init_color = "✓ Deployed", _GREEN
+            should_include = False   # unchanged — opt-out by default
+        else:
+            init_status, init_color = "↑ Modified", _YELLOW
+            should_include = True
+
+        plan["_stored_hash"] = stored_hash
 
         card = ctk.CTkFrame(parent, fg_color=_CARD, corner_radius=8)
         card.pack(fill="x", padx=12, pady=(0, 8))
@@ -459,16 +525,37 @@ class BulkDeployPanel(ctk.CTkToplevel):
             text_color=_TEXT,
         ).pack(side="left")
 
-        # Status label (updated during deploy)
-        status_var = tk.StringVar(value="pending")
+        # Include-in-deploy checkbox (right side of title row)
+        include_var = ctk.BooleanVar(value=should_include)
+        plan["_include_var"] = include_var
+
+        def _on_include_toggle(v=include_var, p=plan):
+            """When the checkbox changes, re-tint the card border."""
+            pass  # visual update handled by the deploy status label colour
+
+        ctk.CTkCheckBox(
+            title_row,
+            text="Deploy",
+            variable=include_var,
+            command=_on_include_toggle,
+            font=ctk.CTkFont(family=_FONT, size=11),
+            text_color=_MUTED,
+            fg_color=_ACCENT,
+            hover_color="#388bfd",
+            width=80,
+        ).pack(side="right", padx=(0, 4))
+
+        # Status badge
+        status_var = tk.StringVar(value=init_status)
         status_lbl = ctk.CTkLabel(
             title_row,
             textvariable=status_var,
             font=ctk.CTkFont(family=_FONT, size=11),
-            text_color=_MUTED,
+            text_color=init_color,
         )
-        status_lbl.pack(side="right")
+        status_lbl.pack(side="right", padx=(0, 8))
         plan["_status_var"] = status_var
+        plan["_status_lbl"] = status_lbl
 
         # Summary bullets
         summary = self._plan_summary(plan)
@@ -559,6 +646,14 @@ class BulkDeployPanel(ctk.CTkToplevel):
         win._render_step()
         self.wait_window(win)
         self._customised[idx] = True
+        # Config may have changed after customisation — clear cached hash so it
+        # compares fresh on next deploy and the card shows "Modified ↑"
+        plan = self.plans[idx]
+        plan["_stored_hash"] = ""
+        self._set_plan_status(plan, "↑ Modified")
+        self._set_plan_status_color(plan, _YELLOW)
+        if plan.get("_include_var"):
+            plan["_include_var"].set(True)
 
     def _generate_only(self):
         """Generate configs for all devices silently (no send)."""
@@ -592,22 +687,35 @@ class BulkDeployPanel(ctk.CTkToplevel):
             )
             return
 
+        force = self._force_redeploy_var.get()
         self.deploy_btn.configure(state="disabled", text="Deploying...")
         self._log_write("=== Bulk Deploy Started ===\n\n")
+        if force:
+            self._log_write("⚠  Force re-deploy enabled — skipping hash check\n\n")
 
         for idx, plan in enumerate(self.plans):
             self._apply_plan_to_model(idx, plan)
 
         threads = []
+        self._deploy_running = True
         for idx, plan in enumerate(self.plans):
+            name = plan["device"][0]
             meta = plan["device"][2]
-            if not meta.get("gns3_node"):
-                self._log_write(f"[SKIP] {plan['device'][0]} — not a GNS3 device\n")
-                plan["_status_var"].set("skipped")
+
+            # Respect the per-device include checkbox
+            if not plan.get("_include_var", ctk.BooleanVar(value=True)).get():
+                self._log_write(f"[SKIP] {name} — excluded by checkbox\n")
+                self._set_plan_status(plan, "skipped")
                 continue
+
+            if not meta.get("gns3_node"):
+                self._log_write(f"[SKIP] {name} — not a GNS3 device\n")
+                self._set_plan_status(plan, "skipped")
+                continue
+
             t = threading.Thread(
                 target=self._send_one,
-                args=(idx, plan),
+                args=(idx, plan, force),
                 daemon=True,
             )
             threads.append(t)
@@ -616,6 +724,7 @@ class BulkDeployPanel(ctk.CTkToplevel):
         def _wait_all():
             for t in threads:
                 t.join()
+            self._deploy_running = False
             self.after(0, lambda: self.deploy_btn.configure(
                 state="normal", text="Deploy All"
             ))
@@ -623,7 +732,7 @@ class BulkDeployPanel(ctk.CTkToplevel):
 
         threading.Thread(target=_wait_all, daemon=True).start()
 
-    def _send_one(self, idx: int, plan: dict):
+    def _send_one(self, idx: int, plan: dict, force: bool = False):
         name, model, meta = plan["device"]
         host   = meta.get("console_host", "localhost")
         port   = meta.get("console_port", "")
@@ -631,27 +740,56 @@ class BulkDeployPanel(ctk.CTkToplevel):
 
         if not config.strip():
             self._log_write(f"[{name}] No config to send — run Generate first.\n")
-            plan["_status_var"].set("no config")
+            self._set_plan_status(plan, "no config")
+            return
+
+        # ── Hash check: skip if unchanged since last successful deploy ──
+        current_hash = _config_hash(config)
+        stored_hash  = plan.get("_stored_hash", "")
+        if stored_hash and current_hash == stored_hash and not force:
+            self._log_write(
+                f"[{name}] Config unchanged since last deploy — skipping. "
+                f"Enable 'Force re-deploy' to push anyway.\n"
+            )
+            self._set_plan_status(plan, "✓ Up-to-date")
+            self._set_plan_status_color(plan, _GREEN)
             return
 
         self._log_write(f"[{name}] Connecting to {host}:{port}...\n")
-        plan["_status_var"].set("connecting...")
+        self._set_plan_status(plan, "connecting…")
+        self._set_plan_status_color(plan, _MUTED)
+
+        try:
+            port_int = int(port) if port else 23
+        except (ValueError, TypeError):
+            port_int = 23
+
+        # Use credentials from identity_data if available (more reliable than raw meta)
+        identity = plan.get("buckets", {}).get("identity_data", {})
+        username = identity.get("username") or meta.get("username", "")
+        password = identity.get("password") or meta.get("password", "")
+        enable_pw = identity.get("enable") or meta.get("enable_pw", "")
 
         try:
             Sender.send_telnet(
                 log_fn=lambda msg: self._log_write(f"  [{name}] {msg}\n"),
                 host=host,
-                port=int(port),
-                username="",
-                password="",
-                enable_pw=meta.get("enable_pw", ""),
+                port=port_int,
+                username=username,
+                password=password,
+                enable_pw=enable_pw,
                 text=config,
             )
+            # Persist hash so future deploys detect "already deployed"
+            _save_deployed_hash(name, current_hash)
+            plan["_stored_hash"] = current_hash
             self._log_write(f"[{name}] Config sent successfully.\n")
-            plan["_status_var"].set("done")
+            self._set_plan_status(plan, "✓ Deployed")
+            self._set_plan_status_color(plan, _GREEN)
         except Exception as e:
             self._log_write(f"[{name}] ERROR: {e}\n")
-            plan["_status_var"].set("failed")
+            self._set_plan_status(plan, "✗ Failed")
+            self._set_plan_status_color(plan, _RED)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
@@ -691,13 +829,54 @@ class BulkDeployPanel(ctk.CTkToplevel):
         # Destroy the hidden window immediately
         wiz.destroy()
 
+    def _on_close_request(self):
+        """Guard window close while deploy threads are running."""
+        from tkinter import messagebox as _mb
+        if self._deploy_running:
+            if not _mb.askokcancel(
+                "Deploy in progress",
+                "A bulk deploy is currently running.\n"
+                "Closing now may leave devices partially configured.\n\n"
+                "Close anyway?",
+                parent=self,
+            ):
+                return
+        self.grab_release()
+        self.destroy()
+
+    def _set_plan_status(self, plan: dict, text: str):
+        """Thread-safe wrapper for updating a plan's status StringVar."""
+        try:
+            self.after(0, lambda v=plan["_status_var"], t=text: v.set(t))
+        except Exception:
+            pass
+
+    def _set_plan_status_color(self, plan: dict, color: str):
+        """Thread-safe wrapper for updating the status label text_color."""
+        try:
+            lbl = plan.get("_status_lbl")
+            if lbl:
+                self.after(0, lambda l=lbl, c=color: l.configure(text_color=c))
+        except Exception:
+            pass
+
     def _log_write(self, msg: str):
-        """Thread-safe log write."""
+        """Thread-safe log write — updates local log_box AND main app Logs tab."""
         def _write():
-            self.log_box.configure(state="normal")
-            self.log_box.insert("end", msg)
-            self.log_box.see("end")
-            self.log_box.configure(state="disabled")
+            try:
+                self.log_box.configure(state="normal")
+                self.log_box.insert("end", msg)
+                self.log_box.see("end")
+                self.log_box.configure(state="disabled")
+            except Exception:
+                pass
+            # Mirror every non-blank line to the main application Logs tab
+            stripped = msg.strip()
+            if stripped:
+                try:
+                    self.parent_app.log(f"[BulkDeploy] {stripped}")
+                except Exception:
+                    pass
         try:
             self.after(0, _write)
         except Exception:
