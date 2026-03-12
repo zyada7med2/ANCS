@@ -13,6 +13,7 @@ Nodes can be repositioned by dragging.
 
 import math
 import tkinter as tk
+from .utils import apply_responsive_geometry
 
 
 # ── Colour palette ────────────────────────────────────────────────────────────
@@ -52,9 +53,8 @@ class TopologyViewer(tk.Toplevel):
     def __init__(self, parent, connector, project_id: str, ancs_devices: list):
         super().__init__(parent)
         self.title("Network Topology")
-        self.geometry("900x620")
-        self.minsize(640, 420)
         self.resizable(True, True)
+        apply_responsive_geometry(self, 900, 620, min_w=640, min_h=420)
         self.configure(bg=_T["bg"])
 
         self._connector    = connector
@@ -83,12 +83,12 @@ class TopologyViewer(tk.Toplevel):
         hdr.pack(fill="x")
         tk.Label(
             hdr, text="Network Topology",
-            font=("Segoe UI", 13, "bold"), fg=_T["text"], bg=_T["card"],
+            font=("TkDefaultFont", 13, "bold"), fg=_T["text"], bg=_T["card"],
         ).pack(side="left", padx=16)
         tk.Button(
             hdr, text="⟳  Refresh", command=self._load_topology,
             bg=_T["sidebar"], fg=_T["text"], relief="flat",
-            font=("Segoe UI", 10), padx=10, pady=4,
+            font=("TkDefaultFont", 10), padx=10, pady=4,
         ).pack(side="right", padx=12)
 
         # Legend
@@ -101,10 +101,10 @@ class TopologyViewer(tk.Toplevel):
             ("Configured ✓",  _T["configured_border"]),
         ]:
             dot = tk.Label(leg, text="●", fg=colour, bg=_T["bg"],
-                           font=("Segoe UI", 12))
+                           font=("TkDefaultFont", 12))
             dot.pack(side="left", padx=(0, 2))
             tk.Label(leg, text=label + "  ", fg=_T["muted"], bg=_T["bg"],
-                     font=("Segoe UI", 9)).pack(side="left")
+                     font=("TkDefaultFont", 9)).pack(side="left")
 
         # Canvas with scrollbars
         frm = tk.Frame(self, bg=_T["bg"])
@@ -124,19 +124,54 @@ class TopologyViewer(tk.Toplevel):
         # Status bar
         self._status_var = tk.StringVar(value="Loading topology…")
         tk.Label(self, textvariable=self._status_var, fg=_T["muted"], bg=_T["bg"],
-                 font=("Segoe UI", 9), anchor="w").pack(fill="x", padx=16, pady=(0, 6))
+                 font=("TkDefaultFont", 9), anchor="w").pack(fill="x", padx=16, pady=(0, 6))
 
     # ── Data loading ─────────────────────────────────────────────────────────
 
     def _load_topology(self):
+        """Start topology load in a background thread to avoid blocking the UI."""
         self._status_var.set("Loading topology…")
         self._canvas.delete("all")
+        import threading
+        threading.Thread(target=self._fetch_topology, daemon=True).start()
+
+    def _fetch_topology(self):
+        """Background thread: fetch GNS3 data then hand off to main thread."""
         try:
             raw_nodes = self._connector.get_nodes(self._project_id)
             raw_links = self._connector.get_links(self._project_id)
         except Exception as exc:
-            self._status_var.set(f"Error: {exc}")
+            self.after(0, lambda e=str(exc): self._status_var.set(f"Error: {e}"))
             return
+
+        # Build a port-name lookup: node_id → {(adapter, port): real_iface_name}
+        # This resolves interface names like "GigabitEthernet0/1" from raw numbers.
+        port_map: dict[str, dict[tuple, str]] = {}
+        for node in raw_nodes:
+            nid = node.get("node_id", "")
+            if not nid:
+                continue
+            try:
+                ports = self._connector.get_node_ports(self._project_id, nid)
+                mapping: dict[tuple, str] = {}
+                for p in ports:
+                    a  = p.get("adapter_number")
+                    pt = p.get("port_number")
+                    nm = p.get("name", "").strip()
+                    if a is not None and pt is not None and nm:
+                        mapping[(int(a), int(pt))] = nm
+                if mapping:
+                    port_map[nid] = mapping
+            except Exception:
+                pass  # if ports can't be fetched, fall back to label/generic name
+
+        self.after(0, lambda n=raw_nodes, l=raw_links, pm=port_map:
+                   self._apply_topology(n, l, pm))
+
+    def _apply_topology(self, raw_nodes, raw_links, port_map: dict = None):
+        """Main-thread callback: process and render topology data."""
+        if port_map is None:
+            port_map = {}
 
         # Build a map from node_id → ANCS name+model (if imported into ANCS)
         meta_map: dict[str, dict] = {}  # node_id → meta
@@ -196,7 +231,7 @@ class TopologyViewer(tk.Toplevel):
                 "configured": configured,
             }
 
-        # Parse links
+        # Parse links — resolve real interface names from port_map or label.text
         for link in raw_links:
             endpoints = link.get("nodes", [])
             if len(endpoints) < 2:
@@ -204,8 +239,8 @@ class TopologyViewer(tk.Toplevel):
             a, b = endpoints[0], endpoints[1]
             nid_a = a.get("node_id", "")
             nid_b = b.get("node_id", "")
-            lbl_a = _port_label(a)
-            lbl_b = _port_label(b)
+            lbl_a = _port_label(a, port_map.get(nid_a, {}))
+            lbl_b = _port_label(b, port_map.get(nid_b, {}))
             self._links.append((nid_a, nid_b, lbl_a, lbl_b))
 
         self._draw()
@@ -236,7 +271,7 @@ class TopologyViewer(tk.Toplevel):
             if lbl_a or lbl_b:
                 lbl_txt = f"{lbl_a}↔{lbl_b}" if (lbl_a and lbl_b) else (lbl_a or lbl_b)
                 c.create_text(mx, my, text=lbl_txt, fill=_T["link_label"],
-                              font=("Segoe UI", 8), tags="link_label")
+                              font=("TkFixedFont", 8), tags="link_label")
 
         # Draw nodes
         hw = _NODE_W // 2
@@ -263,7 +298,7 @@ class TopologyViewer(tk.Toplevel):
                 x, y,
                 text=short,
                 fill="white",
-                font=("Segoe UI", 9, "bold"),
+                font=("TkDefaultFont", 9, "bold"),
                 tags=("node_label", f"node_label_{nid}"),
             )
             # Role sub-label
@@ -273,7 +308,7 @@ class TopologyViewer(tk.Toplevel):
                     x, y + hh + 10,
                     text=role_txt,
                     fill=_T["muted"],
-                    font=("Segoe UI", 8),
+                    font=("TkDefaultFont", 8),
                     tags="role_label",
                 )
 
@@ -309,10 +344,56 @@ class TopologyViewer(tk.Toplevel):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _port_label(endpoint: dict) -> str:
-    """Build a short interface label from a GNS3 link endpoint dict."""
+def _port_label(endpoint: dict, node_ports: dict = None) -> str:
+    """
+    Resolve the real interface name for a GNS3 link endpoint.
+
+    Resolution order (most accurate → least accurate):
+    1. endpoint["label"]["text"]  — GNS3 embeds the name in the link itself
+    2. node_ports lookup          — fetched from /nodes/{id}/ports
+    3. Generic fallback           — e.g. "e0/0" derived from adapter/port numbers
+    """
+    # 1. GNS3 embeds the label directly in the link endpoint
+    label_text = (endpoint.get("label") or {}).get("text", "").strip()
+    if label_text:
+        return _shorten_iface(label_text)
+
     adapter = endpoint.get("adapter_number")
     port    = endpoint.get("port_number")
+
+    # 2. Look up real name from the per-node port map
+    if node_ports and adapter is not None and port is not None:
+        real = node_ports.get((int(adapter), int(port)), "")
+        if real:
+            return _shorten_iface(real)
+
+    # 3. Generic fallback
     if adapter is not None and port is not None:
-        return f"E{adapter}/{port}"
+        return f"e{adapter}/{port}"
     return ""
+
+
+def _shorten_iface(name: str) -> str:
+    """
+    Abbreviate common Cisco interface names to keep topology labels compact.
+
+    Examples:
+        GigabitEthernet0/1  → Gi0/1
+        FastEthernet0/0     → Fa0/0
+        Ethernet0/1         → Et0/1
+        Serial0/0/0         → Se0/0/0
+    """
+    _ABBREV = [
+        ("GigabitEthernet", "Gi"),
+        ("FastEthernet",    "Fa"),
+        ("TenGigabitEthernet", "Te"),
+        ("Ethernet",        "Et"),
+        ("Serial",          "Se"),
+        ("Loopback",        "Lo"),
+        ("Tunnel",          "Tu"),
+        ("Vlan",            "Vl"),
+    ]
+    for full, short in _ABBREV:
+        if name.lower().startswith(full.lower()):
+            return short + name[len(full):]
+    return name
