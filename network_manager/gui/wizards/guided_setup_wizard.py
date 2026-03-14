@@ -11,6 +11,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 from dataclasses import dataclass
 from typing import Callable, List, Dict, Optional
+from ..utils import apply_responsive_geometry
 
 # ──────────────────────────── help text ───────────────────────────────────────
 HELP_TEXT: Dict[str, str] = {
@@ -127,9 +128,8 @@ class GuidedSetupWizard(tk.Toplevel):
             self.withdraw()
         else:
             self.title("Guided Setup — Smart Wizard")
-            self.geometry("960x620")
             self.resizable(True, True)
-            self.minsize(800, 520)
+            apply_responsive_geometry(self, 960, 620, min_w=800, min_h=520)
             self.configure(bg=self.THEME["bg"])
             self._setup_ttk_theme()
 
@@ -177,21 +177,61 @@ class GuidedSetupWizard(tk.Toplevel):
             return
 
         t = self.THEME
+
+        # ── Check for routing ownership conflict ──────────────────────────────
+        ctx = self.project_context
+        routing_owner      = ctx.get("routing_device", "")
+        routing_owner_type = ctx.get("routing_device_type", "")
+
+        # Conflict: a router already owns routing and the current device is a core,
+        # or a core already owns routing and the current device is a router.
+        routing_locked = False
+        lock_reason    = ""
+        if routing_owner:
+            if self.device_role == "router" and routing_owner_type == "core":
+                routing_locked = True
+                lock_reason = (
+                    f"Core switch \"{routing_owner}\" is already configured as the "
+                    f"routing device for this project.\n\n"
+                    f"This router will be set to 'external routing' mode — only "
+                    f"identity and basic settings will be configured here."
+                )
+            elif self.device_role == "core" and routing_owner_type == "router":
+                routing_locked = True
+                lock_reason = (
+                    f"Router \"{routing_owner}\" is already configured as the "
+                    f"routing device for this project.\n\n"
+                    f"This core switch will be set to Layer-2-only mode — VLANs and "
+                    f"port assignments only; no SVI gateways."
+                )
+
+        if routing_locked:
+            self.routing_mode = "external"
+            from tkinter import messagebox as _mb
+            _mb.showinfo(
+                "Routing already assigned",
+                lock_reason,
+                parent=self,
+            )
+            return
+        # ─────────────────────────────────────────────────────────────────────
+
         dlg = tk.Toplevel(self)
         dlg.title("Network setup")
-        dlg.geometry("500x320")
         dlg.resizable(False, False)
         dlg.transient(self)
+        apply_responsive_geometry(dlg, 500, 320)
         dlg.grab_set()
         dlg.configure(bg=t["bg"])
 
         tk.Label(
             dlg, text="How is your network set up?",
-            font=("Segoe UI", 13, "bold"), fg=t["text"], bg=t["bg"],
+            font=("TkDefaultFont", 13, "bold"), fg=t["text"], bg=t["bg"],
         ).pack(anchor="w", padx=18, pady=(18, 4))
         tk.Label(
             dlg, text="Choose the option that matches your topology.",
             fg=t["muted"], bg=t["bg"],
+            font=("TkDefaultFont", 10),
         ).pack(anchor="w", padx=18)
 
         choice = tk.StringVar(value="device")
@@ -218,10 +258,10 @@ class GuidedSetupWizard(tk.Toplevel):
                 f, text=title, variable=choice, value=val,
                 anchor="w", fg=t["text"], bg=t["bg"],
                 selectcolor=t["card"], activebackground=t["bg"],
-                activeforeground=t["text"], font=("Segoe UI", 10, "bold"),
+                activeforeground=t["text"], font=("TkDefaultFont", 10, "bold"),
             ).pack(anchor="w")
             tk.Label(f, text=f"    {sub}", fg=t["muted"], bg=t["bg"],
-                     font=("Segoe UI", 9)).pack(anchor="w")
+                     font=("TkDefaultFont", 9)).pack(anchor="w")
 
         def confirm():
             self.routing_mode = choice.get()
@@ -230,7 +270,7 @@ class GuidedSetupWizard(tk.Toplevel):
         tk.Button(
             dlg, text="Continue →", command=confirm,
             fg="#fff", bg=t["accent"], activebackground=t["accent"],
-            activeforeground="#fff", font=("Segoe UI", 10, "bold"),
+            activeforeground="#fff", font=("TkDefaultFont", 10, "bold"),
             padx=18, pady=6, relief="flat", cursor="hand2",
         ).pack(pady=20)
         dlg.protocol("WM_DELETE_WINDOW", confirm)
@@ -262,16 +302,17 @@ class GuidedSetupWizard(tk.Toplevel):
         t = self.THEME
         win = tk.Toplevel(self)
         win.title(f"Help: {term}")
-        win.geometry("460x210")
         win.resizable(True, True)
         win.transient(self)
+        win.grab_set()   # prevent stacking of multiple identical help popups
+        apply_responsive_geometry(win, 460, 210)
         win.configure(bg=t["bg"])
         frm = tk.Frame(win, padx=16, pady=16, bg=t["bg"])
         frm.pack(fill="both", expand=True)
-        tk.Label(frm, text=term, font=("Segoe UI", 12, "bold"),
+        tk.Label(frm, text=term, font=("TkDefaultFont", 12, "bold"),
                  fg=t["accent"], bg=t["bg"]).pack(anchor="w")
         tk.Label(frm, text=text, wraplength=420, justify="left",
-                 fg=t["text"], bg=t["bg"], font=("Segoe UI", 10)).pack(anchor="w", pady=(6, 0))
+                 fg=t["text"], bg=t["bg"], font=("TkDefaultFont", 10)).pack(anchor="w", pady=(6, 0))
         tk.Button(frm, text="Got it", command=win.destroy,
                   fg="#fff", bg=t["accent"], relief="flat",
                   padx=12, pady=4).pack(pady=(14, 0))
@@ -294,7 +335,7 @@ class GuidedSetupWizard(tk.Toplevel):
             strip,
             text="💡  " + message,
             fg="#90c8f8", bg="#1a3a5c",
-            font=("Segoe UI", 9), justify="left", wraplength=580,
+            font=("TkDefaultFont", 9), justify="left", wraplength=580,
             anchor="w",
         ).pack(side="left", fill="x", expand=True)
 
@@ -305,14 +346,14 @@ class GuidedSetupWizard(tk.Toplevel):
             tk.Button(
                 strip, text="Use", command=lambda: (on_accept(), dismiss()),
                 fg="#fff", bg=t["accent"], activebackground=t["accent"],
-                activeforeground="#fff", font=("Segoe UI", 9, "bold"),
+                activeforeground="#fff", font=("TkDefaultFont", 9, "bold"),
                 padx=8, pady=2, relief="flat", cursor="hand2",
             ).pack(side="right", padx=(6, 2))
 
         tk.Button(
             strip, text="✕", command=dismiss,
             fg=t["muted"], bg="#1a3a5c", activebackground="#1a3a5c",
-            activeforeground=t["text"], font=("Segoe UI", 9),
+            activeforeground=t["text"], font=("TkDefaultFont", 9),
             padx=4, pady=2, relief="flat", cursor="hand2",
         ).pack(side="right")
 
@@ -485,7 +526,7 @@ class GuidedSetupWizard(tk.Toplevel):
         sidebar.pack_propagate(False)
 
         tk.Label(sidebar, text="Guided Setup",
-                 font=("Segoe UI", 13, "bold"), fg=t["text"], bg=t["sidebar"]
+                 font=("TkDefaultFont", 13, "bold"), fg=t["text"], bg=t["sidebar"]
                  ).pack(anchor="w", padx=12, pady=(14, 4))
 
         role_labels = {
@@ -497,14 +538,14 @@ class GuidedSetupWizard(tk.Toplevel):
         tk.Label(
             sidebar,
             text=f"{self.device_name}\n{role_labels.get(self.device_role,'')}\n{routing_note}",
-            justify="left", fg=t["accent"], bg=t["sidebar"], font=("Segoe UI", 9),
+            justify="left", fg=t["accent"], bg=t["sidebar"], font=("TkDefaultFont", 9),
         ).pack(anchor="w", padx=12, pady=(0, 10))
 
         self.listbox = tk.Listbox(
             sidebar, activestyle="none",
             bg=t["bg"], fg=t["text"],
             selectbackground=t["accent"], selectforeground="#fff",
-            borderwidth=0, highlightthickness=0, font=("Segoe UI", 9),
+            borderwidth=0, highlightthickness=0, font=("TkDefaultFont", 9),
         )
         self.listbox.pack(fill="both", expand=True, padx=6, pady=(0, 8))
         for step in self.steps:
@@ -526,7 +567,7 @@ class GuidedSetupWizard(tk.Toplevel):
             style="Wizard.Horizontal.TProgressbar",
         ).pack(side="left", padx=(0, 10))
 
-        self.lbl_status = tk.Label(nav, text="", fg=t["muted"], bg=t["bg"], font=("Segoe UI", 9))
+        self.lbl_status = tk.Label(nav, text="", fg=t["muted"], bg=t["bg"], font=("TkDefaultFont", 9))
         self.lbl_status.pack(side="left")
 
         self.btn_back = tk.Button(
@@ -541,7 +582,7 @@ class GuidedSetupWizard(tk.Toplevel):
             nav, text="Next  ▶", command=self.next_step,
             fg="#fff", bg=t["accent"],
             activebackground=t["accent"], activeforeground="#fff",
-            font=("Segoe UI", 10, "bold"), padx=18, pady=5,
+            font=("TkDefaultFont", 10, "bold"), padx=18, pady=5,
             relief="flat", cursor="hand2",
         )
         self.btn_next.pack(side="right")
@@ -639,7 +680,7 @@ class GuidedSetupWizard(tk.Toplevel):
         # Header
         hdr = tk.Frame(self.content, bg=t["card"], padx=16, pady=10)
         hdr.pack(fill="x")
-        tk.Label(hdr, text=step.title, font=("Segoe UI", 16, "bold"),
+        tk.Label(hdr, text=step.title, font=("TkDefaultFont", 16, "bold"),
                  fg=t["text"], bg=t["card"]).pack(anchor="w")
         tk.Label(hdr, text=step.description, wraplength=700, justify="left",
                  fg=t["muted"], bg=t["card"]).pack(anchor="w", pady=(2, 0))
@@ -680,7 +721,7 @@ class GuidedSetupWizard(tk.Toplevel):
     def _help_link(self, parent: tk.Widget, term: str) -> tk.Label:
         t = self.THEME
         lbl = tk.Label(parent, text=f"?  What is {term}?",
-                       font=("Segoe UI", 9, "underline"),
+                       font=("TkDefaultFont", 9, "underline"),
                        fg=t["accent"], cursor="hand2", bg=t["card"])
         lbl.bind("<Button-1>", lambda _e: self._show_help(term))
         return lbl
@@ -701,7 +742,7 @@ class GuidedSetupWizard(tk.Toplevel):
     def _lbl(self, parent: tk.Widget, text: str,
              muted: bool = False, bold: bool = False) -> tk.Label:
         t = self.THEME
-        font = ("Segoe UI", 10, "bold") if bold else ("Segoe UI", 10)
+        font = ("TkDefaultFont", 10, "bold") if bold else ("TkDefaultFont", 10)
         fg   = t["muted"] if muted else t["text"]
         return tk.Label(parent, text=text, fg=fg, bg=t["card"],
                         font=font, justify="left")
@@ -714,7 +755,7 @@ class GuidedSetupWizard(tk.Toplevel):
         for label, w in cols:
             tk.Label(hdr, text=label, width=w, anchor="w",
                      fg=t["muted"], bg=t["border"],
-                     font=("Segoe UI", 9, "bold")).pack(side="left", padx=5, pady=3)
+                     font=("TkDefaultFont", 9, "bold")).pack(side="left", padx=5, pady=3)
         return hdr
 
     def _card(self, parent: tk.Widget, padx: int = 10, pady: int = 8) -> tk.Frame:
@@ -780,9 +821,9 @@ class GuidedSetupWizard(tk.Toplevel):
 
             left = tk.Frame(card, bg=t["sidebar"])
             left.pack(side="left", fill="both", expand=True)
-            tk.Label(left, text=name, font=("Segoe UI", 11, "bold"),
+            tk.Label(left, text=name, font=("TkDefaultFont", 11, "bold"),
                      fg=t["text"], bg=t["sidebar"]).pack(anchor="w")
-            tk.Label(left, text=desc, font=("Segoe UI", 9),
+            tk.Label(left, text=desc, font=("TkDefaultFont", 9),
                      fg=t["muted"], bg=t["sidebar"]).pack(anchor="w")
 
             right = tk.Frame(card, bg=t["sidebar"])
@@ -792,7 +833,7 @@ class GuidedSetupWizard(tk.Toplevel):
                 command=lambda k=key: self._quick_generate(k),
                 fg="#fff", bg=t["accent"],
                 activebackground=t["accent"], activeforeground="#fff",
-                font=("Segoe UI", 9, "bold"), padx=12, pady=5,
+                font=("TkDefaultFont", 9, "bold"), padx=12, pady=5,
                 relief="flat", cursor="hand2",
             ).pack(side="left", padx=(0, 8))
             tk.Button(
@@ -800,7 +841,7 @@ class GuidedSetupWizard(tk.Toplevel):
                 command=lambda k=key: self._apply_preset_and_next(k),
                 fg=t["text"], bg=t["card"],
                 activebackground=t["border"], activeforeground=t["text"],
-                font=("Segoe UI", 9), padx=12, pady=5,
+                font=("TkDefaultFont", 9), padx=12, pady=5,
                 relief="flat", cursor="hand2",
             ).pack(side="left")
 
@@ -934,7 +975,7 @@ class GuidedSetupWizard(tk.Toplevel):
 
             tk.Label(popup, text="Tick the ports for this VLAN:",
                      fg=t["muted"], bg=t["sidebar"],
-                     font=("Segoe UI", 9)).pack(anchor="w", padx=12, pady=(10, 4))
+                     font=("TkDefaultFont", 9)).pack(anchor="w", padx=12, pady=(10, 4))
 
             # Determine which ports are already assigned to OTHER VLANs
             already_used: set = set()
@@ -965,7 +1006,7 @@ class GuidedSetupWizard(tk.Toplevel):
                     row,
                     text=iface + label_extra,
                     fg=t["muted"] if state == "disabled" else t["text"],
-                    bg=t["sidebar"], font=("Segoe UI", 9),
+                    bg=t["sidebar"], font=("TkDefaultFont", 9),
                 ).pack(side="left")
                 check_vars[iface] = var
 
@@ -980,7 +1021,7 @@ class GuidedSetupWizard(tk.Toplevel):
                 command=_apply,
                 fg="#fff", bg=t["accent"],
                 activebackground=t["accent"], activeforeground="#fff",
-                font=("Segoe UI", 9, "bold"), padx=14, pady=4,
+                font=("TkDefaultFont", 9, "bold"), padx=14, pady=4,
                 relief="flat", cursor="hand2",
             ).pack(pady=(8, 10))
 
@@ -1024,7 +1065,7 @@ class GuidedSetupWizard(tk.Toplevel):
                         text=_btn_label(vport),
                         fg=t["text"], bg=t["sidebar"],
                         activebackground=t["card"], activeforeground=t["text"],
-                        font=("Segoe UI", 9), width=30,
+                        font=("TkDefaultFont", 9), width=30,
                         relief="flat", cursor="hand2", anchor="w",
                     )
                     btn.config(command=lambda pv=ports_v, b=btn, idx=i: _open_port_picker(pv, b, idx))
@@ -1067,6 +1108,7 @@ class GuidedSetupWizard(tk.Toplevel):
 
     def _validate_vlans(self) -> bool:
         self.vlans = []
+        seen_ids: set = set()
         for id_v, name_v, ports_v in self.vlan_row_entries:
             vid   = id_v.get().strip()
             vname = name_v.get().strip()
@@ -1081,6 +1123,12 @@ class GuidedSetupWizard(tk.Toplevel):
                 messagebox.showerror("Invalid VLAN ID",
                                      f"VLAN ID must be 1–4094. Got: {vid!r}", parent=self)
                 return False
+            if vid in seen_ids:
+                messagebox.showerror("Duplicate VLAN ID",
+                                     f"VLAN ID {vid} appears more than once.\n"
+                                     "Each VLAN must have a unique ID.", parent=self)
+                return False
+            seen_ids.add(vid)
             self.vlans.append({"id": vid, "name": vname or f"VLAN{vid}", "ports": vport})
         if not self.vlans:
             messagebox.showerror("Required", "Add at least one VLAN.", parent=self)
@@ -1161,14 +1209,37 @@ class GuidedSetupWizard(tk.Toplevel):
         rebuild()
 
     def _validate_routing(self) -> bool:
+        import ipaddress as _ip
         if self.routing_mode != "device":
             self.routing_entries = []
             return True
-        self.routing_entries = [
-            {"vlan": vid, "name": vname, "ip": ip_v.get().strip(), "mask": mask_v.get().strip()}
-            for vid, vname, ip_v, mask_v in self.routing_row_entries
-            if ip_v.get().strip()
-        ]
+        self.routing_entries = []
+        for vid, vname, ip_v, mask_v in self.routing_row_entries:
+            ip_str   = ip_v.get().strip()
+            mask_str = mask_v.get().strip()
+            if not ip_str:
+                continue
+            # Validate IP format
+            try:
+                _ip.ip_address(ip_str)
+            except ValueError:
+                messagebox.showerror("Invalid IP",
+                                     f"VLAN {vid}: '{ip_str}' is not a valid IP address.",
+                                     parent=self)
+                return False
+            # Validate mask format if provided
+            if mask_str:
+                try:
+                    _ip.ip_address(mask_str)
+                except ValueError:
+                    messagebox.showerror("Invalid Mask",
+                                         f"VLAN {vid}: '{mask_str}' is not a valid subnet mask.",
+                                         parent=self)
+                    return False
+            self.routing_entries.append({
+                "vlan": vid, "name": vname,
+                "ip": ip_str, "mask": mask_str or "255.255.255.0",
+            })
         return True
 
     # ══════════════════════════════════════════════════════════════════════════
@@ -1390,11 +1461,11 @@ class GuidedSetupWizard(tk.Toplevel):
                 activebackground=bg, selectcolor=t["card"],
             ).pack(side="left")
             tk.Label(rf, text=f"VLAN {vid}  ({vname})",
-                     font=("Segoe UI", 10, "bold"),
+                     font=("TkDefaultFont", 10, "bold"),
                      fg=t["text"], bg=bg).pack(side="left", padx=(4, 14))
             tk.Label(rf,
                      text=f"network {net}  ·  gateway {gw}  ·  pool {rng}",
-                     fg=t["muted"], bg=bg, font=("Segoe UI", 9)).pack(side="left")
+                     fg=t["muted"], bg=bg, font=("TkDefaultFont", 9)).pack(side="left")
             self.dhcp_check_vars.append((var, entry))
 
     def _validate_dhcp(self) -> bool:
@@ -1462,7 +1533,7 @@ class GuidedSetupWizard(tk.Toplevel):
             def_card,
             text="Add a default route to the internet / upstream router",
             variable=self.default_route_var,
-            font=("Segoe UI", 10, "bold"),
+            font=("TkDefaultFont", 10, "bold"),
             fg=t["text"], bg=t["sidebar"],
             selectcolor=t["card"], activebackground=t["sidebar"],
             activeforeground=t["text"],
@@ -1585,7 +1656,7 @@ class GuidedSetupWizard(tk.Toplevel):
             card,
             text="Enable RIPv2 and advertise all connected networks",
             variable=self.enable_rip_var,
-            font=("Segoe UI", 10, "bold"),
+            font=("TkDefaultFont", 10, "bold"),
             fg=t["text"], bg=t["sidebar"],
             selectcolor=t["card"], activebackground=t["sidebar"],
             activeforeground=t["text"],
@@ -1792,17 +1863,22 @@ class GuidedSetupWizard(tk.Toplevel):
 
     def _validate_acl(self) -> bool:
         self.acl_rules = []
-        acl_num = 101
+        # Derive ACL number from preset data if available; default to 101 (extended)
+        acl_num = getattr(self, "_preset_acl_num", 101)
         for var, src, dst in self.acl_scenario_vars:
             if not var.get() or not src:
                 continue
-            self.acl_rules.append({
+            entry = {
                 "acl #":    str(acl_num),
                 "action":   "deny",
                 "source":   src["network"],
                 "wildcard": src["wildcard"],
                 "remark":   f"Block {src['name']} from {dst['name']}" if dst else src["name"],
-            })
+            }
+            if dst and dst.get("network"):
+                entry["destination"] = dst["network"]
+                entry["destination_wildcard"] = dst.get("wildcard", "")
+            self.acl_rules.append(entry)
         if self.acl_rules:
             # Always end with permit-all so we don't black-hole everything
             self.acl_rules.append({
@@ -1913,6 +1989,8 @@ class GuidedSetupWizard(tk.Toplevel):
             "guided_rip":           self._render_rip_block(),
             "guided_dhcp":          self._render_dhcp_block(),
             "guided_acl":           self._render_acl_block(),
+            # Always persist configuration — must be the last block sent
+            "guided_save":          "write memory",
         }
         for key, value in templates.items():
             if value.strip():
@@ -1962,14 +2040,32 @@ class GuidedSetupWizard(tk.Toplevel):
     def _render_identity_block(self) -> str:
         if not self.identity_data:
             return ""
+        hostname = self.identity_data.get("hostname", self.device_name)
+        enable_pw = self.identity_data.get("enable", "cisco")
+        domain = self.identity_data.get("domain", "")
         lines = [
             "configure terminal",
-            f"hostname {self.identity_data.get('hostname', self.device_name)}",
+            f"hostname {hostname}",
+            "no ip domain-lookup",
         ]
-        if self.identity_data.get("domain"):
-            lines.append(f"ip domain-name {self.identity_data['domain']}")
+        if domain:
+            lines.append(f"ip domain-name {domain}")
         lines += [
-            f"enable secret {self.identity_data.get('enable')}",
+            "!",
+            "! ---------------------------------------------------------------",
+            "! SECURITY NOTE:",
+            "! Passwords, enable secrets, and login authentication have been",
+            "! intentionally left out of this auto-generated configuration.",
+            "! Configuring device authentication incorrectly can lock you out",
+            "! of the device entirely. Please set up 'enable secret',",
+            "! 'username', and 'line con/vty login' commands manually with",
+            "! the assistance of a qualified network professional.",
+            "! ---------------------------------------------------------------",
+            "!",
+            "line vty 0 4",
+            " transport input telnet ssh",
+            " logging synchronous",
+            "exit",
             "!",
             "end",
         ]
@@ -1982,7 +2078,8 @@ class GuidedSetupWizard(tk.Toplevel):
         lines = []
 
         if self.device_role == "core":
-            # Older Catalyst / IOS images (3550, 3560 with older IOS) use vlan database
+            # Older Cisco IOU / Catalyst images use the vlan database CLI mode
+            # (configure terminal → vlan X is not supported on these platforms)
             lines.append("vlan database")
             for v in self.vlans:
                 name = v.get("name") or f"VLAN{v.get('id')}"
@@ -2040,7 +2137,7 @@ class GuidedSetupWizard(tk.Toplevel):
             for port in [p.strip() for p in ports.split(",") if p.strip()]:
                 lines.append(f"interface {port}")
                 if mode == "trunk":
-                    # dot1q encapsulation needed on older IOS before setting trunk mode
+                    # dot1q encapsulation must be set before trunk mode on older IOS/IOU
                     lines.append(" switchport trunk encapsulation dot1q")
                     lines.append(" switchport mode trunk")
                     if allowed and allowed.lower() != "all":
@@ -2125,13 +2222,24 @@ class GuidedSetupWizard(tk.Toplevel):
         seen = set()
         for e in self.routing_entries:
             ip = e.get("ip", "")
-            p  = ip.split(".")
-            if len(p) == 4:
-                # RIP network command uses classful network
-                net = f"{p[0]}.{p[1]}.{p[2]}.0"
-                if net not in seen:
-                    seen.add(net)
-                    lines.append(f" network {net}")
+            try:
+                import ipaddress as _ip
+                addr = _ip.ip_address(ip)
+                # Derive the classful network so IOS interprets the command correctly
+                first_octet = int(str(addr).split(".")[0])
+                if first_octet <= 127:
+                    classful_net = f"{str(addr).split('.')[0]}.0.0.0"
+                elif first_octet <= 191:
+                    parts = str(addr).split(".")
+                    classful_net = f"{parts[0]}.{parts[1]}.0.0"
+                else:
+                    parts = str(addr).split(".")
+                    classful_net = f"{parts[0]}.{parts[1]}.{parts[2]}.0"
+                if classful_net not in seen:
+                    seen.add(classful_net)
+                    lines.append(f" network {classful_net}")
+            except Exception:
+                pass
         lines += ["exit", "!", "end"]
         return "\n".join(lines)
 
@@ -2171,12 +2279,16 @@ class GuidedSetupWizard(tk.Toplevel):
                 except (IndexError, ValueError):
                     pass
 
-            lines.append(f"ip dhcp pool {pool.get('pool', 'POOL')}")
+            # Sanitize pool name: spaces and special chars break IOS syntax
+            raw_name = pool.get("pool") or pool.get("name") or "POOL"
+            pool_name = raw_name.replace(" ", "_").replace("/", "-")
+            lines.append(f"ip dhcp pool {pool_name}")
             lines.append(f" network {pool.get('network')} {pool.get('mask', '255.255.255.0')}")
             if gw:
                 lines.append(f" default-router {gw}")
             if pool.get("dns"):
                 lines.append(f" dns-server {pool['dns']}")
+            lines.append(" lease 0 2")   # 2-hour lease — suitable for GNS3 labs
             lines.append("exit")
         lines += ["!", "end"]
         return "\n".join(lines)
@@ -2188,45 +2300,62 @@ class GuidedSetupWizard(tk.Toplevel):
         lines = ["configure terminal"]
         is_extended = int(acl_num) >= 100  # Standard: 1-99, Extended: 100-199
 
-        # Build the numbered ACL — use correct syntax for standard vs extended
+        # Build the numbered ACL entries
         for rule in self.acl_rules:
             num    = rule.get("acl #", "101")
             action = rule.get("action", "permit")
             src    = rule.get("source", "any")
             wc     = rule.get("wildcard", "")
+            dst    = rule.get("destination", "")
+            dst_wc = rule.get("destination_wildcard", "")
             remark = rule.get("remark", "")
             if remark:
                 lines.append(f"access-list {num} remark {remark}")
             if is_extended:
-                # Extended ACL syntax needs protocol + dst
                 if src.lower() == "any":
                     lines.append(f"access-list {num} {action} ip any any")
+                elif dst and dst.lower() != "any":
+                    lines.append(
+                        f"access-list {num} {action} ip {src} {wc} {dst} {dst_wc}"
+                    )
                 else:
                     lines.append(f"access-list {num} {action} ip {src} {wc} any")
             else:
-                # Standard ACL syntax — no protocol or dst keyword
                 if src.lower() == "any":
                     lines.append(f"access-list {num} {action} any")
                 else:
                     lines.append(f"access-list {num} {action} {src} {wc}")
         lines.append("!")
 
-        # Only apply ACL to interfaces for extended ACLs (100-199) used for inter-VLAN filtering
-        # Standard ACLs (1-99) are applied manually by the user to specific interfaces
-        if is_extended and self.routing_entries:
-            for e in self.routing_entries:
-                vlan = e.get("vlan")
-                if not vlan:
+        # Apply ACL only to each rule's SOURCE VLAN interface (not every interface).
+        # Standard ACLs (1-99) are not applied here — the user applies them manually.
+        if is_extended:
+            applied_ifaces = set()
+            for rule in self.acl_rules:
+                src_net = rule.get("source", "")
+                if not src_net or src_net.lower() == "any":
                     continue
-                if self.device_role == "router" and self.router_interface:
-                    iface = f"{self.router_interface}.{vlan}"
-                else:
-                    iface = f"Vlan{vlan}"
-                lines += [
-                    f"interface {iface}",
-                    f" ip access-group {acl_num} in",
-                    "exit",
-                ]
+                # Match the source network against routing entries to find the VLAN
+                for e in self.routing_entries:
+                    e_ip = e.get("ip", "")
+                    e_net = ".".join(e_ip.split(".")[:3]) + ".0" if e_ip else ""
+                    src_prefix = ".".join(src_net.split(".")[:3]) + ".0" if src_net else ""
+                    if e_net and src_prefix and e_net == src_prefix:
+                        vlan = e.get("vlan")
+                        if not vlan:
+                            continue
+                        if self.device_role == "router" and self.router_interface:
+                            iface = f"{self.router_interface}.{vlan}"
+                        else:
+                            iface = f"Vlan{vlan}"
+                        if iface not in applied_ifaces:
+                            applied_ifaces.add(iface)
+                            lines += [
+                                f"interface {iface}",
+                                f" ip access-group {acl_num} in",
+                                "exit",
+                            ]
+
         lines += ["!", "end"]
         return "\n".join(lines)
 

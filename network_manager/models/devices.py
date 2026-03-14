@@ -20,9 +20,15 @@ class DeviceModel:
         self.templates[name] = text
 
     def build_full_config(self):
+        """Build the complete configuration string.
+
+        Headers use the format  '! BLOCK N: title'  so that Sender.split_into_blocks()
+        can parse them correctly and apply per-block delays.
+        """
         out = []
-        for k in self.get_template_names():
-            out.append(f"! ===== {k} =====")
+        for idx, k in enumerate(self.get_template_names(), start=1):
+            title = k.replace("_", " ").title()
+            out.append(f"! BLOCK {idx}: {title}")
             out.append(self.get_template(k))
         return "\n".join(out)
 
