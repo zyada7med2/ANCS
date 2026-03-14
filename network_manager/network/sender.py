@@ -85,38 +85,42 @@ class Sender:
         if serial is None:
             log_fn("[serial] pyserial not installed")
             return False
+        ser = None
         try:
             log_fn(f"[serial] opening {port} @ {baud}")
             ser = serial.Serial(port=port, baudrate=baud, timeout=1)
             time.sleep(0.5)
-            
-            # Split into blocks
+
             blocks = Sender.split_into_blocks(text)
-            
+
             if len(blocks) > 1:
                 log_fn(f"[serial] detected {len(blocks)} configuration blocks")
-                
+
             for idx, (title, block_content) in enumerate(blocks, 1):
                 if len(blocks) > 1:
                     log_fn(f"[serial] sending block {idx}/{len(blocks)}: {title}")
-                
+
                 for line in block_content.splitlines():
                     if line.strip():
                         ser.write((line + "\r\n").encode("utf-8"))
                         log_fn(f"[serial] sent: {line}")
                         time.sleep(newline_delay)
-                
-                # Wait between blocks
+
                 if idx < len(blocks):
                     log_fn(f"[serial] waiting {block_delay}s before next block...")
                     time.sleep(block_delay)
-            
-            ser.close()
+
             log_fn("[serial] finished ✅")
             return True
         except Exception as e:
             log_fn(f"[serial] error: {e}")
             return False
+        finally:
+            if ser is not None:
+                try:
+                    ser.close()
+                except Exception:
+                    pass
 
     @staticmethod
     async def _send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0):
@@ -253,7 +257,9 @@ class Sender:
 
     @staticmethod
     async def _verify_telnet_async(
-        log_fn, host: str, port: int, commands: list[str], timeout: int = 10
+        log_fn, host: str, port: int, commands: list[str],
+        username: str = "", password: str = "", enable_pw: str = "",
+        timeout: int = 10
     ) -> dict[str, str]:
         """
         Open a new Telnet connection, run each show command, and capture output.
@@ -267,7 +273,7 @@ class Sender:
             writer.write(line + "\r\n")
             await asyncio.sleep(0.15)
 
-        async def read_until_prompt(timeout_sec: float = 3.0) -> str:
+        async def read_until_prompt(timeout_sec: float = 5.0) -> str:
             buf = ""
             deadline = asyncio.get_event_loop().time() + timeout_sec
             while asyncio.get_event_loop().time() < deadline:
@@ -275,7 +281,6 @@ class Sender:
                     chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
                     if chunk:
                         buf += chunk
-                        # Stop when we see a router/switch prompt (ends with > or #)
                         stripped = buf.rstrip()
                         if stripped and stripped[-1] in (">", "#"):
                             break
@@ -285,8 +290,10 @@ class Sender:
 
         results: dict[str, str] = {}
         try:
-            # Wait for initial prompt
-            await read_until_prompt(3.0)
+            # Brief settling pause for GNS3 console banner
+            await asyncio.sleep(0.6)
+            await read_until_prompt(3.0)  # drain banner / reach prompt
+
             await write_line("terminal length 0")
             await read_until_prompt(2.0)
 
@@ -308,7 +315,9 @@ class Sender:
 
     @staticmethod
     def verify_telnet(
-        log_fn, host: str, port: int, commands: list[str], timeout: int = 10
+        log_fn, host: str, port: int, commands: list[str],
+        username: str = "", password: str = "", enable_pw: str = "",
+        timeout: int = 10
     ) -> dict[str, str]:
         """
         Connect via Telnet, run `commands`, and return {command: raw_output}.
@@ -319,7 +328,10 @@ class Sender:
             return {}
         try:
             return asyncio.run(
-                Sender._verify_telnet_async(log_fn, host, port, commands, timeout)
+                Sender._verify_telnet_async(
+                    log_fn, host, port, commands,
+                    username, password, enable_pw, timeout
+                )
             )
         except Exception as exc:
             log_fn(f"[verify] failed: {exc}")
@@ -332,11 +344,17 @@ class Sender:
         if paramiko is None:
             log_fn("[ssh] paramiko not installed")
             return False
+        client = None
+        chan = None
         try:
             log_fn(f"[ssh] connecting to {host}:{port} as {username}")
             client = paramiko.SSHClient()
             client.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-            client.connect(hostname=host, port=port, username=username, password=password, timeout=timeout, look_for_keys=False)
+            client.connect(
+                hostname=host, port=port,
+                username=username, password=password,
+                timeout=timeout, look_for_keys=False, allow_agent=False,
+            )
             chan = client.invoke_shell()
             time.sleep(0.4)
             chan.send("terminal length 0\n")
@@ -347,7 +365,6 @@ class Sender:
                 chan.send(enable_pw + "\n")
                 time.sleep(0.1)
 
-            # Reduce noise that can corrupt long commands (syslog/paging)
             try:
                 chan.send("configure terminal\n")
                 time.sleep(0.2)
@@ -357,45 +374,45 @@ class Sender:
                 time.sleep(0.2)
                 log_fn("[ssh] disabled console logging for this session")
             except Exception:
-                # Best-effort; continue even if device doesn't like these
                 pass
-            
-            # Split into blocks
+
             blocks = Sender.split_into_blocks(text)
-            
+
             if len(blocks) > 1:
                 log_fn(f"[ssh] detected {len(blocks)} configuration blocks")
-            
+
             for idx, (title, block_content) in enumerate(blocks, 1):
                 if len(blocks) > 1:
                     log_fn(f"[ssh] sending block {idx}/{len(blocks)}: {title}")
-                
+
                 for line in block_content.splitlines():
                     if line.strip():
                         chan.send(line + "\n")
                         log_fn(f"[ssh] sent: {line}")
                         time.sleep(0.2)
-                
-                # Wait between blocks
+
                 if idx < len(blocks):
                     log_fn(f"[ssh] waiting {block_delay}s before next block...")
                     time.sleep(block_delay)
-            
+
             time.sleep(0.4)
             output = ""
             while chan.recv_ready():
-                output += chan.recv(9999).decode('utf-8', errors='ignore')
+                output += chan.recv(9999).decode("utf-8", errors="ignore")
             if output.strip():
                 log_fn("[ssh] output:\n" + output[:2000])
             else:
                 log_fn("[ssh] no output")
-            try:
-                chan.close()
-            except Exception:
-                pass
-            client.close()
+
             log_fn("[ssh] finished")
             return True
         except Exception as e:
             log_fn(f"[ssh] error: {e}")
             return False
+        finally:
+            for obj in (chan, client):
+                if obj is not None:
+                    try:
+                        obj.close()
+                    except Exception:
+                        pass

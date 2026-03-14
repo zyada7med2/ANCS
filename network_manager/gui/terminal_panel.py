@@ -15,6 +15,7 @@ import threading
 import asyncio
 import queue
 import time
+from .utils import apply_responsive_geometry
 
 try:
     import telnetlib3
@@ -37,17 +38,20 @@ class TerminalPanel(tk.Toplevel):
         "input_bg": "#161B22",
     }
 
-    def __init__(self, parent, device_name: str, host: str, port: int):
+    def __init__(self, parent, device_name: str, host: str, port: int,
+                 username: str = "", password: str = "", enable_pw: str = ""):
         super().__init__(parent)
         self.title(f"Terminal  —  {device_name}")
-        self.geometry("740x500")
-        self.minsize(540, 360)
         self.resizable(True, True)
+        apply_responsive_geometry(self, 740, 500, min_w=540, min_h=360)
         self.configure(bg=self.COLORS["bg"])
 
         self.device_name = device_name
         self.host = host
         self.port = port
+        self.username  = username
+        self.password  = password
+        self.enable_pw = enable_pw
 
         self._running = False
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -78,25 +82,25 @@ class TerminalPanel(tk.Toplevel):
 
         tk.Label(
             hdr, text=f"  {self.device_name}",
-            font=("Segoe UI", 13, "bold"), fg=t["text"], bg=t["card"]
+            font=("TkDefaultFont", 13, "bold"), fg=t["text"], bg=t["card"]
         ).pack(side="left")
 
         self.lbl_status = tk.Label(
             hdr, text="⬤ disconnected",
-            fg=t["danger"], bg=t["card"], font=("Segoe UI", 10)
+            fg=t["danger"], bg=t["card"], font=("TkDefaultFont", 10)
         )
         self.lbl_status.pack(side="left", padx=10)
 
         tk.Label(
             hdr, text=f"{self.host}:{self.port}  ",
-            fg=t["muted"], bg=t["card"], font=("Segoe UI", 9)
+            fg=t["muted"], bg=t["card"], font=("TkDefaultFont", 9)
         ).pack(side="right")
 
         tk.Button(
             hdr, text="Clear",
             bg=t["sidebar"], fg=t["muted"],
             relief="flat", padx=10, pady=4,
-            font=("Segoe UI", 9), cursor="hand2",
+            font=("TkDefaultFont", 9), cursor="hand2",
             command=self._clear_output
         ).pack(side="right", padx=(0, 4))
 
@@ -104,7 +108,7 @@ class TerminalPanel(tk.Toplevel):
             hdr, text="Disconnect",
             bg="#3a1818", fg=t["danger"],
             relief="flat", padx=10, pady=4,
-            font=("Segoe UI", 9), cursor="hand2",
+            font=("TkDefaultFont", 9), cursor="hand2",
             command=self._disconnect
         ).pack(side="right", padx=(0, 4))
 
@@ -112,7 +116,7 @@ class TerminalPanel(tk.Toplevel):
             hdr, text="Connect",
             bg="#183a18", fg=t["success"],
             relief="flat", padx=12, pady=4,
-            font=("Segoe UI", 9, "bold"), cursor="hand2",
+            font=("TkDefaultFont", 9, "bold"), cursor="hand2",
             command=self._connect
         )
         self.btn_connect.pack(side="right", padx=(0, 8))
@@ -164,7 +168,7 @@ class TerminalPanel(tk.Toplevel):
             inp, text="Send",
             bg=t["accent"], fg="white",
             relief="flat", padx=16, pady=4,
-            font=("Segoe UI", 10, "bold"), cursor="hand2",
+            font=("TkDefaultFont", 10, "bold"), cursor="hand2",
             command=self._send_command
         ).pack(side="right", padx=(0, 8))
 
@@ -252,12 +256,13 @@ class TerminalPanel(tk.Toplevel):
                     break
             return buf
 
-        # Read initial banner
+        # Drain GNS3 banner, then show it in the terminal window
+        await asyncio.sleep(0.5)
         banner = await read_burst(2.0)
-        if banner:
+        if banner.strip():
             self._resp_queue.put(("output", banner))
 
-        # Disable paging
+        # Disable paging (silently — don't show the response)
         writer.write("terminal length 0\r\n")
         await asyncio.sleep(0.3)
         await read_burst(1.0)  # discard
