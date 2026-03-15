@@ -14,10 +14,79 @@ import json
 import os
 import sys
 import ipaddress
+import base64
 from typing import Optional
 
+
+def _obfuscate(plaintext: str) -> str:
+    """Base64-encode a password before storing. Not encryption — just prevents
+    casual shoulder-surfing when the DB file is opened in a text editor."""
+    if not plaintext:
+        return ""
+    return base64.b64encode(plaintext.encode("utf-8")).decode("ascii")
+
+
+def _deobfuscate(stored: str) -> str:
+    """Decode a base64-stored password. Falls back to returning as-is so
+    legacy rows (plain text) still work."""
+    if not stored:
+        return ""
+    try:
+        return base64.b64decode(stored.encode("ascii")).decode("utf-8")
+    except Exception:
+        return stored  # legacy plain-text value
+
+
+def _truncate(text: str, max_chars: int = 22) -> str:
+    """Return text truncated with an ellipsis if it exceeds max_chars."""
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1] + "…"
+
+
+class _Tooltip:
+    """
+    Lightweight hover tooltip for any tkinter widget.
+
+    Usage:
+        _Tooltip(widget, "Full text shown on hover")
+    """
+
+    def __init__(self, widget, text: str):
+        self._widget = widget
+        self._text   = text
+        self._tip_win: Optional[tk.Toplevel] = None
+        widget.bind("<Enter>",  self._show, add="+")
+        widget.bind("<Leave>",  self._hide, add="+")
+        widget.bind("<Destroy>", self._hide, add="+")
+
+    def _show(self, event=None):
+        if self._tip_win or not self._text:
+            return
+        x = self._widget.winfo_rootx() + 20
+        y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+        self._tip_win = tw = tk.Toplevel(self._widget)
+        tw.wm_overrideredirect(True)
+        tw.wm_geometry(f"+{x}+{y}")
+        tk.Label(
+            tw, text=self._text,
+            background="#1F2630", foreground="#C9D1D9",
+            font=("TkDefaultFont", 10),
+            relief="solid", borderwidth=1,
+            padx=6, pady=3,
+        ).pack()
+
+    def _hide(self, event=None):
+        if self._tip_win:
+            try:
+                self._tip_win.destroy()
+            except Exception:
+                pass
+            self._tip_win = None
+
+
 # Import from our modules
-from ..config import DB_PATH, GNS3_DEFAULT_URL, conn, cur
+from ..config import DB_PATH, GNS3_DEFAULT_URL, conn, cur, db_lock, _db_error
 from ..models import DeviceModel, RouterModel, SwitchModel, CoreSwitchModel
 from ..network import Sender, GNS3Connector
 from .dialogs import TextEditorPopup
@@ -26,6 +95,7 @@ from .calculators import SubnetCalculator
 from .topology_viewer import TopologyViewer
 from .monitor import DeviceMonitor
 from .terminal_panel import TerminalPanel
+from .utils import apply_responsive_geometry
 
 # Optional libs
 try:
@@ -86,14 +156,57 @@ class App(ctk.CTk):
         self.last_gns3_project = None
         self._icon_photo = None  # Keep reference to prevent garbage collection
 
+        # Track whether any background operation is in progress (used by close guard)
+        self._send_in_progress = False
+
         self._build_ui()
 
-        # No default devices - workspace populated only from GNS3 project import
+        # Warn if the database could not be opened
+        if _db_error:
+            self.after(200, lambda: messagebox.showwarning(
+                "Database Error",
+                f"Could not open the database:\n{_db_error}\n\n"
+                "The app will run in read-only mode. Saving and logging will not work.",
+                parent=self
+            ))
+
+        # Handle window close: warn when a send is in progress
+        self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
         # try auto-connect to gns3 in background
         threading.Thread(target=self._auto_connect_gns3, daemon=True).start()
 
     def _build_ui(self):
+        # Apply dark theme to all ttk.Treeview widgets globally — must run
+        # once before any Treeview is instantiated so the style is inherited.
+        _style = ttk.Style(self)
+        try:
+            _style.theme_use("default")
+        except Exception:
+            pass
+        _style.configure(
+            "Treeview",
+            background="#161B22",
+            foreground="#C9D1D9",
+            fieldbackground="#161B22",
+            rowheight=26,
+            borderwidth=0,
+            font=("TkDefaultFont", 10),
+        )
+        _style.map(
+            "Treeview",
+            background=[("selected", "#264F78")],
+            foreground=[("selected", "#FFFFFF")],
+        )
+        _style.configure(
+            "Treeview.Heading",
+            background="#1F2630",
+            foreground="#8B949E",
+            relief="flat",
+            font=("TkDefaultFont", 10, "bold"),
+        )
+        _style.map("Treeview.Heading", background=[("active", "#28313E")])
+
         # Configure main window background - Figma exact colors
         self.configure(fg_color="#0D1117")
         
@@ -115,7 +228,7 @@ class App(ctk.CTk):
                 # Running as script - try multiple methods
                 try:
                     base_path = os.path.dirname(os.path.abspath(__file__))
-                except:
+                except Exception:
                     # Fallback to current working directory if __file__ not available
                     base_path = os.getcwd()
             
@@ -309,8 +422,9 @@ class App(ctk.CTk):
         self.btn_rollback.pack_forget()  # hidden until a device with snapshots is selected
 
         # CENTER AREA - Preview card floating in the middle
-        center = ctk.CTkFrame(self.tab_main, fg_color="transparent")
-        center.pack(side="left", fill="both", expand=True, padx=16, pady=16)
+        self.center_frame = ctk.CTkFrame(self.tab_main, fg_color="transparent")
+        self.center_frame.pack(side="left", fill="both", expand=True, padx=16, pady=16)
+        center = self.center_frame
 
         # Preview header with title and Figma styled buttons
         topc = ctk.CTkFrame(center, fg_color="transparent")
@@ -382,7 +496,7 @@ class App(ctk.CTk):
                 clipboard_text = self.clipboard_get()
                 self.preview.insert("insert", clipboard_text)
                 return "break"
-            except:
+            except Exception:
                 pass
         
         self.preview.bind("<Control-v>", paste_handler)
@@ -393,25 +507,35 @@ class App(ctk.CTk):
         self.right_sidebar.pack(side="right", fill="y", padx=(0,16), pady=16)
         self.right_sidebar.pack_propagate(False)
         self.right_sidebar_visible = True
-        right = self.right_sidebar  # Keep compatibility with existing code
+        # Scrollable inner container so all fields remain accessible on small screens
+        right = ctk.CTkScrollableFrame(self.right_sidebar, fg_color="transparent")
+        right.pack(fill="both", expand=True)
         
-        # CONFIG STATUS SECTION - Figma Title/medium
-        ctk.CTkLabel(right, text="Config Status", font=ctk.CTkFont(family="Inter", size=18, weight="bold"), 
-                    text_color="#FFFFFF").pack(anchor="nw", padx=16, pady=(24,16))
-        
-        # Config name row with Connected badge
+        # GNS3 PROJECT SECTION
+        ctk.CTkLabel(right, text="GNS3 Project", font=ctk.CTkFont(family="Inter", size=18, weight="bold"),
+                    text_color="#FFFFFF").pack(anchor="nw", padx=16, pady=(24, 8))
+
+        # Single row: project name on the left, status badge on the right
         config_row = ctk.CTkFrame(right, fg_color="transparent")
         config_row.pack(fill="x", padx=16, pady=(0, 16))
-        ctk.CTkLabel(config_row, text="config name", font=ctk.CTkFont(family="Inter", size=14), 
-                    text_color="#FFFFFF").pack(side="left")
-        
-        # Connected badge - Figma success tag style
-        self.lbl_gns3_status = ctk.CTkLabel(config_row, text="✓ Connected", 
-                                           font=ctk.CTkFont(family="Inter", size=12),
-                                           text_color="#085D3A",
-                                           fg_color="#ECFDF3",
-                                           corner_radius=6,
-                                           padx=16, pady=4)
+
+        self.lbl_gns3_project_name = ctk.CTkLabel(
+            config_row,
+            text="No project",
+            font=ctk.CTkFont(family="Inter", size=13),
+            text_color="#8B949E",
+            anchor="w",
+        )
+        self.lbl_gns3_project_name.pack(side="left", fill="x", expand=True)
+
+        self.lbl_gns3_status = ctk.CTkLabel(
+            config_row, text="⏳ Connecting…",
+            font=ctk.CTkFont(family="Inter", size=12),
+            text_color="#9BA3AF",
+            fg_color="#28313E",
+            corner_radius=6,
+            padx=10, pady=4,
+        )
         self.lbl_gns3_status.pack(side="right")
         
         # GNS3 Import — Tier 1 solid blue (lighter); Refresh — Tier 3 flat/muted
@@ -504,10 +628,11 @@ class App(ctk.CTk):
         self.ent_enable.pack(side="left", fill="x", expand=True)
 
         # Send — Tier 1 solid blue (primary action, lighter)
-        ctk.CTkButton(right, text="Send", command=self.send_now,
+        self.btn_send = ctk.CTkButton(right, text="Send", command=self.send_now,
                      fg_color="#58A6FF", hover_color="#4A90E8", text_color="white",
                      height=40, font=ctk.CTkFont(family="Inter", size=16, weight="bold"),
-                     corner_radius=8, border_width=0).pack(fill="x", padx=16, pady=(24,8))
+                     corner_radius=8, border_width=0)
+        self.btn_send.pack(fill="x", padx=16, pady=(24,8))
 
         # Save Credentials — Tier 2 outlined blue (lighter)
         ctk.CTkButton(right, text="💾 Save Credentials", command=self.save_credentials,
@@ -579,12 +704,18 @@ class App(ctk.CTk):
                     text_color="#9ca3af").pack(anchor="nw", padx=24, pady=(16,8))
         self.txt_logs = ctk.CTkTextbox(logs_card, font=ctk.CTkFont(family="Consolas", size=14),
                                       fg_color="#161B22", text_color="#FFFFFF",
-                                      corner_radius=8, border_width=0)
+                                      corner_radius=8, border_width=0,
+                                      state="disabled")
         self.txt_logs.pack(fill="both", expand=True, padx=24, pady=(0,16))
         clear_logs_frame = ctk.CTkFrame(logs_card, fg_color="transparent")
         clear_logs_frame.pack(fill="x", padx=24, pady=(0,24))
+        def _clear_txt_logs():
+            self.txt_logs.configure(state="normal")
+            self.txt_logs.delete("0.0", "end")
+            self.txt_logs.configure(state="disabled")
+
         clear_logs_btn = ctk.CTkButton(clear_logs_frame, text="Clear output",
-                                      command=lambda: self.txt_logs.delete("0.0","end"),
+                                      command=_clear_txt_logs,
                                       fg_color="transparent", hover_color="#28313E",
                                       text_color="#58A6FF", width=120, height=32,
                                       font=ctk.CTkFont(family="Inter", size=14), corner_radius=8,
@@ -949,7 +1080,7 @@ class App(ctk.CTk):
         if not count_s: return
         try:
             count = int(count_s)
-        except:
+        except Exception:
             messagebox.showerror("error", "invalid number"); return
         out=[]; port_start=1
         for i in range(count):
@@ -960,8 +1091,8 @@ class App(ctk.CTk):
             ports_s = simpledialog.askstring("vlan wizard", f"vlan #{i+1} port count:", parent=self)
             if ports_s is None: return
             try: ports = int(ports_s)
-            except:
-                messagebox.showerror("error","invalid port count"); return
+            except Exception:
+                messagebox.showerror("error", "invalid port count"); return
             port_end = port_start + ports -1
             out.append(f"vlan {vid}"); out.append(f" name {vname}")
             if ports>0:
@@ -1057,6 +1188,9 @@ class App(ctk.CTk):
             "vlan_source":      "",
             "routing_source":   "",
             "dhcp_source_device": "",
+            # Routing ownership — used to enforce mutual exclusion in the wizard
+            "routing_device":       "",   # name of the device that already handles routing
+            "routing_device_type":  "",   # "router" | "core"
         }
 
         for dname, model, _meta in self.devices:
@@ -1103,6 +1237,17 @@ class App(ctk.CTk):
                         for entry in ctx["routing_entries"]:
                             if entry["vlan"] in vlan_names:
                                 entry["name"] = vlan_names[entry["vlan"]]
+
+            # ── Routing ownership (mutual exclusion) ──
+            # Track which device type already claims inter-VLAN routing so the
+            # wizard can prevent a second device from also claiming it.
+            if not ctx["routing_device"] and "guided_routing" in tmpls and tmpls["guided_routing"].strip():
+                if isinstance(model, RouterModel):
+                    ctx["routing_device"]      = dname
+                    ctx["routing_device_type"] = "router"
+                elif isinstance(model, CoreSwitchModel):
+                    ctx["routing_device"]      = dname
+                    ctx["routing_device_type"] = "core"
 
             # ── DHCP ──
             if not ctx["dhcp_pools"] and "guided_dhcp" in tmpls:
@@ -1345,20 +1490,20 @@ class App(ctk.CTk):
 
         dialog = tk.Toplevel(self)
         dialog.title("Guided Setup — Select Device")
-        dialog.geometry("480x420")
         dialog.resizable(False, False)
         dialog.transient(self)
         dialog.grab_set()
         dialog.configure(bg=BG)
+        apply_responsive_geometry(dialog, 480, 420)
 
         tk.Label(dialog, text="Which device do you want to configure?",
-                 font=("Segoe UI", 13, "bold"), fg=TEXT, bg=BG).pack(
+                 font=("TkDefaultFont", 13, "bold"), fg=TEXT, bg=BG).pack(
             anchor="w", padx=18, pady=(18, 4))
         tk.Label(dialog,
                  text="Recommended: start with the router or core switch (handles routing, DHCP and ACLs).\n"
                       "Access switches can be configured afterwards.",
                  wraplength=440, justify="left", fg=MUTED, bg=BG,
-                 font=("Segoe UI", 9)).pack(anchor="w", padx=18, pady=(0, 10))
+                 font=("TkDefaultFont", 9)).pack(anchor="w", padx=18, pady=(0, 10))
 
         # Device cards (one per device)
         canvas_outer = tk.Frame(dialog, bg=BG)
@@ -1371,7 +1516,7 @@ class App(ctk.CTk):
             selectbackground=ACCENT, selectforeground="#fff",
             borderwidth=0, highlightthickness=1,
             highlightbackground=BORDER,
-            font=("Segoe UI", 10),
+            font=("TkDefaultFont", 10),
         )
         listbox.pack(fill="both", expand=True)
 
@@ -1418,7 +1563,7 @@ class App(ctk.CTk):
             command=confirm,
             fg="#fff", bg=ACCENT,
             activebackground=ACCENT, activeforeground="#fff",
-            font=("Segoe UI", 10, "bold"), padx=16, pady=6,
+            font=("TkDefaultFont", 10, "bold"), padx=16, pady=6,
             relief="flat", cursor="hand2",
         ).pack(side="left")
         tk.Button(
@@ -1483,7 +1628,7 @@ class App(ctk.CTk):
 
     def view_saved_configs(self):
         win = tk.Toplevel(self)
-        win.title("saved configs"); win.geometry("900x500")
+        win.title("saved configs"); apply_responsive_geometry(win, 900, 500)
         tree = ttk.Treeview(win, columns=("id","device","name","created"), show="headings")
         for h,w in [("id",80),("device",200),("name",300),("created",200)]:
             tree.heading(h, text=h); tree.column(h, width=w, anchor="center")
@@ -1581,7 +1726,7 @@ class App(ctk.CTk):
                 self.refresh_logs_tree()
                 self.refresh_ai_models_tree()
                 self.refresh_training_tree()
-        except:
+        except Exception:
             pass
 
     def refresh_configs_tree(self):
@@ -1753,19 +1898,34 @@ class App(ctk.CTk):
 
     # ------------------- logs only UI -------------------
     def clear_preview(self):
-        """Clear the preview/config window"""
+        """Clear the preview/config window (thread-safe)."""
+        self.after(0, self._clear_preview_in_main)
+
+    def _clear_preview_in_main(self):
         try:
             self.preview.delete("0.0", "end")
-            self.log("Preview cleared")
         except Exception:
             pass
 
-    def log(self, msg):
+    def log(self, msg: str):
+        """Thread-safe log — always dispatches to the main thread via after().
+        Writes only to the Logs tab; never contaminates the config Preview."""
+        self.after(0, lambda m=msg: self._log_in_main(m))
+
+    def _log_in_main(self, msg: str):
+        """Actual widget write — must only be called on the main thread."""
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         try:
+            self.txt_logs.configure(state="normal")
             self.txt_logs.insert("0.0", f"[{ts}] {msg}\n")
-            # echo small in preview
-            self.preview.insert("0.0", f"[{ts}] {msg}\n")
+            # Cap log to 500 lines to prevent unbounded memory growth
+            try:
+                last_line = int(self.txt_logs.index("end-1c").split(".")[0])
+                if last_line > 500:
+                    self.txt_logs.delete("501.0", "end")
+            except Exception:
+                pass
+            self.txt_logs.configure(state="disabled")
         except Exception:
             pass
 
@@ -1808,35 +1968,52 @@ class App(ctk.CTk):
             self.logs_underline.configure(fg_color="#58A6FF")
             self._refresh_logs_history()
     
+    def _on_closing(self):
+        """Confirm before closing if a send operation is in progress."""
+        if self._send_in_progress:
+            if not messagebox.askokcancel(
+                "Send in progress",
+                "A configuration is currently being sent to a device.\n"
+                "Closing now may leave the device in a partial state.\n\n"
+                "Close anyway?",
+                parent=self,
+            ):
+                return
+        self.destroy()
+
+    def _show_right_sidebar(self):
+        """Re-pack the right sidebar then re-pack center to preserve correct order."""
+        self.right_sidebar.pack(side="right", fill="y", padx=(0, 16), pady=16)
+        # Re-pack center so the pack manager assigns space correctly after re-entry
+        self.center_frame.pack_forget()
+        self.center_frame.pack(side="left", fill="both", expand=True, padx=16, pady=16)
+        self.right_sidebar_visible = True
+
     def _toggle_right_sidebar(self):
-        """Toggle the right sidebar visibility"""
+        """Toggle the right sidebar visibility."""
         if self.right_sidebar_visible:
             self.right_sidebar.pack_forget()
             self.right_sidebar_visible = False
             self.btn_toggle_sidebar.configure(text="☰ Panel", text_color="#58A6FF")
         else:
-            self.right_sidebar.pack(side="right", fill="y", padx=(0,16), pady=16)
-            self.right_sidebar_visible = True
+            self._show_right_sidebar()
             self.btn_toggle_sidebar.configure(text="✕ Panel", text_color="#9BA3AF")
-    
+
     def _on_window_resize(self, event):
-        """Handle window resize - show/hide sidebar toggle button"""
+        """Handle window resize — show/hide sidebar toggle button."""
         if event.widget == self:
             width = event.width
             if width < 950:
-                # Show toggle button, auto-hide sidebar if first time going small
                 if not self.btn_toggle_sidebar.winfo_ismapped():
                     self.btn_toggle_sidebar.pack(side="right", padx=(20, 0))
                 if self.right_sidebar_visible and width < 850:
                     self.right_sidebar.pack_forget()
                     self.right_sidebar_visible = False
             else:
-                # Hide toggle button, show sidebar
                 if self.btn_toggle_sidebar.winfo_ismapped():
                     self.btn_toggle_sidebar.pack_forget()
                 if not self.right_sidebar_visible:
-                    self.right_sidebar.pack(side="right", fill="y", padx=(0,16), pady=16)
-                    self.right_sidebar_visible = True
+                    self._show_right_sidebar()
 
     # ------------------- custom list item helpers (Figma style) -------------------
     def _create_device_item(self, name: str, label: str, idx: int):
@@ -1854,10 +2031,13 @@ class App(ctk.CTk):
         content = ctk.CTkFrame(item_frame, fg_color="transparent")
         content.pack(side="left", fill="both", expand=True, padx=(8, 0))
         
-        # Label - Figma Body/caption
-        lbl = ctk.CTkLabel(content, text=label, font=ctk.CTkFont(family="Inter", size=12), 
-                          text_color="#C9D1D9", anchor="w")
+        # Label - truncate long names and show full name in tooltip on hover
+        display_text = _truncate(label, max_chars=22)
+        lbl = ctk.CTkLabel(content, text=display_text, font=ctk.CTkFont(family="Inter", size=12),
+                           text_color="#C9D1D9", anchor="w")
         lbl.pack(side="left", fill="x", expand=True, padx=8)
+        if display_text != label:
+            _Tooltip(lbl, label)
         
         # Checkbox on right - Figma styled
         var = ctk.BooleanVar(value=False)
@@ -2025,7 +2205,7 @@ class App(ctk.CTk):
             self.ent_host.configure(state="normal", fg_color=enabled_color, border_color=enabled_border)
             self.ent_port.configure(state="normal", fg_color=enabled_color, border_color=enabled_border)
             self.lbl_network_title.configure(text_color=enabled_label_color)
-            # Disable other Network fields
+            # Disable credential fields (devices should not require login)
             self.ent_user.configure(state="disabled", fg_color=disabled_color, border_color=disabled_border)
             self.ent_pass.configure(state="disabled", fg_color=disabled_color, border_color=disabled_border)
             self.ent_enable.configure(state="disabled", fg_color=disabled_color, border_color=disabled_border)
@@ -2068,10 +2248,21 @@ class App(ctk.CTk):
                     widget.configure(text_color=disabled_text_color)
 
     # ------------------- send/run -------------------
+    def _set_send_busy(self, busy: bool):
+        """Enable/disable the Send button and track in-progress state."""
+        self._send_in_progress = busy
+        try:
+            self.btn_send.configure(
+                state="disabled" if busy else "normal",
+                text="Sending…" if busy else "Send",
+            )
+        except Exception:
+            pass
+
     def send_now(self):
-        content = self.preview.get("0.0","end").strip()
+        content = self.preview.get("0.0", "end").strip()
         if not content:
-            messagebox.showinfo("info","nothing to send"); return
+            messagebox.showinfo("info", "nothing to send"); return
 
         # Pre-send validation check
         try:
@@ -2084,82 +2275,107 @@ class App(ctk.CTk):
                 if not messagebox.askokcancel("Config Warnings", msg, parent=self):
                     return
         except Exception:
-            pass  # validator errors should never block sending
+            pass  # validator errors must never block sending
 
         method = self.send_method.get().lower()
+        self._set_send_busy(True)
+
         if method == "serial":
             port = self.ent_serial_port.get().strip()
             try:
                 baud = int(self.ent_serial_baud.get().strip() or "9600")
-            except:
-                messagebox.showerror("error","invalid baud"); return
+            except Exception:
+                self._set_send_busy(False)
+                messagebox.showerror("error", "invalid baud"); return
             if not port:
-                messagebox.showerror("error","enter serial port"); return
-            threading.Thread(target=self._thread_serial, args=(port,baud,content), daemon=True).start()
+                self._set_send_busy(False)
+                messagebox.showerror("error", "enter serial port"); return
+            threading.Thread(target=self._thread_serial,
+                             args=(port, baud, content), daemon=True).start()
         elif method == "telnet":
             host = self.ent_host.get().strip()
             if not host:
-                messagebox.showerror("error","enter host"); return
+                self._set_send_busy(False)
+                messagebox.showerror("error", "enter host"); return
             try:
                 port = int(self.ent_port.get().strip() or "23")
-            except:
-                messagebox.showerror("error","invalid port"); return
-            # Telnet doesn't use username/password in this implementation
-            user = ""; pw = ""; enable = ""
-            threading.Thread(target=self._thread_telnet, args=(host,port,user,pw,enable,content), daemon=True).start()
+            except Exception:
+                self._set_send_busy(False)
+                messagebox.showerror("error", "invalid port"); return
+            # Read credentials from the form (same as SSH — device may require login)
+            user   = self.ent_user.get().strip()
+            pw     = self.ent_pass.get().strip()
+            enable = self.ent_enable.get().strip() if self.enable_checkbox.get() else ""
+            threading.Thread(target=self._thread_telnet,
+                             args=(host, port, user, pw, enable, content), daemon=True).start()
         elif method == "ssh":
             host = self.ent_host.get().strip()
             if not host:
-                messagebox.showerror("error","enter host"); return
+                self._set_send_busy(False)
+                messagebox.showerror("error", "enter host"); return
             try:
                 port = int(self.ent_port.get().strip() or "22")
-            except:
-                messagebox.showerror("error","invalid port"); return
-            user = self.ent_user.get().strip(); pw = self.ent_pass.get().strip(); enable = self.ent_enable.get().strip()
-            threading.Thread(target=self._thread_ssh, args=(host,port,user,pw,enable,content), daemon=True).start()
+            except Exception:
+                self._set_send_busy(False)
+                messagebox.showerror("error", "invalid port"); return
+            user   = self.ent_user.get().strip()
+            pw     = self.ent_pass.get().strip()
+            enable = self.ent_enable.get().strip() if self.enable_checkbox.get() else ""
+            threading.Thread(target=self._thread_ssh,
+                             args=(host, port, user, pw, enable, content), daemon=True).start()
         else:
-            messagebox.showerror("error","unknown method")
+            self._set_send_busy(False)
+            messagebox.showerror("error", "unknown method")
 
     def _thread_serial(self, port, baud, content):
         self.log(f"starting serial to {port}@{baud}")
-        ok = Sender.send_serial(self.log, port, baud, content)
-        self.log(f"serial finished: {ok}")
-        if ok:
-            self.clear_preview()
-            device_name = self.current_device[0] if self.current_device else "unknown"
-            self._write_audit_log(device_name, "serial", f"port={port} baud={baud}", config_content=content)
+        try:
+            ok = Sender.send_serial(self.log, port, baud, content)
+            self.log(f"serial finished: {ok}")
+            if ok:
+                self.clear_preview()
+                device_name = self.current_device[0] if self.current_device else "unknown"
+                self._write_audit_log(device_name, "serial", f"port={port} baud={baud}", config_content=content)
+        finally:
+            self.after(0, lambda: self._set_send_busy(False))
 
     def _thread_telnet(self, host, port, user, pw, enable, content):
         self.log(f"starting telnet to {host}:{port}")
-        ok = Sender.send_telnet(self.log, host, port, user, pw, enable, content)
-        self.log(f"telnet finished: {ok}")
-        if ok:
-            self.clear_preview()
-            device_name = self.current_device[0] if self.current_device else "unknown"
-            self._write_audit_log(device_name, "telnet", f"host={host} port={port}", config_content=content)
-            # Determine which show commands to run based on current device role
-            cmds = ["show ip interface brief"]
-            try:
-                if self.current_device:
-                    from ..models.devices import CoreSwitchModel, SwitchModel
-                    _, mdl, _ = self.current_device
-                    if isinstance(mdl, (CoreSwitchModel, SwitchModel)):
-                        cmds.append("show vlan-switch")
-            except Exception:
-                pass
-            self.log("[verify] running post-send verification...")
-            results = Sender.verify_telnet(self.log, host, port, cmds)
-            if results:
-                self.after(0, lambda r=results: self._show_verify_dialog(r))
+        try:
+            ok = Sender.send_telnet(self.log, host, port, user, pw, enable, content)
+            self.log(f"telnet finished: {ok}")
+            if ok:
+                self.clear_preview()
+                device_name = self.current_device[0] if self.current_device else "unknown"
+                self._write_audit_log(device_name, "telnet", f"host={host} port={port}", config_content=content)
+                cmds = ["show ip interface brief"]
+                try:
+                    if self.current_device:
+                        from ..models.devices import CoreSwitchModel, SwitchModel
+                        _, mdl, _ = self.current_device
+                        if isinstance(mdl, (CoreSwitchModel, SwitchModel)):
+                            cmds.append("show vlan-switch")
+                except Exception:
+                    pass
+                self.log("[verify] running post-send verification...")
+                results = Sender.verify_telnet(self.log, host, port, cmds,
+                                               username=user, password=pw, enable_pw=enable)
+                if results:
+                    self.after(0, lambda r=results: self._show_verify_dialog(r))
+        finally:
+            self.after(0, lambda: self._set_send_busy(False))
 
     def _thread_ssh(self, host, port, user, pw, enable, content):
         self.log(f"starting ssh to {host}:{port} as {user}")
-        ok = Sender.send_ssh(self.log, host, port, user, pw, enable, content)
-        self.log(f"ssh finished: {ok}")
-        if ok:
-            self.clear_preview()
-            device_name = self.current_device[0] if self.current_device else "unknown"
-            self._write_audit_log(device_name, "ssh", f"host={host} port={port} user={user}", config_content=content)
+        try:
+            ok = Sender.send_ssh(self.log, host, port, user, pw, enable, content)
+            self.log(f"ssh finished: {ok}")
+            if ok:
+                self.clear_preview()
+                device_name = self.current_device[0] if self.current_device else "unknown"
+                self._write_audit_log(device_name, "ssh", f"host={host} port={port} user={user}", config_content=content)
+        finally:
+            self.after(0, lambda: self._set_send_busy(False))
 
     def _show_verify_dialog(self, results: dict):
         """Display a post-send verification window with color-coded interface status."""
@@ -2180,16 +2396,16 @@ class App(ctk.CTk):
 
         win = tk.Toplevel(self)
         win.title("Post-Send Verification")
-        win.geometry("680x520")
         win.resizable(True, True)
         win.configure(bg=t["bg"])
+        apply_responsive_geometry(win, 680, 520)
 
         # Title bar
         hdr = tk.Frame(win, bg=t["card"], pady=12)
         hdr.pack(fill="x")
         tk.Label(
             hdr, text="Config Verification Results",
-            font=("Segoe UI", 14, "bold"), fg=t["text"], bg=t["card"],
+            font=("TkDefaultFont", 14, "bold"), fg=t["text"], bg=t["card"],
         ).pack(side="left", padx=16)
 
         # Scrollable results area
@@ -2229,7 +2445,7 @@ class App(ctk.CTk):
             hf.pack(fill="x", pady=(0, 2))
             for col, w in [("Interface", 22), ("IP Address", 18), ("Status", 12), ("Protocol", 12)]:
                 tk.Label(hf, text=col, fg=t["muted"], bg=t["card"],
-                         font=("Segoe UI", 10, "bold"), width=w, anchor="w").pack(side="left")
+                         font=("TkDefaultFont", 10, "bold"), width=w, anchor="w").pack(side="left")
 
             iface_re = re.compile(
                 r"^(\S+)\s+(\S+)\s+\S+\s+\S+\s+(\S+)\s+(\S+)", re.IGNORECASE
@@ -2246,7 +2462,7 @@ class App(ctk.CTk):
                 rf = tk.Frame(parent, bg=row_bg)
                 rf.pack(fill="x", pady=1)
                 tk.Label(rf, text="●", fg=dot_col, bg=row_bg,
-                         font=("Segoe UI", 9)).pack(side="left", padx=(4, 0))
+                         font=("TkDefaultFont", 9)).pack(side="left", padx=(4, 0))
                 for val, w in [(iface, 20), (ip, 18), (status, 12), (protocol, 12)]:
                     tk.Label(rf, text=val, fg=t["text"], bg=row_bg,
                              font=("Courier New", 10), width=w, anchor="w").pack(side="left")
@@ -2255,7 +2471,7 @@ class App(ctk.CTk):
             """Parse 'show vlan-switch' / 'show vlan brief' and render a simple table."""
             if re.search(r"(Invalid input|% Invalid|% Incomplete)", raw, re.IGNORECASE):
                 tk.Label(parent, text="VLAN command not supported on this device.",
-                         fg=t["muted"], bg=t["bg"], font=("Segoe UI", 10)).pack(anchor="w", padx=4, pady=4)
+                         fg=t["muted"], bg=t["bg"], font=("TkDefaultFont", 10)).pack(anchor="w", padx=4, pady=4)
                 return
             lines = [l for l in raw.splitlines() if l.strip()]
             header_idx = next(
@@ -2272,7 +2488,7 @@ class App(ctk.CTk):
             hf.pack(fill="x", pady=(0, 2))
             for col, w in [("VLAN", 8), ("Name", 28), ("Status", 12)]:
                 tk.Label(hf, text=col, fg=t["muted"], bg=t["card"],
-                         font=("Segoe UI", 10, "bold"), width=w, anchor="w").pack(side="left")
+                         font=("TkDefaultFont", 10, "bold"), width=w, anchor="w").pack(side="left")
 
             vlan_re = re.compile(r"^(\d+)\s+(\S+)\s+(\S+)", re.IGNORECASE)
             for line in lines[header_idx + 1:]:
@@ -2287,7 +2503,7 @@ class App(ctk.CTk):
                 rf = tk.Frame(parent, bg=row_bg)
                 rf.pack(fill="x", pady=1)
                 tk.Label(rf, text="●", fg=dot_col, bg=row_bg,
-                         font=("Segoe UI", 9)).pack(side="left", padx=(4, 0))
+                         font=("TkDefaultFont", 9)).pack(side="left", padx=(4, 0))
                 for val, w in [(vid, 6), (name, 26), (status, 12)]:
                     tk.Label(rf, text=val, fg=t["text"], bg=row_bg,
                              font=("Courier New", 10), width=w, anchor="w").pack(side="left")
@@ -2302,7 +2518,7 @@ class App(ctk.CTk):
             label = _cmd_labels.get(cmd, cmd)
             sec = tk.Frame(inner, bg=t["sidebar"], pady=6)
             sec.pack(fill="x", pady=(8, 4))
-            tk.Label(sec, text=f"  {label}", font=("Segoe UI", 11, "bold"),
+            tk.Label(sec, text=f"  {label}", font=("TkDefaultFont", 11, "bold"),
                      fg=t["success"], bg=t["sidebar"]).pack(side="left", padx=12)
 
             if "interface brief" in cmd:
@@ -2317,7 +2533,7 @@ class App(ctk.CTk):
         tk.Button(
             win, text="Close", command=win.destroy,
             bg="#238636", fg="white", relief="flat", padx=20, pady=6,
-            font=("Segoe UI", 11),
+            font=("TkDefaultFont", 11),
         ).pack(pady=12)
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -2333,22 +2549,23 @@ class App(ctk.CTk):
             host = self.ent_host.get().strip()
             port = self.ent_port.get().strip()
             username = self.ent_user.get().strip()
-            password = self.ent_pass.get().strip()
-            enable = self.ent_enable.get().strip()
+            password = _obfuscate(self.ent_pass.get().strip())
+            enable = _obfuscate(self.ent_enable.get().strip())
             protocol = self.send_method.get().lower()
             ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            cur.execute(
-                """INSERT INTO credentials
-                   (device_name, host, port, username, password, enable_password, protocol, updated_at)
-                   VALUES (?,?,?,?,?,?,?,?)
-                   ON CONFLICT(device_name) DO UPDATE SET
-                   host=excluded.host, port=excluded.port,
-                   username=excluded.username, password=excluded.password,
-                   enable_password=excluded.enable_password,
-                   protocol=excluded.protocol, updated_at=excluded.updated_at""",
-                (self.selected_device_name, host, port, username, password, enable, protocol, ts)
-            )
-            conn.commit()
+            with db_lock:
+                cur.execute(
+                    """INSERT INTO credentials
+                       (device_name, host, port, username, password, enable_password, protocol, updated_at)
+                       VALUES (?,?,?,?,?,?,?,?)
+                       ON CONFLICT(device_name) DO UPDATE SET
+                       host=excluded.host, port=excluded.port,
+                       username=excluded.username, password=excluded.password,
+                       enable_password=excluded.enable_password,
+                       protocol=excluded.protocol, updated_at=excluded.updated_at""",
+                    (self.selected_device_name, host, port, username, password, enable, protocol, ts)
+                )
+                conn.commit()
             messagebox.showinfo(
                 "Credentials Saved",
                 f"Credentials for '{self.selected_device_name}' saved.\n"
@@ -2371,7 +2588,6 @@ class App(ctk.CTk):
             if not row:
                 return
             host, port, username, password, enable, protocol = row
-            # Only fill fields that have a saved non-empty value
             if host:
                 self.ent_host.configure(state="normal")
                 self.ent_host.delete(0, "end")
@@ -2387,16 +2603,19 @@ class App(ctk.CTk):
             if password:
                 self.ent_pass.configure(state="normal")
                 self.ent_pass.delete(0, "end")
-                self.ent_pass.insert(0, password)
+                self.ent_pass.insert(0, _deobfuscate(password))
             if enable:
                 self.ent_enable.configure(state="normal")
                 self.ent_enable.delete(0, "end")
-                self.ent_enable.insert(0, enable)
+                self.ent_enable.insert(0, _deobfuscate(enable))
             if protocol and protocol in ("telnet", "serial", "ssh"):
-                self.send_method.set(protocol.capitalize() if protocol != "ssh" else "SSH")
-                self._on_protocol_changed(protocol.capitalize() if protocol != "ssh" else "SSH")
+                display = protocol.capitalize() if protocol != "ssh" else "SSH"
+                self.send_method.set(display)
+                self._on_protocol_changed(display)
+            else:
+                self._on_protocol_changed(self.send_method.get())
         except Exception:
-            pass  # never break device selection due to credential errors
+            pass
 
     # ─────────────────────────────────────────────────────────────────────────
     # Export / Import Project
@@ -2534,7 +2753,7 @@ class App(ctk.CTk):
 
         ordered = sorted(self.devices, key=_priority)
 
-        # Build deploy list with connection info
+        # Build deploy list with connection info + credentials
         deploy_list = []
         for name, model, meta in ordered:
             config = model.build_full_config().strip()
@@ -2542,35 +2761,47 @@ class App(ctk.CTk):
                 # Check if there's any real content
                 lines = [l for l in config.splitlines() if l.strip() and not l.strip().startswith("!")]
                 if not lines:
-                    deploy_list.append((name, model, meta, None, None, "no config"))
+                    deploy_list.append((name, model, meta, None, None, "", "", "", "no config"))
                     continue
 
-            host = meta.get("console_host") or meta.get("ip", "")
+            host     = meta.get("console_host") or meta.get("ip", "")
             port_raw = meta.get("console_port") or meta.get("port", "")
+            username = meta.get("username", "")
+            password = meta.get("password", "")
+            enable_pw = meta.get("enable_pw", "")
 
-            # Also check saved credentials for connection info
-            if not host:
-                try:
+            # Also check saved credentials table for connection info + auth
+            try:
+                with db_lock:
                     cur.execute(
-                        "SELECT host, port FROM credentials WHERE device_name=?", (name,)
+                        "SELECT host, port, username, password, enable_password "
+                        "FROM credentials WHERE device_name=?",
+                        (name,)
                     )
                     row = cur.fetchone()
-                    if row and row[0]:
+                if row:
+                    if row[0] and not host:
                         host, port_raw = row[0], row[1]
-                except Exception:
-                    pass
+                    if row[2] and not username:
+                        username = row[2]
+                    if row[3] and not password:
+                        password = _deobfuscate(row[3])
+                    if row[4] and not enable_pw:
+                        enable_pw = _deobfuscate(row[4])
+            except Exception:
+                pass
 
             if not host:
-                deploy_list.append((name, model, meta, None, None, "no host"))
+                deploy_list.append((name, model, meta, None, None, "", "", "", "no host"))
                 continue
 
             try:
                 port = int(port_raw)
             except (ValueError, TypeError):
-                deploy_list.append((name, model, meta, None, None, f"bad port: {port_raw}"))
+                deploy_list.append((name, model, meta, None, None, "", "", "", f"bad port: {port_raw}"))
                 continue
 
-            deploy_list.append((name, model, meta, host, port, "ready"))
+            deploy_list.append((name, model, meta, host, port, username, password, enable_pw, "ready"))
 
         self._show_deploy_progress_window(deploy_list)
 
@@ -2589,14 +2820,14 @@ class App(ctk.CTk):
 
         win = tk.Toplevel(self)
         win.title("Deploy All — Progress")
-        win.geometry("560x460")
         win.resizable(True, True)
         win.configure(bg=t["bg"])
         win.transient(self)
+        apply_responsive_geometry(win, 560, 460)
 
         tk.Label(
             win, text="Deploying configurations (Router → Core → Access)…",
-            font=("Segoe UI", 12, "bold"), fg=t["text"], bg=t["bg"]
+            font=("TkDefaultFont", 12, "bold"), fg=t["text"], bg=t["bg"]
         ).pack(anchor="w", padx=16, pady=(16, 8))
 
         # Progress table
@@ -2623,13 +2854,13 @@ class App(ctk.CTk):
         for col, w in [("Device", 22), ("Role", 14), ("Status", 20)]:
             tk.Label(
                 hdr_f, text=col, fg=t["muted"], bg=t["bg"],
-                font=("Segoe UI", 9, "bold"), width=w, anchor="w"
+                font=("TkDefaultFont", 9, "bold"), width=w, anchor="w"
             ).pack(side="left")
 
         # Status labels per device
         status_labels = {}
         role_names = {0: "Router", 1: "Core SW", 2: "Access SW"}
-        for name, model, meta, host, port, state in deploy_list:
+        for name, model, meta, host, port, _u, _pw, _en, state in deploy_list:
             priority = 0 if isinstance(model, RouterModel) else (1 if isinstance(model, CoreSwitchModel) else 2)
             role_str = role_names.get(priority, "Unknown")
 
@@ -2638,17 +2869,17 @@ class App(ctk.CTk):
             tk.Label(rf, text=name, fg=t["text"], bg=t["card"],
                      font=("Courier New", 10), width=22, anchor="w").pack(side="left")
             tk.Label(rf, text=role_str, fg=t["muted"], bg=t["card"],
-                     font=("Segoe UI", 9), width=14, anchor="w").pack(side="left")
+                     font=("TkDefaultFont", 9), width=14, anchor="w").pack(side="left")
             init_color = t["muted"] if state == "ready" else t["danger"]
             init_text  = "queued" if state == "ready" else state
             lbl = tk.Label(rf, text=init_text, fg=init_color, bg=t["card"],
-                           font=("Segoe UI", 9), width=20, anchor="w")
+                           font=("TkDefaultFont", 9), width=20, anchor="w")
             lbl.pack(side="left")
             status_labels[name] = lbl
 
         # Log area
         lbl_log = tk.Label(win, text="Log:", fg=t["muted"], bg=t["bg"],
-                           font=("Segoe UI", 10))
+                           font=("TkDefaultFont", 10))
         lbl_log.pack(anchor="w", padx=16)
         txt_log = tk.Text(
             win, height=6,
@@ -2659,11 +2890,17 @@ class App(ctk.CTk):
         txt_log.pack(fill="x", padx=16, pady=(0, 8))
 
         def _log(msg: str):
+            """Thread-safe log for the deploy-progress window."""
+            def _write():
+                try:
+                    txt_log.configure(state="normal")
+                    txt_log.insert("end", f"{time.strftime('%H:%M:%S')}  {msg}\n")
+                    txt_log.see("end")
+                    txt_log.configure(state="disabled")
+                except Exception:
+                    pass
             try:
-                txt_log.configure(state="normal")
-                txt_log.insert("end", f"{time.strftime('%H:%M:%S')}  {msg}\n")
-                txt_log.see("end")
-                txt_log.configure(state="disabled")
+                win.after(0, _write)
             except Exception:
                 pass
 
@@ -2671,14 +2908,15 @@ class App(ctk.CTk):
             win, text="Close", command=win.destroy,
             bg=t["card"], fg=t["muted"],
             relief="flat", padx=20, pady=6,
-            font=("Segoe UI", 10)
+            font=("TkDefaultFont", 10)
         )
         btn_close.pack(pady=(0, 12))
 
         def _deploy_worker():
-            for name, model, meta, host, port, state in deploy_list:
+            for name, model, meta, host, port, username, password, enable_pw, state in deploy_list:
                 if state != "ready":
                     _log(f"SKIP  {name}  ({state})")
+                    self.log(f"[deploy-all] SKIP {name} ({state})")
                     continue
 
                 lbl = status_labels.get(name)
@@ -2687,25 +2925,31 @@ class App(ctk.CTk):
 
                 config = model.build_full_config()
                 _log(f"SEND  {name}  →  {host}:{port}")
+                self.log(f"[deploy-all] sending {name} → {host}:{port}")
 
                 try:
                     ok = Sender.send_telnet(
-                        _log, host, port, "", "", "", config
+                        _log, host, port, username, password, enable_pw, config
                     )
                     status = "✓ done" if ok else "✗ failed"
                     color  = t["success"] if ok else t["danger"]
                     if ok:
                         self._write_audit_log(name, "telnet", f"deploy-all host={host}:{port}", config_content=config)
+                        self.log(f"[deploy-all] {name} ✓ done")
+                    else:
+                        self.log(f"[deploy-all] {name} ✗ failed")
                 except Exception as exc:
                     status = f"error: {exc}"
                     color  = t["danger"]
                     ok     = False
+                    self.log(f"[deploy-all] {name} ERROR: {exc}")
 
                 _log(f"  → {status}")
                 if lbl:
                     win.after(0, lambda l=lbl, s=status, c=color: l.configure(text=s, fg=c))
 
             _log("─── all done ───")
+            self.log("[deploy-all] all devices complete")
             win.after(0, lambda: btn_close.configure(bg="#238636", fg="white"))
 
         threading.Thread(target=_deploy_worker, daemon=True).start()
@@ -2750,29 +2994,56 @@ class App(ctk.CTk):
             messagebox.showerror("Terminal", f"Invalid port: {port_raw}", parent=self)
             return
 
-        TerminalPanel(self, name, host, port)
+        # Load credentials (meta → saved credentials table)
+        username  = meta.get("username", "")
+        password  = meta.get("password", "")
+        enable_pw = meta.get("enable_pw", "")
+        if not (username and password):
+            try:
+                with db_lock:
+                    cur.execute(
+                        "SELECT username, password, enable_password "
+                        "FROM credentials WHERE device_name=?",
+                        (name,)
+                    )
+                    row = cur.fetchone()
+                if row:
+                    if not username and row[0]:
+                        username = row[0]
+                    if not password and row[1]:
+                        password = _deobfuscate(row[1])
+                    if not enable_pw and row[2]:
+                        enable_pw = _deobfuscate(row[2])
+            except Exception:
+                pass
+
+        TerminalPanel(self, name, host, port,
+                      username=username, password=password, enable_pw=enable_pw)
 
     # ─────────────────────────────────────────────────────────────────────────
     # Audit Log helper
     # ─────────────────────────────────────────────────────────────────────────
 
     def _write_audit_log(self, device_name: str, protocol: str, details: str = "", config_content: str = ""):
-        """Write a successful config-send event to the logs table. Stores full config in details for Send History."""
+        """Write a successful config-send event to the logs table.
+        Safe to call from any thread — uses db_lock."""
         try:
-            cur.execute("SELECT id FROM devices WHERE name=?", (device_name,))
-            row = cur.fetchone()
-            device_id = row[0] if row else None
-            ts = time.strftime("%Y-%m-%d %H:%M:%S")
-            # Store metadata + full config: metadata on first line, config below (for backward compat, details can be short)
             stored = details or ""
             if config_content:
                 stored = (details + "\n\n--- CONFIG SENT ---\n" + config_content) if details else config_content
-            cur.execute(
-                "INSERT INTO logs (action, device_id, details, severity, created_at) "
-                "VALUES (?,?,?,?,?)",
-                (f"config_sent_{protocol}", device_id, stored, "info", ts)
-            )
-            conn.commit()
+            ts = time.strftime("%Y-%m-%d %H:%M:%S")
+            with db_lock:
+                cur.execute("SELECT id FROM devices WHERE name=?", (device_name,))
+                row = cur.fetchone()
+                device_id = row[0] if row else None
+                cur.execute(
+                    "INSERT INTO logs (action, device_id, details, severity, created_at) "
+                    "VALUES (?,?,?,?,?)",
+                    (f"config_sent_{protocol}", device_id, stored, "info", ts)
+                )
+                conn.commit()
+            # Auto-refresh the Logs tab history table if the user is looking at it
+            self.after(0, self._refresh_logs_history)
         except Exception:
             pass  # audit log errors must never crash the app
 
@@ -2786,18 +3057,18 @@ class App(ctk.CTk):
         }
         win = tk.Toplevel(self)
         win.title("Send History / Audit Log")
-        win.geometry("800x600")
         win.resizable(True, True)
         win.configure(bg=t["bg"])
+        apply_responsive_geometry(win, 800, 600)
 
         tk.Label(
             win, text="  Config Send History",
-            font=("Segoe UI", 14, "bold"), fg=t["text"], bg=t["bg"]
+            font=("TkDefaultFont", 14, "bold"), fg=t["text"], bg=t["bg"]
         ).pack(anchor="w", padx=16, pady=(14, 4))
         tk.Label(
             win,
             text="Select a row to see the config that was sent. New sends store the full config.",
-            font=("Segoe UI", 9), fg=t["muted"], bg=t["bg"]
+            font=("TkDefaultFont", 9), fg=t["muted"], bg=t["bg"]
         ).pack(anchor="w", padx=16, pady=(0, 8))
 
         # Top: tree of send history
@@ -2814,7 +3085,7 @@ class App(ctk.CTk):
         vsb.pack(side="right", fill="y")
 
         # Bottom: config preview when row selected
-        tk.Label(win, text="  Config sent (select a row above)", font=("Segoe UI", 10, "bold"),
+        tk.Label(win, text="  Config sent (select a row above)", font=("TkDefaultFont", 10, "bold"),
                 fg=t["muted"], bg=t["bg"]).pack(anchor="w", padx=16, pady=(8, 4))
         config_frame = tk.Frame(win, bg=t["card"], relief="flat")
         config_frame.pack(fill="both", expand=True, padx=16, pady=(0, 8))
@@ -2881,12 +3152,12 @@ class App(ctk.CTk):
         tk.Button(
             btn_f, text="Refresh", command=_refresh,
             bg=t["accent"], fg="white", relief="flat",
-            font=("Segoe UI", 10), padx=16, pady=4, cursor="hand2"
+            font=("TkDefaultFont", 10), padx=16, pady=4, cursor="hand2"
         ).pack(side="left")
         tk.Button(
             btn_f, text="Close", command=win.destroy,
             bg=t["card"], fg=t["muted"], relief="flat",
-            font=("Segoe UI", 10), padx=16, pady=4, cursor="hand2"
+            font=("TkDefaultFont", 10), padx=16, pady=4, cursor="hand2"
         ).pack(side="right")
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -2904,36 +3175,35 @@ class App(ctk.CTk):
         }
         win = tk.Toplevel(self)
         win.title("AI Config Assistant")
-        win.geometry("740x580")
-        win.minsize(560, 420)
         win.resizable(True, True)
         win.configure(bg=t["bg"])
+        apply_responsive_geometry(win, 740, 580, min_w=560, min_h=420)
 
         # Header
         hdr = tk.Frame(win, bg=t["card"], pady=10)
         hdr.pack(fill="x")
         tk.Label(
             hdr, text="  🤖 AI Config Assistant",
-            font=("Segoe UI", 14, "bold"), fg=t["text"], bg=t["card"]
+            font=("TkDefaultFont", 14, "bold"), fg=t["text"], bg=t["card"]
         ).pack(side="left")
         tk.Label(
             hdr, text="Describe what you want — get IOS CLI config",
-            font=("Segoe UI", 9), fg=t["muted"], bg=t["card"]
+            font=("TkDefaultFont", 9), fg=t["muted"], bg=t["card"]
         ).pack(side="left", padx=10)
 
         # API Key row
         key_row = tk.Frame(win, bg=t["bg"])
         key_row.pack(fill="x", padx=16, pady=(12, 4))
         tk.Label(key_row, text="OpenAI API Key:", fg=t["muted"], bg=t["bg"],
-                 font=("Segoe UI", 9)).pack(side="left")
+                 font=("TkDefaultFont", 9)).pack(side="left")
         ent_key = tk.Entry(key_row, bg=t["sidebar"], fg=t["text"],
                            show="*", font=("Courier New", 10),
                            relief="flat", insertbackground=t["text"], width=40)
         ent_key.pack(side="left", padx=(8, 0))
 
-        # Try to load saved key
+        # Try to load saved key from dedicated api_keys table
         try:
-            cur.execute("SELECT details FROM logs WHERE action='ai_api_key' ORDER BY id DESC LIMIT 1")
+            cur.execute("SELECT key_value FROM api_keys WHERE key_name='openai' ORDER BY id DESC LIMIT 1")
             r = cur.fetchone()
             if r and r[0]:
                 ent_key.insert(0, r[0])
@@ -2944,25 +3214,28 @@ class App(ctk.CTk):
             k = ent_key.get().strip()
             if k:
                 try:
-                    cur.execute(
-                        "INSERT INTO logs (action, details, severity, created_at) VALUES (?,?,?,?)",
-                        ("ai_api_key", k, "info", time.strftime("%Y-%m-%d %H:%M:%S"))
-                    )
-                    conn.commit()
+                    with db_lock:
+                        cur.execute(
+                            "INSERT INTO api_keys (key_name, key_value, updated_at) VALUES (?,?,?) "
+                            "ON CONFLICT(key_name) DO UPDATE SET key_value=excluded.key_value, "
+                            "updated_at=excluded.updated_at",
+                            ("openai", k, time.strftime("%Y-%m-%d %H:%M:%S"))
+                        )
+                        conn.commit()
                 except Exception:
                     pass
 
         tk.Button(key_row, text="Save", command=_save_key,
                   bg=t["accent"], fg="white", relief="flat",
-                  font=("Segoe UI", 9), padx=8, pady=2,
+                  font=("TkDefaultFont", 9), padx=8, pady=2,
                   cursor="hand2").pack(side="left", padx=8)
 
         # Prompt area
         tk.Label(win, text="Describe what you want:", fg=t["muted"], bg=t["bg"],
-                 font=("Segoe UI", 10)).pack(anchor="w", padx=16, pady=(8, 2))
+                 font=("TkDefaultFont", 10)).pack(anchor="w", padx=16, pady=(8, 2))
         ent_prompt = tk.Text(
             win, height=4, bg=t["sidebar"], fg=t["text"],
-            font=("Segoe UI", 11), relief="flat", borderwidth=0,
+            font=("TkDefaultFont", 11), relief="flat", borderwidth=0,
             insertbackground=t["text"], wrap="word"
         )
         ent_prompt.pack(fill="x", padx=16, pady=(0, 4))
@@ -2977,18 +3250,18 @@ class App(ctk.CTk):
         ex_frame = tk.Frame(win, bg=t["bg"])
         ex_frame.pack(fill="x", padx=16, pady=(0, 8))
         tk.Label(ex_frame, text="Examples:", fg=t["muted"], bg=t["bg"],
-                 font=("Segoe UI", 8)).pack(anchor="w")
+                 font=("TkDefaultFont", 8)).pack(anchor="w")
         for ex in examples:
             tk.Button(
                 ex_frame, text=f"  {ex}",
                 command=lambda e=ex: (ent_prompt.delete("1.0", "end"), ent_prompt.insert("1.0", e)),
                 bg=t["card"], fg=t["accent"], relief="flat",
-                font=("Segoe UI", 8), cursor="hand2", anchor="w"
+                font=("TkDefaultFont", 8), cursor="hand2", anchor="w"
             ).pack(fill="x", pady=1)
 
         # Output area
         tk.Label(win, text="Generated Config:", fg=t["muted"], bg=t["bg"],
-                 font=("Segoe UI", 10)).pack(anchor="w", padx=16, pady=(4, 2))
+                 font=("TkDefaultFont", 10)).pack(anchor="w", padx=16, pady=(4, 2))
         txt_output = tk.Text(
             win, bg=t["input_bg"], fg=t["text"],
             font=("Courier New", 11), relief="flat", borderwidth=0,
@@ -3082,19 +3355,19 @@ class App(ctk.CTk):
             btn_row, text="Generate",
             command=_generate,
             bg=t["accent"], fg="white", relief="flat",
-            font=("Segoe UI", 11, "bold"), padx=20, pady=6, cursor="hand2"
+            font=("TkDefaultFont", 11, "bold"), padx=20, pady=6, cursor="hand2"
         )
         btn_gen.pack(side="left")
         tk.Button(
             btn_row, text="Insert into Preview",
             command=_insert_into_preview,
             bg="#238636", fg="white", relief="flat",
-            font=("Segoe UI", 10), padx=16, pady=6, cursor="hand2"
+            font=("TkDefaultFont", 10), padx=16, pady=6, cursor="hand2"
         ).pack(side="left", padx=8)
         tk.Button(
             btn_row, text="Close", command=win.destroy,
             bg=t["card"], fg=t["muted"], relief="flat",
-            font=("Segoe UI", 10), padx=16, pady=6, cursor="hand2"
+            font=("TkDefaultFont", 10), padx=16, pady=6, cursor="hand2"
         ).pack(side="right")
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -3102,138 +3375,188 @@ class App(ctk.CTk):
     # ------------------- GNS3 integration -------------------
     def refresh_gns3_connection(self):
         """Refresh GNS3 connection and detect newly opened projects"""
-        if hasattr(self, 'lbl_gns3_status'):
-            self.lbl_gns3_status.configure(text="refreshing gns3 connection...")
+        self._set_gns3_status("⏳ Reconnecting…", connected=False)
         threading.Thread(target=self._auto_connect_gns3, daemon=True).start()
     
+    def _set_gns3_status(self, text: str, connected: bool = False,
+                         project_name: str = ""):
+        """Thread-safe helper to update the GNS3 status badge and project name label."""
+        def _update():
+            try:
+                if connected:
+                    self.lbl_gns3_status.configure(
+                        text=text, text_color="#085D3A", fg_color="#ECFDF3")
+                else:
+                    self.lbl_gns3_status.configure(
+                        text=text, text_color="#9BA3AF", fg_color="#28313E")
+            except Exception:
+                pass
+            try:
+                if project_name:
+                    self.lbl_gns3_project_name.configure(
+                        text=project_name, text_color="#C9D1D9")
+                elif not connected:
+                    self.lbl_gns3_project_name.configure(
+                        text="No project", text_color="#8B949E")
+            except Exception:
+                pass
+        self.after(0, _update)
+
     def _auto_connect_gns3(self):
-        # try to auto-connect on startup and import nodes from open/most-recent project
+        """Background thread: connect to GNS3 and import nodes.
+        All UI mutations go through self.after() — never touch widgets directly."""
         if requests is None:
-            if hasattr(self, 'lbl_gns3_status'):
-                self.lbl_gns3_status.configure(text="requests not installed; gns3 auto-import disabled")
+            self._set_gns3_status("requests not installed; GNS3 disabled")
             return
         try:
             g = GNS3Connector(GNS3_DEFAULT_URL)
             projs = g.get_projects()
             if not projs:
-                if hasattr(self, 'lbl_gns3_status'):
-                    self.lbl_gns3_status.configure(text="no gns3 projects found on server")
+                self._set_gns3_status("No GNS3 projects found on server")
                 return
-            # try to pick open project, else most recently modified (fallback)
+
             proj = None
             for p in projs:
                 if p.get('is_open') or p.get('status') == 'opened':
-                    proj = p; break
+                    proj = p
+                    break
             if not proj:
-                # attempt to choose most recently modified by 'name' timestamp-like or use first
                 try:
-                    projs_sorted = sorted(projs, key=lambda x: x.get('name',''), reverse=True)
-                    proj = projs_sorted[0]
+                    proj = sorted(projs, key=lambda x: x.get('name', ''), reverse=True)[0]
                 except Exception:
                     proj = projs[0]
-            
-            # Check if project changed
+
             current_project_id = proj.get('project_id') or proj.get('projectId') or proj.get('id')
             if self.last_gns3_project:
-                last_project_id = self.last_gns3_project.get('project_id') or self.last_gns3_project.get('projectId') or self.last_gns3_project.get('id')
-                if current_project_id != last_project_id:
-                    self.log(f"[gns3] detected project change: {self.last_gns3_project.get('name')} -> {proj.get('name')}")
+                last_id = (self.last_gns3_project.get('project_id')
+                           or self.last_gns3_project.get('projectId')
+                           or self.last_gns3_project.get('id'))
+                if current_project_id != last_id:
+                    self.log(f"[gns3] project change: {self.last_gns3_project.get('name')} → {proj.get('name')}")
+
+            # Store state (non-UI — safe from background thread)
+            self.gns3 = g
+            self.last_gns3_project = proj
+
+            project_id = proj.get('project_id') or proj.get('projectId') or proj.get('id')
+            self.gns3_project_id = project_id
+
+            if not project_id:
+                self._set_gns3_status("GNS3 project missing project_id")
+                return
+
+            nodes = self.gns3.get_nodes(project_id)
+
+            # ── classify nodes (pure data work, no UI) ─────────────────────
+            _SKIP_TYPES = {"vpcs", "cloud", "nat", "ethernet_switch",
+                           "ethernet_hub", "frame_relay_switch", "atm_switch"}
+            l3_keywords   = ['l3 switch', 'layer3', 'layer 3', 'esw', 'c3640',
+                             'c3560', 'c3750', 'multilayer']
+            rtr_keywords  = ['router', 'ios', 'csr', 'isr', 'iosv', 'firepower',
+                             'asa', 'xrv', 'nxos', 'c2691', 'c2600', 'c7200',
+                             'c3725', 'c3745', 'c3660', 'c3845', 'c1900', 'c2900',
+                             'adventerprisek9', 'advipservices']
+
+            new_devices = []
+            for node in nodes:
+                raw_type = node.get('node_type', '')
+                if raw_type.lower() in _SKIP_TYPES:
+                    self.log(f"[gns3] skipping: {node.get('name')} ({raw_type})")
+                    continue
+
+                name         = node.get('name') or f"node-{str(node.get('node_id','') or node.get('id',''))[:6]}"
+                console_host = node.get('console_host') or 'localhost'
+                console_port = node.get('console') or node.get('console_port') or ''
+                node_id      = node.get('node_id') or node.get('id')
+                platform     = node.get('platform', '')
+                console_type = node.get('console_type', '')
+                image_name   = (node.get('properties') or {}).get('image', '')
+
+                full_desc = " ".join([raw_type, platform, console_type,
+                                      image_name, name]).lower()
+
+                if any(k in full_desc for k in l3_keywords):
+                    ntype = 'core switch'
+                elif any(k in full_desc for k in rtr_keywords):
+                    ntype = 'router'
+                else:
+                    ntype = 'switch'
+
+                # Fetch interfaces (network call — still on background thread)
+                interfaces = []
+                try:
+                    ports_data = self.gns3.get_node_ports(project_id, node_id)
+                    interfaces = [p["name"] for p in ports_data if p.get("name")]
+                except Exception:
+                    pass
+
+                new_devices.append({
+                    "name": name, "ntype": ntype, "node_id": node_id,
+                    "console_host": console_host, "console_port": str(console_port),
+                    "project_id": project_id, "interfaces": interfaces,
+                })
+
+            # ── hand off to main thread for all UI + DB writes ──────────────
+            proj_name = proj.get('name', '')
+            self.after(0, lambda nd=new_devices, pn=proj_name:
+                       self._apply_gns3_import(nd, pn))
+
+        except Exception as exc:
+            self._set_gns3_status(f"GNS3 auto-connect failed: {exc}")
+
+    def _apply_gns3_import(self, new_devices: list, proj_name: str):
+        """Main-thread callback: add GNS3 nodes to the workspace and update UI."""
+        imported = 0
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        project_id = self.gns3_project_id if hasattr(self, 'gns3_project_id') else ""
+
+        for d in new_devices:
+            name      = d["name"]
+            node_id   = d["node_id"]
+            already   = any(
+                x[2].get("node_id") == node_id
+                and x[2].get("project_id") == project_id
+                for x in self.devices
+            )
+            if already:
+                continue
+
+            dev_name = name
+            i = 1
+            while any(x[0] == dev_name for x in self.devices):
+                dev_name = f"{name}-{i}"; i += 1
+
+            meta = {
+                "gns3_node": True, "project_id": project_id,
+                "node_id": node_id, "console_host": d["console_host"],
+                "console_port": d["console_port"], "interfaces": d["interfaces"],
+            }
+            self.add_device_instance(d["ntype"], dev_name, metadata=meta)
 
             try:
-                self.gns3 = g
-                self.last_gns3_project = proj
-                # Update GNS3 status label (now in main page top right)
-                if hasattr(self, 'lbl_gns3_status'):
-                    self.lbl_gns3_status.configure(text=f"auto-connected to gns3, project: {proj.get('name')}")
-                # import nodes
-                # FIX: Use .get() with fallback for project_id
-                project_id = proj.get('project_id') or proj.get('projectId') or proj.get('id')
-                self.gns3_project_id = project_id  # store for topology viewer
-                if not project_id:
-                    if hasattr(self, 'lbl_gns3_status'):
-                        self.lbl_gns3_status.configure(text="gns3 project missing project_id")
-                    return
-                nodes = self.gns3.get_nodes(project_id)
-                imported = 0
-                for node in nodes:
-                    name = node.get('name') or f"node-{str(node.get('node_id','') or node.get('id',''))[:6]}"
-                    console_host = node.get('console_host') or node.get('console_host_override') or 'localhost'
-                    # FIX: Remove console_type, use proper port fields
-                    console_port = node.get('console') or node.get('console_port') or ''
-                    node_id = node.get('node_id') or node.get('id')
-                    # choose a workspace type guess
-                    raw_node_type = node.get('node_type', '')
-                    raw_platform = node.get('platform', '')
-                    raw_category = node.get('category', '')
-                    console_type = node.get('console_type', '')
-                    properties = node.get('properties') or {}
-                    image_name = properties.get('image') or properties.get('platform') or properties.get('hw_model') or ''
-
-                    # Skip non-configurable GNS3 node types (PCs, clouds, hubs, etc.)
-                    _SKIP_TYPES = {"vpcs", "cloud", "nat", "ethernet_switch", "ethernet_hub",
-                                   "frame_relay_switch", "atm_switch"}
-                    if raw_node_type.lower() in _SKIP_TYPES:
-                        self.log(f"[gns3] skipping non-network node: {name} ({raw_node_type})")
-                        continue
-
-                    self.log(f"[gns3] node {name}: type={raw_node_type} platform={raw_platform} category={raw_category}")
-                    self.log(f"[gns3] node {name}: console={console_type} image={image_name}")
-                    node_type_field = (raw_node_type or '') + ' ' + (raw_platform or '')
-                    desc = node_type_field.lower()
-                    full_desc = " ".join([desc, str(console_type).lower(), str(image_name).lower(), name.lower()])
-                    
-                    # Check for Layer 3 switch indicators first
-                    l3_switch_keywords = ['l3 switch', 'layer3', 'layer 3', 'esw', 'c3640', 'c3560', 'c3750', 'multilayer']
-                    is_l3_switch = any(k in full_desc for k in l3_switch_keywords)
-                    
-                    router_keywords = [
-                        'router', 'ios', 'csr', 'isr', 'iosv', 'firepower', 'asa', 'xrv', 'nxos',
-                        'c2691', 'c2600', 'c7200', 'c3725', 'c3745', 'c3660', 'c3845', 'c1900', 'c2900',
-                        'adventerprisek9', 'advipservices'
-                    ]
-                    
-                    # Classify: L3 switch -> core switch, router keywords -> router, else -> switch
-                    if is_l3_switch:
-                        ntype = 'core switch'
-                    elif any(k in full_desc for k in router_keywords):
-                        ntype = 'router'
-                    else:
-                        ntype = 'switch'
-                    # Skip only if device already in workspace (not just DB)
-                    already_in_workspace = any(
-                        d[2].get("node_id") == node_id and d[2].get("project_id") == project_id
-                        for d in self.devices
+                with db_lock:
+                    cur.execute(
+                        "INSERT OR REPLACE INTO devices "
+                        "(name,type,ip,port,connection_type,added_from_gns3,"
+                        "project_id,node_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                        (dev_name, d["ntype"], d["console_host"],
+                         d["console_port"], 'gns3-console', 1,
+                         project_id, node_id, ts)
                     )
-                    if already_in_workspace:
-                        continue
-                    
-                    base = name; dev_name = base; i = 1
-                    while any(d[0]==dev_name for d in self.devices):
-                        dev_name = f"{base}-{i}"; i+=1
-                    meta = {"gns3_node": True, "project_id": project_id, "node_id": node_id, "console_host": console_host, "console_port": str(console_port)}
-                    # Fetch real interface names from GNS3 so the wizard uses correct ports
-                    try:
-                        ports_data = self.gns3.get_node_ports(project_id, node_id)
-                        meta["interfaces"] = [p["name"] for p in ports_data if p.get("name")]
-                    except Exception:
-                        meta["interfaces"] = []
-                    self.add_device_instance(ntype, dev_name, metadata=meta)
-                    ts = time.strftime("%Y-%m-%d %H:%M:%S")
-                    try:
-                        cur.execute("INSERT OR REPLACE INTO devices (name,type,ip,port,connection_type,added_from_gns3,project_id,node_id,created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-                                    (dev_name, ntype, console_host, str(console_port), 'gns3-console', 1, project_id, node_id, ts))
-                        conn.commit()
-                        imported += 1
-                    except Exception as e:
-                        self.log(f"[db] error saving gns3 device: {e}")
-                if imported>0:
-                    self.refresh_device_list()
-                    self.log(f"auto-imported {imported} gns3 nodes from project {proj.get('name')}")
-            except Exception as e:
-                self.log(f"[gns3] could not list nodes: {e}")
-        except Exception as e:
-            if hasattr(self, 'lbl_gns3_status'):
-                self.lbl_gns3_status.configure(text=f"gns3 auto-connect failed: {e}")
+                    conn.commit()
+                imported += 1
+            except Exception as exc:
+                self.log(f"[db] error saving GNS3 device: {exc}")
+
+        if imported > 0:
+            self.refresh_device_list()
+            self.log(f"Auto-imported {imported} GNS3 node(s) from '{proj_name}'")
+
+        self._set_gns3_status(
+            "✓ Connected",
+            connected=True,
+            project_name=proj_name or "Unknown project",
+        )
 
     def gns3_list_projects(self):
         if requests is None:
@@ -3250,7 +3573,10 @@ class App(ctk.CTk):
             if not sel: return
             project = projs[sel-1]
             self.last_gns3_project = project
-            messagebox.showinfo("gns3", f"selected {project.get('name')}")
+            proj_name = project.get('name', '')
+            self._set_gns3_status("✓ Connected", connected=True,
+                                  project_name=proj_name or "Unknown project")
+            messagebox.showinfo("gns3", f"selected {proj_name}")
             self.gns3_list_nodes(project.get('project_id') or project.get('projectId'))
         except Exception as e:
             messagebox.showerror("gns3 error", str(e))
@@ -3356,7 +3682,7 @@ class App(ctk.CTk):
             messagebox.showinfo("database", "no saved devices found."); return
         win = tk.Toplevel(self)
         win.title("saved devices")
-        win.geometry("700x420")
+        apply_responsive_geometry(win, 700, 420)
         tree = ttk.Treeview(win, columns=("id","name","type","ip","port","conn","gns3","created"), show="headings")
         for h,w in [("id",60),("name",180),("type",120),("ip",120),("port",70),("conn",100),("gns3",60),("created",140)]:
             tree.heading(h, text=h); tree.column(h, width=w, anchor="center")
