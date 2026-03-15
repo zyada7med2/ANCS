@@ -99,11 +99,23 @@ class ConfigValidator:
     @staticmethod
     def _check_missing_routing(devices: list) -> list[str]:
         """
-        Warn when a device has guided_vlans (suggesting it is a core switch or
-        access switch used for inter-VLAN routing) but has no guided_routing.
-        Only applies to core switches (CoreSwitchModel), not pure access switches.
+        Warn when a core switch has VLANs but no routing AND no router in the
+        workspace is already handling inter-VLAN routing.
+        If a router has guided_routing configured, it is the designated routing
+        device — the core switch deliberately has no SVIs and the warning is
+        a false positive.
         """
-        from ..models.devices import CoreSwitchModel
+        from ..models.devices import CoreSwitchModel, RouterModel
+
+        # If any router already handles routing, suppress the warning entirely —
+        # the core switch is acting as a pure L2 switch by design.
+        router_handles_routing = any(
+            isinstance(model, RouterModel)
+            and bool(model.get_template("guided_routing").strip())
+            for _n, model, _m in devices
+        )
+        if router_handles_routing:
+            return []
 
         warnings = []
         for name, model, _meta in devices:
