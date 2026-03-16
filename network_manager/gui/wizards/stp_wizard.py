@@ -1,109 +1,102 @@
 """
-STP (Spanning Tree Protocol) configuration GUI wizard
+STP (Spanning Tree Protocol) configuration GUI wizard — PySide6 version
 """
-import tkinter as tk
-from tkinter import ttk, messagebox, simpledialog
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QMessageBox,
+    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+)
+from PySide6.QtCore import Qt
 from ..utils import apply_responsive_geometry
 
+DARK = """
+    QDialog { background-color: #0D1117; }
+    QTableWidget { background-color: #161B22; color: #C9D1D9; border: 1px solid #30363D;
+                   border-radius: 6px; gridline-color: #30363D; }
+    QTableWidget::item:selected { background-color: #264F78; }
+    QHeaderView::section { background-color: #1F2630; color: #8B949E; border: none; padding: 6px; }
+    QPushButton { background-color: #374151; color: #9ca3af; border: none; border-radius: 6px;
+                  padding: 6px 14px; }
+    QPushButton:hover { background-color: #4b5563; color: white; }
+    QPushButton#gen { background-color: #3b82f6; color: white; }
+    QPushButton#gen:hover { background-color: #2563eb; }
+"""
 
-class StpGuiWindow(tk.Toplevel):
+
+class StpGuiWindow(QDialog):
     def __init__(self, parent):
         super().__init__(parent)
-        self.title("stp gui wizard")
-        self.transient(parent)
-        self.grab_set()
+        self.setWindowTitle("STP GUI Wizard")
+        self.setStyleSheet(DARK)
         apply_responsive_geometry(self, 750, 480)
         self.result = None
 
-        frame = tk.Frame(self)
-        frame.pack(fill="both", expand=True, padx=8, pady=8)
+        layout = QVBoxLayout(self)
+        cols = ["VLAN", "Mode", "Priority", "PortFast", "BPDUGuard", "UplinkFast", "BackboneFast"]
+        self.table = QTableWidget(0, len(cols))
+        self.table.setHorizontalHeaderLabels(cols)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        layout.addWidget(self.table, 1)
 
-        cols = ("vlan", "mode", "priority", "portfast", "bpduguard", "uplinkfast", "backbonefast")
-        self.tree = ttk.Treeview(frame, columns=cols, show="headings", height=12)
-
-        for c in cols:
-            self.tree.heading(c, text=c)
-            self.tree.column(c, width=100, anchor="center")
-
-        self.tree.pack(fill="both", expand=True)
-        # Make cells editable on double-click
-        self.tree.bind("<Double-1>", self.on_double_click)
-
-        # buttons
-        btns = tk.Frame(self)
-        btns.pack(fill="x", pady=6)
-
-        tk.Button(btns, text="add row", bg="#374151", fg="#9ca3af", command=self.add_row).pack(side="left", padx=6)
-        tk.Button(btns, text="remove", bg="#374151", fg="#9ca3af", command=self.remove_sel).pack(side="left", padx=6)
-        tk.Button(btns, text="generate", bg="#3b82f6", fg="white", command=self.on_generate).pack(side="right", padx=6)
+        btns = QHBoxLayout()
+        btn_add = QPushButton("Add Row")
+        btn_add.clicked.connect(self.add_row)
+        btn_rm = QPushButton("Remove")
+        btn_rm.clicked.connect(self.remove_sel)
+        btn_gen = QPushButton("Generate")
+        btn_gen.setObjectName("gen")
+        btn_gen.clicked.connect(self.on_generate)
+        btns.addWidget(btn_add)
+        btns.addWidget(btn_rm)
+        btns.addStretch()
+        btns.addWidget(btn_gen)
+        layout.addLayout(btns)
 
         self.add_row()
 
-    def on_double_click(self, event):
-        """Make treeview cells editable on double-click - uses popup dialog"""
-        region = self.tree.identify_region(event.x, event.y)
-        if region == "cell":
-            column = self.tree.identify_column(event.x)  # Fixed: only takes x coordinate
-            item = self.tree.identify_row(event.y)
-            if item and column:
-                try:
-                    col_index = int(column.replace("#", "")) - 1
-                    if col_index >= 0:
-                        self.edit_cell_popup(item, col_index)
-                except Exception:
-                    pass
-    
-    def edit_cell_popup(self, item, column):
-        """Edit cell using a popup dialog"""
-        cols = ("vlan", "mode", "priority", "portfast", "bpduguard", "uplinkfast", "backbonefast")
-        col_name = cols[column] if column < len(cols) else f"Column {column+1}"
-        values = self.tree.item(item)["values"]
-        current_value = str(values[column]) if column < len(values) and values[column] else ""
-        
-        new_value = simpledialog.askstring("Edit Cell", f"Enter new value for {col_name}:", 
-                                           initialvalue=current_value, parent=self)
-        if new_value is not None:  # User didn't cancel
-            values = list(self.tree.item(item)["values"])
-            while len(values) <= column:
-                values.append("")
-            values[column] = new_value
-            self.tree.item(item, values=values)
-
     def add_row(self):
-        self.tree.insert("", "end", values=("", "pvst", "32768", "no", "no", "no", "no"))
+        r = self.table.rowCount()
+        self.table.insertRow(r)
+        defaults = ["", "pvst", "32768", "no", "no", "no", "no"]
+        for c, val in enumerate(defaults):
+            self.table.setItem(r, c, QTableWidgetItem(val))
 
     def remove_sel(self):
-        for s in self.tree.selection():
-            self.tree.delete(s)
+        rows = sorted({idx.row() for idx in self.table.selectedIndexes()}, reverse=True)
+        for r in rows:
+            self.table.removeRow(r)
 
     def on_generate(self):
-        items = self.tree.get_children()
         out = []
         try:
-            for it in items:
-                vlan, mode, priority, portfast, bpduguard, uplinkfast, backbonefast = self.tree.item(it)["values"]
+            for r in range(self.table.rowCount()):
+                def _cell(c):
+                    it = self.table.item(r, c)
+                    return it.text().strip() if it else ""
+                vlan = _cell(0)
+                mode = _cell(1) or "pvst"
+                priority = _cell(2) or "32768"
+                portfast = _cell(3)
+                bpduguard = _cell(4)
+                uplinkfast = _cell(5)
+                backbonefast = _cell(6)
                 if not vlan:
-                    messagebox.showerror("error", "enter vlan id")
+                    QMessageBox.critical(self, "Error", "Enter VLAN ID")
                     return
-
                 out.append(f"spanning-tree mode {mode}")
                 out.append(f"spanning-tree vlan {vlan} priority {priority}")
-
-                if str(portfast).lower() in ["yes", "true", "on"]:
+                if portfast.lower() in ("yes", "true", "on"):
                     out.append("spanning-tree portfast default")
-                if str(bpduguard).lower() in ["yes", "true", "on"]:
+                if bpduguard.lower() in ("yes", "true", "on"):
                     out.append("spanning-tree portfast bpduguard default")
-                if str(uplinkfast).lower() in ["yes", "true", "on"]:
+                if uplinkfast.lower() in ("yes", "true", "on"):
                     out.append("spanning-tree uplinkfast")
-                if str(backbonefast).lower() in ["yes", "true", "on"]:
+                if backbonefast.lower() in ("yes", "true", "on"):
                     out.append("spanning-tree backbonefast")
-
                 out.append("")
         except Exception as e:
-            messagebox.showerror("error", f"invalid input: {e}")
+            QMessageBox.critical(self, "Error", f"Invalid input: {e}")
             return
-
         out.append("! stp gui wizard complete")
         self.result = "\n".join(out)
-        self.destroy()
-
+        self.accept()

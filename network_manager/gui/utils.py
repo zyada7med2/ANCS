@@ -12,24 +12,39 @@ def apply_responsive_geometry(
 ) -> None:
     """Set a responsive geometry, capping to screen size and centering the window.
 
-    Args:
-        win: Any tkinter window (Tk, CTk, Toplevel, CTkToplevel).
-        desired_w: Preferred window width in pixels.
-        desired_h: Preferred window height in pixels.
-        min_w: Minimum width (also capped to screen). Skipped if None.
-        min_h: Minimum height (also capped to screen). Skipped if None.
-        margin: Screen-edge margin kept free on each side (default 80 px).
+    Works with both Tkinter and PySide6 windows by duck-typing.
     """
-    win.update_idletasks()
-    screen_w = win.winfo_screenwidth()
-    screen_h = win.winfo_screenheight()
+    try:
+        from PySide6.QtWidgets import QApplication
+        screen = QApplication.primaryScreen()
+        if screen is None:
+            return
+        sg = screen.geometry()
+        screen_w, screen_h = sg.width(), sg.height()
+    except Exception:
+        try:
+            win.update_idletasks()
+            screen_w = win.winfo_screenwidth()
+            screen_h = win.winfo_screenheight()
+        except Exception:
+            return
+
     w = min(desired_w, screen_w - margin)
     h = min(desired_h, screen_h - margin)
     x = (screen_w - w) // 2
     y = max(0, (screen_h - h) // 2)
-    win.geometry(f"{w}x{h}+{x}+{y}")
-    if min_w is not None and min_h is not None:
-        win.minsize(
-            min(min_w, screen_w - margin),
-            min(min_h, screen_h - margin),
-        )
+
+    try:
+        win.setGeometry(x, y, w, h)
+        if min_w is not None and min_h is not None:
+            win.setMinimumSize(
+                min(min_w, screen_w - margin),
+                min(min_h, screen_h - margin),
+            )
+    except AttributeError:
+        win.geometry(f"{w}x{h}+{x}+{y}")
+        if min_w is not None and min_h is not None:
+            win.minsize(
+                min(min_w, screen_w - margin),
+                min(min_h, screen_h - margin),
+            )

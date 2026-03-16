@@ -1,20 +1,17 @@
 """
-Interactive CLI terminal panel.
-
-Maintains a persistent Telnet session with a network device so the user
-can type raw CLI commands and see responses in real time — without leaving ANCS.
-
-Supports:
-  - Command history (Up/Down arrow keys)
-  - Automatic 'terminal length 0' on connect
-  - Connect / Disconnect / Reconnect
-  - Clear output
+Interactive CLI terminal panel — PySide6 version.
+Maintains a persistent Telnet session so the user can type raw CLI commands.
 """
-import tkinter as tk
 import threading
 import asyncio
 import queue
-import time
+
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
+    QPlainTextEdit, QLineEdit,
+)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont, QTextCharFormat, QColor
 from .utils import apply_responsive_geometry
 
 try:
@@ -22,170 +19,136 @@ try:
 except Exception:
     telnetlib3 = None
 
+DARK = """
+    QDialog { background-color: #0D1117; }
+    QLabel { color: #C9D1D9; background: transparent; }
+    QPlainTextEdit { background-color: #161B22; color: #C9D1D9; border: none;
+                     font-family: 'Courier New'; font-size: 11px; padding: 6px; }
+    QLineEdit { background-color: #161B22; color: #C9D1D9; border: none;
+                font-family: 'Courier New'; font-size: 11px; padding: 6px; }
+    QPushButton { background-color: #161B22; color: #8B949E; border: none;
+                  border-radius: 6px; padding: 6px 14px; }
+    QPushButton:hover { background-color: #1F2630; color: white; }
+    QPushButton#connect { background-color: #183a18; color: #3FB950; font-weight: bold; }
+    QPushButton#disconnect { background-color: #3a1818; color: #F85149; }
+    QPushButton#send { background-color: #58A6FF; color: white; font-weight: bold; }
+"""
 
-class TerminalPanel(tk.Toplevel):
-    COLORS = {
-        "bg":       "#0D1117",
-        "card":     "#1F2630",
-        "sidebar":  "#161B22",
-        "text":     "#C9D1D9",
-        "muted":    "#8B949E",
-        "success":  "#3FB950",
-        "danger":   "#F85149",
-        "warn":     "#D29922",
-        "border":   "#30363D",
-        "accent":   "#58A6FF",
-        "input_bg": "#161B22",
-    }
+_COLORS = {
+    "success": "#3FB950", "danger": "#F85149", "warn": "#D29922",
+    "muted": "#8B949E", "accent": "#58A6FF",
+}
 
-    def __init__(self, parent, device_name: str, host: str, port: int,
+
+class TerminalPanel(QDialog):
+    def __init__(self, parent, host: str, port: int, device_name: str = "",
                  username: str = "", password: str = "", enable_pw: str = ""):
         super().__init__(parent)
-        self.title(f"Terminal  —  {device_name}")
-        self.resizable(True, True)
+        self.setWindowTitle(f"Terminal \u2014 {device_name}")
+        self.setStyleSheet(DARK)
         apply_responsive_geometry(self, 740, 500, min_w=540, min_h=360)
-        self.configure(bg=self.COLORS["bg"])
 
         self.device_name = device_name
         self.host = host
         self.port = port
-        self.username  = username
-        self.password  = password
+        self.username = username
+        self.password = password
         self.enable_pw = enable_pw
 
         self._running = False
-        self._loop: asyncio.AbstractEventLoop | None = None
-        self._async_queue: asyncio.Queue | None = None
-        self._resp_queue: queue.Queue = queue.Queue()
-        self._poll_id = None
+        self._loop = None
+        self._async_queue = None
+        self._resp_queue = queue.Queue()
+        self._poll_timer = None
         self._thread = None
         self._cmd_history: list[str] = []
         self._history_idx: int = -1
 
         self._build_ui()
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
         if telnetlib3 is None:
-            self._append("  [error] telnetlib3 is not installed — cannot open terminal\n", "danger")
-            self.btn_connect.configure(state="disabled")
+            self._append("[error] telnetlib3 is not installed\n", "danger")
+            self.btn_connect.setEnabled(False)
         else:
-            self.after(300, self._connect)
+            QTimer.singleShot(300, self._connect)
 
-    # ── UI ────────────────────────────────────────────────────────────────────
+        self.show()
 
     def _build_ui(self):
-        t = self.COLORS
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
 
-        # Header
-        hdr = tk.Frame(self, bg=t["card"], pady=8)
-        hdr.pack(fill="x")
+        hdr = QHBoxLayout()
+        hdr.setContentsMargins(8, 8, 8, 8)
+        lbl_name = QLabel(f"  {self.device_name}")
+        lbl_name.setStyleSheet("font-size: 13px; font-weight: bold;")
+        hdr.addWidget(lbl_name)
 
-        tk.Label(
-            hdr, text=f"  {self.device_name}",
-            font=("TkDefaultFont", 13, "bold"), fg=t["text"], bg=t["card"]
-        ).pack(side="left")
+        self.lbl_status = QLabel("\u2b24 disconnected")
+        self.lbl_status.setStyleSheet(f"color: {_COLORS['danger']};")
+        hdr.addWidget(self.lbl_status)
 
-        self.lbl_status = tk.Label(
-            hdr, text="⬤ disconnected",
-            fg=t["danger"], bg=t["card"], font=("TkDefaultFont", 10)
-        )
-        self.lbl_status.pack(side="left", padx=10)
+        lbl_addr = QLabel(f"{self.host}:{self.port}")
+        lbl_addr.setStyleSheet("color: #8B949E; font-size: 9px;")
+        hdr.addStretch()
+        hdr.addWidget(lbl_addr)
 
-        tk.Label(
-            hdr, text=f"{self.host}:{self.port}  ",
-            fg=t["muted"], bg=t["card"], font=("TkDefaultFont", 9)
-        ).pack(side="right")
+        btn_clear = QPushButton("Clear")
+        btn_clear.clicked.connect(self._clear_output)
+        hdr.addWidget(btn_clear)
 
-        tk.Button(
-            hdr, text="Clear",
-            bg=t["sidebar"], fg=t["muted"],
-            relief="flat", padx=10, pady=4,
-            font=("TkDefaultFont", 9), cursor="hand2",
-            command=self._clear_output
-        ).pack(side="right", padx=(0, 4))
+        btn_disc = QPushButton("Disconnect")
+        btn_disc.setObjectName("disconnect")
+        btn_disc.clicked.connect(self._disconnect)
+        hdr.addWidget(btn_disc)
 
-        tk.Button(
-            hdr, text="Disconnect",
-            bg="#3a1818", fg=t["danger"],
-            relief="flat", padx=10, pady=4,
-            font=("TkDefaultFont", 9), cursor="hand2",
-            command=self._disconnect
-        ).pack(side="right", padx=(0, 4))
+        self.btn_connect = QPushButton("Connect")
+        self.btn_connect.setObjectName("connect")
+        self.btn_connect.clicked.connect(self._connect)
+        hdr.addWidget(self.btn_connect)
 
-        self.btn_connect = tk.Button(
-            hdr, text="Connect",
-            bg="#183a18", fg=t["success"],
-            relief="flat", padx=12, pady=4,
-            font=("TkDefaultFont", 9, "bold"), cursor="hand2",
-            command=self._connect
-        )
-        self.btn_connect.pack(side="right", padx=(0, 8))
+        layout.addLayout(hdr)
 
-        # Output text area
-        out_frame = tk.Frame(self, bg=t["bg"])
-        out_frame.pack(fill="both", expand=True, padx=8, pady=(8, 4))
+        self.txt_out = QPlainTextEdit()
+        self.txt_out.setReadOnly(True)
+        layout.addWidget(self.txt_out, 1)
 
-        self.txt_out = tk.Text(
-            out_frame,
-            bg=t["input_bg"], fg=t["text"],
-            font=("Courier New", 11),
-            relief="flat", borderwidth=0,
-            insertbackground=t["text"],
-            state="disabled", wrap="word",
-        )
-        vsb = tk.Scrollbar(out_frame, orient="vertical", command=self.txt_out.yview)
-        self.txt_out.configure(yscrollcommand=vsb.set)
-        vsb.pack(side="right", fill="y")
-        self.txt_out.pack(fill="both", expand=True)
+        inp = QHBoxLayout()
+        inp.setContentsMargins(8, 8, 8, 8)
+        lbl_prompt = QLabel(">")
+        lbl_prompt.setStyleSheet("color: #3FB950; font-family: 'Courier New'; font-size: 14px; font-weight: bold;")
+        inp.addWidget(lbl_prompt)
 
-        self.txt_out.tag_configure("success", foreground=t["success"])
-        self.txt_out.tag_configure("danger",  foreground=t["danger"])
-        self.txt_out.tag_configure("warn",    foreground=t["warn"])
-        self.txt_out.tag_configure("muted",   foreground=t["muted"])
-        self.txt_out.tag_configure("accent",  foreground=t["accent"])
+        self.ent_cmd = QLineEdit()
+        self.ent_cmd.returnPressed.connect(self._send_command)
+        inp.addWidget(self.ent_cmd, 1)
 
-        # Input row
-        inp = tk.Frame(self, bg=t["card"], pady=8)
-        inp.pack(fill="x", padx=8, pady=(0, 8))
+        btn_send = QPushButton("Send")
+        btn_send.setObjectName("send")
+        btn_send.clicked.connect(self._send_command)
+        inp.addWidget(btn_send)
+        layout.addLayout(inp)
 
-        tk.Label(
-            inp, text=">",
-            fg=t["success"], bg=t["card"],
-            font=("Courier New", 13, "bold")
-        ).pack(side="left", padx=(8, 4))
+        self._append(f"Terminal ready \u2014 {self.device_name}  ({self.host}:{self.port})\nConnecting...\n\n", "muted")
 
-        self.ent_cmd = tk.Entry(
-            inp, bg=t["input_bg"], fg=t["text"],
-            insertbackground=t["text"],
-            relief="flat", font=("Courier New", 11), borderwidth=0,
-        )
-        self.ent_cmd.pack(side="left", fill="x", expand=True, padx=(0, 8))
-        self.ent_cmd.bind("<Return>",  lambda _e: self._send_command())
-        self.ent_cmd.bind("<Up>",      self._history_up)
-        self.ent_cmd.bind("<Down>",    self._history_down)
-
-        tk.Button(
-            inp, text="Send",
-            bg=t["accent"], fg="white",
-            relief="flat", padx=16, pady=4,
-            font=("TkDefaultFont", 10, "bold"), cursor="hand2",
-            command=self._send_command
-        ).pack(side="right", padx=(0, 8))
-
-        self._append(
-            f"Terminal ready — {self.device_name}  ({self.host}:{self.port})\n"
-            "Connecting...\n\n",
-            "muted"
-        )
-
-    # ── connection ────────────────────────────────────────────────────────────
+    def keyPressEvent(self, event):
+        if self.ent_cmd.hasFocus():
+            if event.key() == Qt.Key_Up:
+                self._history_up()
+                return
+            elif event.key() == Qt.Key_Down:
+                self._history_down()
+                return
+        super().keyPressEvent(event)
 
     def _connect(self):
         if self._running:
             return
         self._running = True
-        self.lbl_status.configure(text="⬤ connecting...", fg=self.COLORS["warn"])
-        self.btn_connect.configure(state="disabled")
+        self.lbl_status.setText("\u2b24 connecting...")
+        self.lbl_status.setStyleSheet(f"color: {_COLORS['warn']};")
+        self.btn_connect.setEnabled(False)
         self._append(f"Connecting to {self.host}:{self.port}...\n", "muted")
         self._thread = threading.Thread(target=self._telnet_loop, daemon=True)
         self._thread.start()
@@ -198,8 +161,10 @@ class TerminalPanel(tk.Toplevel):
                 self._loop.call_soon_threadsafe(self._loop.stop)
             except Exception:
                 pass
-        self.lbl_status.configure(text="⬤ disconnected", fg=self.COLORS["danger"])
-        self.btn_connect.configure(state="normal", text="Reconnect")
+        self.lbl_status.setText("\u2b24 disconnected")
+        self.lbl_status.setStyleSheet(f"color: {_COLORS['danger']};")
+        self.btn_connect.setEnabled(True)
+        self.btn_connect.setText("Reconnect")
         self._append("\nDisconnected.\n", "warn")
 
     def _telnet_loop(self):
@@ -217,31 +182,28 @@ class TerminalPanel(tk.Toplevel):
             except Exception:
                 pass
         self._running = False
+        QTimer.singleShot(0, lambda: self._update_status_disconnected())
+
+    def _update_status_disconnected(self):
         try:
-            self.after(0, lambda: self.lbl_status.configure(
-                text="⬤ disconnected", fg=self.COLORS["danger"]
-            ))
-            self.after(0, lambda: self.btn_connect.configure(
-                state="normal", text="Reconnect"
-            ))
+            self.lbl_status.setText("\u2b24 disconnected")
+            self.lbl_status.setStyleSheet(f"color: {_COLORS['danger']};")
+            self.btn_connect.setEnabled(True)
+            self.btn_connect.setText("Reconnect")
         except Exception:
             pass
 
     async def _async_session(self):
-        # Create async queue inside the running event loop
         self._async_queue = asyncio.Queue()
-
         try:
             reader, writer = await asyncio.wait_for(
-                telnetlib3.open_connection(self.host, self.port), timeout=10
-            )
+                telnetlib3.open_connection(self.host, self.port), timeout=10)
         except Exception as exc:
             self._resp_queue.put(("error", f"Connection failed: {exc}"))
             return
-
         self._resp_queue.put(("connected", None))
 
-        async def read_burst(max_wait: float = 1.5) -> str:
+        async def read_burst(max_wait=1.5):
             buf = ""
             deadline = asyncio.get_event_loop().time() + max_wait
             while asyncio.get_event_loop().time() < deadline:
@@ -256,16 +218,13 @@ class TerminalPanel(tk.Toplevel):
                     break
             return buf
 
-        # Drain GNS3 banner, then show it in the terminal window
         await asyncio.sleep(0.5)
         banner = await read_burst(2.0)
         if banner.strip():
             self._resp_queue.put(("output", banner))
-
-        # Disable paging (silently — don't show the response)
         writer.write("terminal length 0\r\n")
         await asyncio.sleep(0.3)
-        await read_burst(1.0)  # discard
+        await read_burst(1.0)
 
         while self._running:
             try:
@@ -275,7 +234,6 @@ class TerminalPanel(tk.Toplevel):
                 output = await read_burst(3.0)
                 self._resp_queue.put(("output", output))
             except asyncio.TimeoutError:
-                # Check for unsolicited data (e.g. syslog messages)
                 try:
                     chunk = await asyncio.wait_for(reader.read(512), timeout=0.05)
                     if chunk:
@@ -290,60 +248,51 @@ class TerminalPanel(tk.Toplevel):
         except Exception:
             pass
 
-    # ── command handling ──────────────────────────────────────────────────────
-
     def _send_command(self):
-        cmd = self.ent_cmd.get().strip()
+        cmd = self.ent_cmd.text().strip()
         if not cmd:
             return
         if not self._running or self._loop is None or self._loop.is_closed():
-            self._append("[not connected — use Connect first]\n", "danger")
+            self._append("[not connected]\n", "danger")
             return
-
-        # Add to history
         if not self._cmd_history or self._cmd_history[-1] != cmd:
             self._cmd_history.append(cmd)
         self._history_idx = len(self._cmd_history)
-
         try:
             self._loop.call_soon_threadsafe(self._async_queue.put_nowait, cmd)
         except Exception:
             pass
-
-        self.ent_cmd.delete(0, "end")
+        self.ent_cmd.clear()
         self._append(f"\n> {cmd}\n", "accent")
 
-    def _history_up(self, _event=None):
+    def _history_up(self):
         if not self._cmd_history:
-            return "break"
+            return
         self._history_idx = max(0, self._history_idx - 1)
-        self.ent_cmd.delete(0, "end")
-        self.ent_cmd.insert(0, self._cmd_history[self._history_idx])
-        return "break"
+        self.ent_cmd.setText(self._cmd_history[self._history_idx])
 
-    def _history_down(self, _event=None):
+    def _history_down(self):
         if not self._cmd_history:
-            return "break"
+            return
         self._history_idx = min(len(self._cmd_history), self._history_idx + 1)
-        self.ent_cmd.delete(0, "end")
         if self._history_idx < len(self._cmd_history):
-            self.ent_cmd.insert(0, self._cmd_history[self._history_idx])
-        return "break"
-
-    # ── response polling ──────────────────────────────────────────────────────
+            self.ent_cmd.setText(self._cmd_history[self._history_idx])
+        else:
+            self.ent_cmd.clear()
 
     def _schedule_poll(self):
-        self._poll_id = self.after(100, self._poll_responses)
+        self._poll_timer = QTimer(self)
+        self._poll_timer.timeout.connect(self._poll_responses)
+        self._poll_timer.start(100)
 
     def _poll_responses(self):
         try:
             while not self._resp_queue.empty():
                 kind, data = self._resp_queue.get_nowait()
                 if kind == "connected":
-                    self.lbl_status.configure(
-                        text="⬤ connected", fg=self.COLORS["success"]
-                    )
-                    self.btn_connect.configure(state="disabled")
+                    self.lbl_status.setText("\u2b24 connected")
+                    self.lbl_status.setStyleSheet(f"color: {_COLORS['success']};")
+                    self.btn_connect.setEnabled(False)
                     self._append("Connected.\n\n", "success")
                 elif kind == "output":
                     self._append(data)
@@ -351,47 +300,30 @@ class TerminalPanel(tk.Toplevel):
                     self._append(f"\n[error] {data}\n", "danger")
         except Exception:
             pass
+        if not self._running and self._resp_queue.empty() and self._poll_timer:
+            self._poll_timer.stop()
 
-        if self._running or not self._resp_queue.empty():
-            self._poll_id = self.after(100, self._poll_responses)
-
-    # ── output helpers ────────────────────────────────────────────────────────
-
-    def _append(self, text: str, tag: str | None = None):
-        try:
-            self.txt_out.configure(state="normal")
-            if tag:
-                self.txt_out.insert("end", text, tag)
-            else:
-                self.txt_out.insert("end", text)
-            self.txt_out.see("end")
-            self.txt_out.configure(state="disabled")
-        except Exception:
-            pass
+    def _append(self, text, tag=None):
+        if tag and tag in _COLORS:
+            fmt = self.txt_out.currentCharFormat()
+            fmt.setForeground(QColor(_COLORS[tag]))
+            self.txt_out.setCurrentCharFormat(fmt)
+            self.txt_out.appendPlainText(text.rstrip("\n"))
+            fmt.setForeground(QColor("#C9D1D9"))
+            self.txt_out.setCurrentCharFormat(fmt)
+        else:
+            self.txt_out.appendPlainText(text.rstrip("\n"))
 
     def _clear_output(self):
-        try:
-            self.txt_out.configure(state="normal")
-            self.txt_out.delete("1.0", "end")
-            self.txt_out.configure(state="disabled")
-        except Exception:
-            pass
+        self.txt_out.clear()
 
-    # ── cleanup ───────────────────────────────────────────────────────────────
-
-    def _on_close(self):
+    def closeEvent(self, event):
         self._running = False
-        if self._poll_id:
-            try:
-                self.after_cancel(self._poll_id)
-            except Exception:
-                pass
+        if self._poll_timer:
+            self._poll_timer.stop()
         if self._loop and not self._loop.is_closed():
             try:
                 self._loop.call_soon_threadsafe(self._loop.stop)
             except Exception:
                 pass
-        try:
-            self.destroy()
-        except Exception:
-            pass
+        event.accept()

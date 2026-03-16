@@ -14,10 +14,16 @@ users, device_configs, ai_models, tasks, logs, and training_data.
 
 import sqlite3
 import threading
+import sys
+import os
+
+# When running as PyInstaller exe, use exe directory for DB/config
+_BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.getcwd()
 
 # Configuration constants
-DB_PATH = "network_manager.db"
+DB_PATH = os.path.join(_BASE_DIR, "network_manager.db")
 GNS3_DEFAULT_URL = "http://localhost:3080"
+CONFIG_FILE = os.path.join(_BASE_DIR, "ancs_config.json")
 
 # Thread lock — acquire before every cur.execute / conn.commit from any thread.
 db_lock = threading.Lock()

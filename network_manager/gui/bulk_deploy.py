@@ -8,9 +8,13 @@ import threading
 import time
 from typing import List, Dict, Tuple, Any
 
-import customtkinter as ctk
-import tkinter as tk
-from tkinter import messagebox
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QLabel,
+    QPushButton, QPlainTextEdit, QCheckBox, QScrollArea, QWidget,
+    QMessageBox, QSizePolicy,
+)
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont, QTextCharFormat, QColor
 
 from ..models import RouterModel, SwitchModel, CoreSwitchModel  # noqa: F401
 from ..network import Sender
@@ -63,6 +67,78 @@ _TEXT   = "#C9D1D9"
 _MUTED  = "#8B949E"
 _BORDER = "#30363D"
 _FONT   = "Inter"
+
+DARK_STYLE = f"""
+QDialog {{
+    background-color: {_BG};
+}}
+QFrame {{
+    background-color: transparent;
+}}
+QFrame[panel="true"] {{
+    background-color: {_PANEL};
+    border-radius: 10px;
+}}
+QFrame[card="true"] {{
+    background-color: {_CARD};
+    border-radius: 8px;
+}}
+QLabel {{
+    color: {_TEXT};
+    background: transparent;
+}}
+QPushButton {{
+    background-color: {_ACCENT};
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-weight: bold;
+}}
+QPushButton:hover {{
+    background-color: #388bfd;
+}}
+QPushButton:disabled {{
+    background-color: #30363D;
+    color: {_MUTED};
+}}
+QPushButton[outline="true"] {{
+    background-color: transparent;
+    color: {_ACCENT};
+    border: 1px solid {_ACCENT};
+}}
+QPushButton[outline="true"]:hover {{
+    background-color: #28313E;
+}}
+QPlainTextEdit {{
+    background-color: {_CARD};
+    color: {_TEXT};
+    border: 1px solid {_BORDER};
+    border-radius: 8px;
+    padding: 8px;
+    font-family: "Courier New";
+    font-size: 12px;
+}}
+QCheckBox {{
+    color: {_MUTED};
+    spacing: 6px;
+}}
+QCheckBox::indicator {{
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    border: 1px solid {_BORDER};
+    background-color: {_CARD};
+}}
+QCheckBox::indicator:checked {{
+    background-color: {_ACCENT};
+    border-color: {_ACCENT};
+}}
+QScrollArea {{
+    background: transparent;
+    border: none;
+}}
+"""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -183,7 +259,6 @@ class ConfigSuggester:
             plans += [self._plan_router(d) for d in routers]
 
         else:
-            # flat / unknown — treat every device as access
             all_devs = routers + cores + switches
             for idx, d in enumerate(all_devs):
                 plans.append(self._plan_access(d, idx))
@@ -275,7 +350,6 @@ class ConfigSuggester:
         name, model, meta = device
         ifaces = meta.get("interfaces", [])
 
-        # Divide interfaces evenly across VLANs
         n_vlans = len(_VLAN_PLAN)
         per_v   = max(1, len(ifaces) // n_vlans) if ifaces else 4
 
@@ -330,13 +404,13 @@ _PATTERN_LABELS = {
 }
 
 _ROLE_ICONS = {
-    "router": "🔀",
-    "core":   "🔶",
-    "access": "🔷",
+    "router": "\U0001F500",
+    "core":   "\U0001F536",
+    "access": "\U0001F537",
 }
 
 
-class BulkDeployPanel(ctk.CTkToplevel):
+class BulkDeployPanel(QDialog):
     """
     Main window for smart bulk operations.
 
@@ -351,22 +425,16 @@ class BulkDeployPanel(ctk.CTkToplevel):
         self.parent_app = parent
         self.devices    = devices
 
-        self.title("Smart Bulk Deploy")
-        self.resizable(True, True)
-        # transient() must be set BEFORE geometry so the window manager can
-        # position the dialog relative to the parent on multi-monitor setups.
-        self.transient(parent)
-        apply_responsive_geometry(self, 900, 680, min_w=700, min_h=500)
-        self.configure(fg_color=_BG)
-        self.grab_set()
+        self.setWindowTitle("Smart Bulk Deploy")
+        self.setMinimumSize(700, 500)
+        self.resize(900, 680)
+        self.setStyleSheet(DARK_STYLE)
+        self.setWindowModality(Qt.ApplicationModal)
         self._deploy_running = False
-        self.protocol("WM_DELETE_WINDOW", self._on_close_request)
 
-        # Detect topology and build suggestions
         self.topology = TopologyDetector(devices).detect()
         self.plans    = ConfigSuggester(self.topology).suggest()
 
-        # Per-plan override flag (after user customises via wizard)
         self._customised: Dict[int, bool] = {}
 
         self._build_ui()
@@ -374,215 +442,179 @@ class BulkDeployPanel(ctk.CTkToplevel):
     # ── UI construction ───────────────────────────────────────────────────────
 
     def _build_ui(self):
-        # ── Header ──
-        hdr = ctk.CTkFrame(self, fg_color=_PANEL, height=60)
-        hdr.pack(fill="x")
-        hdr.pack_propagate(False)
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
 
-        ctk.CTkLabel(
-            hdr, text="Smart Bulk Deploy",
-            font=ctk.CTkFont(family=_FONT, size=18, weight="bold"),
-            text_color=_TEXT,
-        ).pack(side="left", padx=20, pady=14)
+        # ── Header ──
+        hdr = QFrame()
+        hdr.setProperty("panel", True)
+        hdr.setFixedHeight(60)
+        hdr_lay = QHBoxLayout(hdr)
+        hdr_lay.setContentsMargins(20, 0, 20, 0)
+
+        title_lbl = QLabel("Smart Bulk Deploy")
+        title_lbl.setFont(QFont(_FONT, 18, QFont.Bold))
+        hdr_lay.addWidget(title_lbl)
 
         pattern_label = _PATTERN_LABELS.get(self.topology["pattern"], self.topology["pattern"])
-        ctk.CTkLabel(
-            hdr,
-            text=f"Detected: {pattern_label}  •  {len(self.plans)} device(s)",
-            font=ctk.CTkFont(family=_FONT, size=12),
-            text_color=_MUTED,
-        ).pack(side="left", padx=8)
+        info_lbl = QLabel(f"Detected: {pattern_label}  \u2022  {len(self.plans)} device(s)")
+        info_lbl.setFont(QFont(_FONT, 12))
+        info_lbl.setStyleSheet(f"color: {_MUTED};")
+        hdr_lay.addWidget(info_lbl)
+        hdr_lay.addStretch()
+
+        root_layout.addWidget(hdr)
 
         # ── Body: two columns ──
-        body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=16, pady=12)
-        body.columnconfigure(0, weight=3)
-        body.columnconfigure(1, weight=2)
-        body.rowconfigure(0, weight=1)
+        body = QFrame()
+        body_lay = QHBoxLayout(body)
+        body_lay.setContentsMargins(16, 12, 16, 12)
+        body_lay.setSpacing(8)
 
         # Left: device plan cards (scrollable)
-        left = ctk.CTkScrollableFrame(body, fg_color=_PANEL, corner_radius=10)
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+        left_panel = QFrame()
+        left_panel.setProperty("panel", True)
+        left_vbox = QVBoxLayout(left_panel)
+        left_vbox.setContentsMargins(0, 0, 0, 0)
+        left_vbox.setSpacing(0)
 
-        ctk.CTkLabel(
-            left,
-            text="Configuration Plan",
-            font=ctk.CTkFont(family=_FONT, size=14, weight="bold"),
-            text_color=_MUTED,
-        ).pack(anchor="w", padx=16, pady=(14, 8))
+        plan_title = QLabel("  Configuration Plan")
+        plan_title.setFont(QFont(_FONT, 14, QFont.Bold))
+        plan_title.setStyleSheet(f"color: {_MUTED}; padding: 14px 16px 8px 16px;")
+        left_vbox.addWidget(plan_title)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll_content = QWidget()
+        self._cards_layout = QVBoxLayout(scroll_content)
+        self._cards_layout.setContentsMargins(12, 0, 12, 12)
+        self._cards_layout.setSpacing(8)
 
         if not self.plans:
-            ctk.CTkLabel(
-                left,
-                text="No devices to configure.\nImport devices from GNS3 first.",
-                text_color=_MUTED,
-                font=ctk.CTkFont(family=_FONT, size=13),
-            ).pack(padx=16, pady=32)
+            empty_lbl = QLabel("No devices to configure.\nImport devices from GNS3 first.")
+            empty_lbl.setStyleSheet(f"color: {_MUTED};")
+            empty_lbl.setFont(QFont(_FONT, 13))
+            empty_lbl.setAlignment(Qt.AlignCenter)
+            self._cards_layout.addWidget(empty_lbl)
         else:
             for idx, plan in enumerate(self.plans):
-                self._build_plan_card(left, idx, plan)
+                self._build_plan_card(idx, plan)
+
+        self._cards_layout.addStretch()
+        scroll.setWidget(scroll_content)
+        left_vbox.addWidget(scroll)
+
+        body_lay.addWidget(left_panel, stretch=3)
 
         # Right: log area + deploy button
-        right = ctk.CTkFrame(body, fg_color=_PANEL, corner_radius=10)
-        right.grid(row=0, column=1, sticky="nsew")
-        right.rowconfigure(1, weight=1)
-        right.columnconfigure(0, weight=1)
+        right_panel = QFrame()
+        right_panel.setProperty("panel", True)
+        right_vbox = QVBoxLayout(right_panel)
+        right_vbox.setContentsMargins(12, 14, 12, 16)
+        right_vbox.setSpacing(6)
 
-        ctk.CTkLabel(
-            right,
-            text="Deploy Log",
-            font=ctk.CTkFont(family=_FONT, size=14, weight="bold"),
-            text_color=_MUTED,
-        ).grid(row=0, column=0, sticky="w", padx=16, pady=(14, 4))
+        log_title = QLabel("Deploy Log")
+        log_title.setFont(QFont(_FONT, 14, QFont.Bold))
+        log_title.setStyleSheet(f"color: {_MUTED};")
+        right_vbox.addWidget(log_title)
 
-        self.log_box = ctk.CTkTextbox(
-            right,
-            fg_color=_CARD,
-            text_color=_TEXT,
-            font=ctk.CTkFont(family="Courier New", size=12),
-            corner_radius=8,
-            border_width=1,
-            border_color=_BORDER,
-            wrap="word",
-            state="disabled",
-        )
-        self.log_box.grid(row=1, column=0, sticky="nsew", padx=12, pady=(0, 8))
+        self.log_box = QPlainTextEdit()
+        self.log_box.setReadOnly(True)
+        right_vbox.addWidget(self.log_box, stretch=1)
 
         # Force re-deploy toggle
-        force_row = ctk.CTkFrame(right, fg_color="transparent")
-        force_row.grid(row=2, column=0, sticky="ew", padx=12, pady=(0, 4))
-        self._force_redeploy_var = ctk.BooleanVar(value=False)
-        ctk.CTkCheckBox(
-            force_row,
-            text="Force re-deploy (ignore 'already deployed' check)",
-            variable=self._force_redeploy_var,
-            font=ctk.CTkFont(family=_FONT, size=11),
-            text_color=_MUTED,
-            fg_color=_YELLOW,
-            hover_color="#b07800",
-        ).pack(side="left")
+        self._force_checkbox = QCheckBox("Force re-deploy (ignore 'already deployed' check)")
+        self._force_checkbox.setFont(QFont(_FONT, 11))
+        right_vbox.addWidget(self._force_checkbox)
 
         # Deploy All button
-        self.deploy_btn = ctk.CTkButton(
-            right,
-            text="Deploy All",
-            command=self._deploy_all,
-            fg_color=_ACCENT,
-            hover_color="#388bfd",
-            text_color="#fff",
-            font=ctk.CTkFont(family=_FONT, size=14, weight="bold"),
-            corner_radius=8,
-            height=40,
-        )
-        self.deploy_btn.grid(row=3, column=0, sticky="ew", padx=12, pady=(0, 6))
+        self.deploy_btn = QPushButton("Deploy All")
+        self.deploy_btn.setFont(QFont(_FONT, 14, QFont.Bold))
+        self.deploy_btn.setFixedHeight(40)
+        self.deploy_btn.clicked.connect(self._deploy_all)
+        right_vbox.addWidget(self.deploy_btn)
 
-        # Generate-only button (no send)
-        ctk.CTkButton(
-            right,
-            text="Generate Configs Only",
-            command=self._generate_only,
-            fg_color="transparent",
-            hover_color="#28313E",
-            text_color=_ACCENT,
-            font=ctk.CTkFont(family=_FONT, size=13),
-            corner_radius=8,
-            height=34,
-            border_width=1,
-            border_color=_ACCENT,
-        ).grid(row=4, column=0, sticky="ew", padx=12, pady=(0, 16))
+        # Generate-only button
+        gen_btn = QPushButton("Generate Configs Only")
+        gen_btn.setProperty("outline", True)
+        gen_btn.setFont(QFont(_FONT, 13))
+        gen_btn.setFixedHeight(34)
+        gen_btn.clicked.connect(self._generate_only)
+        right_vbox.addWidget(gen_btn)
 
-    def _build_plan_card(self, parent, idx: int, plan: dict):
+        body_lay.addWidget(right_panel, stretch=2)
+        root_layout.addWidget(body, stretch=1)
+
+    def _build_plan_card(self, idx: int, plan: dict):
         name, model, meta = plan["device"]
         role   = plan["role"]
-        icon   = _ROLE_ICONS.get(role, "🔲")
+        icon   = _ROLE_ICONS.get(role, "\u25A1")
 
-        # Determine initial deploy status by comparing stored vs current hash
         stored_hash = _load_deployed_hash(name)
         current_hash = _config_hash(model.build_full_config()) if model.templates else ""
         if not stored_hash:
-            init_status, init_color = "● Not deployed", _ACCENT
+            init_status, init_color = "\u25CF Not deployed", _ACCENT
             should_include = True
         elif current_hash == stored_hash:
-            init_status, init_color = "✓ Deployed", _GREEN
-            should_include = False   # unchanged — opt-out by default
+            init_status, init_color = "\u2713 Deployed", _GREEN
+            should_include = False
         else:
-            init_status, init_color = "↑ Modified", _YELLOW
+            init_status, init_color = "\u2191 Modified", _YELLOW
             should_include = True
 
         plan["_stored_hash"] = stored_hash
 
-        card = ctk.CTkFrame(parent, fg_color=_CARD, corner_radius=8)
-        card.pack(fill="x", padx=12, pady=(0, 8))
+        card = QFrame()
+        card.setProperty("card", True)
+        card_lay = QVBoxLayout(card)
+        card_lay.setContentsMargins(12, 10, 12, 10)
+        card_lay.setSpacing(4)
 
         # Title row
-        title_row = ctk.CTkFrame(card, fg_color="transparent")
-        title_row.pack(fill="x", padx=12, pady=(10, 4))
+        title_row = QHBoxLayout()
+        title_lbl = QLabel(f"{icon}  {name}")
+        title_lbl.setFont(QFont(_FONT, 13, QFont.Bold))
+        title_row.addWidget(title_lbl)
 
-        ctk.CTkLabel(
-            title_row,
-            text=f"{icon}  {name}",
-            font=ctk.CTkFont(family=_FONT, size=13, weight="bold"),
-            text_color=_TEXT,
-        ).pack(side="left")
-
-        # Include-in-deploy checkbox (right side of title row)
-        include_var = ctk.BooleanVar(value=should_include)
-        plan["_include_var"] = include_var
-
-        def _on_include_toggle(v=include_var, p=plan):
-            """When the checkbox changes, re-tint the card border."""
-            pass  # visual update handled by the deploy status label colour
-
-        ctk.CTkCheckBox(
-            title_row,
-            text="Deploy",
-            variable=include_var,
-            command=_on_include_toggle,
-            font=ctk.CTkFont(family=_FONT, size=11),
-            text_color=_MUTED,
-            fg_color=_ACCENT,
-            hover_color="#388bfd",
-            width=80,
-        ).pack(side="right", padx=(0, 4))
+        title_row.addStretch()
 
         # Status badge
-        status_var = tk.StringVar(value=init_status)
-        status_lbl = ctk.CTkLabel(
-            title_row,
-            textvariable=status_var,
-            font=ctk.CTkFont(family=_FONT, size=11),
-            text_color=init_color,
-        )
-        status_lbl.pack(side="right", padx=(0, 8))
-        plan["_status_var"] = status_var
+        status_lbl = QLabel(init_status)
+        status_lbl.setFont(QFont(_FONT, 11))
+        status_lbl.setStyleSheet(f"color: {init_color};")
+        title_row.addWidget(status_lbl)
         plan["_status_lbl"] = status_lbl
 
-        # Summary bullets
+        # Include checkbox
+        include_cb = QCheckBox("Deploy")
+        include_cb.setFont(QFont(_FONT, 11))
+        include_cb.setChecked(should_include)
+        title_row.addWidget(include_cb)
+        plan["_include_cb"] = include_cb
+
+        card_lay.addLayout(title_row)
+
+        # Summary
         summary = self._plan_summary(plan)
-        ctk.CTkLabel(
-            card,
-            text=summary,
-            font=ctk.CTkFont(family=_FONT, size=11),
-            text_color=_MUTED,
-            justify="left",
-            anchor="w",
-            wraplength=340,
-        ).pack(anchor="w", padx=14, pady=(0, 8))
+        sum_lbl = QLabel(summary)
+        sum_lbl.setFont(QFont(_FONT, 11))
+        sum_lbl.setStyleSheet(f"color: {_MUTED};")
+        sum_lbl.setWordWrap(True)
+        card_lay.addWidget(sum_lbl)
 
         # Customize button
-        ctk.CTkButton(
-            card,
-            text="Customize in Wizard",
-            command=lambda i=idx: self._customize(i),
-            fg_color="transparent",
-            hover_color="#28313E",
-            text_color=_ACCENT,
-            font=ctk.CTkFont(family=_FONT, size=12),
-            corner_radius=6,
-            height=28,
-            border_width=1,
-            border_color=_ACCENT,
-        ).pack(anchor="e", padx=12, pady=(0, 10))
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        cust_btn = QPushButton("Customize in Wizard")
+        cust_btn.setProperty("outline", True)
+        cust_btn.setFont(QFont(_FONT, 12))
+        cust_btn.setFixedHeight(28)
+        cust_btn.clicked.connect(lambda checked=False, i=idx: self._customize(i))
+        btn_row.addWidget(cust_btn)
+        card_lay.addLayout(btn_row)
+
+        self._cards_layout.addWidget(card)
 
     def _plan_summary(self, plan: dict) -> str:
         bkts = plan["buckets"]
@@ -593,17 +625,17 @@ class BulkDeployPanel(ctk.CTkToplevel):
             iface = bkts.get("router_interface") or "FastEthernet0/0"
             n_sub = len(bkts.get("routing_entries", []))
             n_dhcp = len(bkts.get("dhcp_pools", []))
-            lines.append(f"Interface: {iface}  •  {n_sub} subinterface(s)")
-            lines.append(f"DHCP pools: {n_dhcp}  •  Default route to ISP")
+            lines.append(f"Interface: {iface}  \u2022  {n_sub} subinterface(s)")
+            lines.append(f"DHCP pools: {n_dhcp}  \u2022  Default route to ISP")
         elif role == "core":
             n_v = len(bkts.get("vlans", []))
-            lines.append(f"{n_v} VLANs  •  SVI routing (ip routing)")
+            lines.append(f"{n_v} VLANs  \u2022  SVI routing (ip routing)")
         elif role == "access":
             n_v = len(bkts.get("vlans", []))
             up  = bkts.get("uplinks", [{}])
-            lines.append(f"{n_v} VLANs  •  Trunk uplink: {up[0].get('ports','—') if up else '—'}")
+            lines.append(f"{n_v} VLANs  \u2022  Trunk uplink: {up[0].get('ports','\u2014') if up else '\u2014'}")
 
-        pw = bkts.get("identity_data", {}).get("enable", "—")
+        pw = bkts.get("identity_data", {}).get("enable", "\u2014")
         lines.append(f"Enable password: {pw}")
         return "\n".join(lines)
 
@@ -630,7 +662,6 @@ class BulkDeployPanel(ctk.CTkToplevel):
             device_role=device_role,
             known_interfaces=meta.get("interfaces", []),
         )
-        # Pre-fill all buckets so the wizard opens with the suggestion loaded
         win.identity_data    = dict(bkts["identity_data"])
         win.vlans            = list(bkts["vlans"])
         win.routing_entries  = list(bkts["routing_entries"])
@@ -641,19 +672,16 @@ class BulkDeployPanel(ctk.CTkToplevel):
         win.router_interface = bkts["router_interface"]
         win.enable_rip       = bkts["enable_rip"]
         win.rip_networks     = list(bkts["rip_networks"])
-        # Jump straight to Identity step (skip Welcome)
         win.current_step = 1
         win._render_step()
-        self.wait_window(win)
+        win.exec()
         self._customised[idx] = True
-        # Config may have changed after customisation — clear cached hash so it
-        # compares fresh on next deploy and the card shows "Modified ↑"
-        plan = self.plans[idx]
         plan["_stored_hash"] = ""
-        self._set_plan_status(plan, "↑ Modified")
+        self._set_plan_status(plan, "\u2191 Modified")
         self._set_plan_status_color(plan, _YELLOW)
-        if plan.get("_include_var"):
-            plan["_include_var"].set(True)
+        cb = plan.get("_include_cb")
+        if cb:
+            cb.setChecked(True)
 
     def _generate_only(self):
         """Generate configs for all devices silently (no send)."""
@@ -663,35 +691,36 @@ class BulkDeployPanel(ctk.CTkToplevel):
         for idx, plan in enumerate(self.plans):
             self._apply_plan_to_model(idx, plan)
             name = plan["device"][0]
-            self._log_write(f"  [OK] {name} — config generated\n")
+            self._log_write(f"  [OK] {name} \u2014 config generated\n")
         self._log_write("\nDone. Use 'Send' in the main window for individual devices,\nor click 'Deploy All' to push all configs now.\n")
-        messagebox.showinfo(
+        QMessageBox.information(
+            self,
             "Configs Generated",
             "All configs have been generated.\nYou can review them in the main window by selecting each device.",
-            parent=self,
         )
 
     def _deploy_all(self):
         """Generate all configs then push them in parallel via Telnet."""
         if not self.plans:
-            messagebox.showwarning("No devices", "No devices in the plan.", parent=self)
+            QMessageBox.warning(self, "No devices", "No devices in the plan.")
             return
 
         gns3_only = [p for p in self.plans if p["device"][2].get("gns3_node")]
         if not gns3_only:
-            messagebox.showwarning(
+            QMessageBox.warning(
+                self,
                 "No GNS3 devices",
                 "Bulk deploy requires GNS3 devices with console IP/port.\n"
                 "Import devices from GNS3 first.",
-                parent=self,
             )
             return
 
-        force = self._force_redeploy_var.get()
-        self.deploy_btn.configure(state="disabled", text="Deploying...")
+        force = self._force_checkbox.isChecked()
+        self.deploy_btn.setEnabled(False)
+        self.deploy_btn.setText("Deploying...")
         self._log_write("=== Bulk Deploy Started ===\n\n")
         if force:
-            self._log_write("⚠  Force re-deploy enabled — skipping hash check\n\n")
+            self._log_write("\u26A0  Force re-deploy enabled \u2014 skipping hash check\n\n")
 
         for idx, plan in enumerate(self.plans):
             self._apply_plan_to_model(idx, plan)
@@ -702,14 +731,14 @@ class BulkDeployPanel(ctk.CTkToplevel):
             name = plan["device"][0]
             meta = plan["device"][2]
 
-            # Respect the per-device include checkbox
-            if not plan.get("_include_var", ctk.BooleanVar(value=True)).get():
-                self._log_write(f"[SKIP] {name} — excluded by checkbox\n")
+            cb = plan.get("_include_cb")
+            if cb and not cb.isChecked():
+                self._log_write(f"[SKIP] {name} \u2014 excluded by checkbox\n")
                 self._set_plan_status(plan, "skipped")
                 continue
 
             if not meta.get("gns3_node"):
-                self._log_write(f"[SKIP] {name} — not a GNS3 device\n")
+                self._log_write(f"[SKIP] {name} \u2014 not a GNS3 device\n")
                 self._set_plan_status(plan, "skipped")
                 continue
 
@@ -725,10 +754,9 @@ class BulkDeployPanel(ctk.CTkToplevel):
             for t in threads:
                 t.join()
             self._deploy_running = False
-            self.after(0, lambda: self.deploy_btn.configure(
-                state="normal", text="Deploy All"
-            ))
-            self.after(0, lambda: self._log_write("\n=== Bulk Deploy Complete ===\n"))
+            QTimer.singleShot(0, lambda: self.deploy_btn.setEnabled(True))
+            QTimer.singleShot(0, lambda: self.deploy_btn.setText("Deploy All"))
+            QTimer.singleShot(0, lambda: self._log_write("\n=== Bulk Deploy Complete ===\n"))
 
         threading.Thread(target=_wait_all, daemon=True).start()
 
@@ -739,24 +767,23 @@ class BulkDeployPanel(ctk.CTkToplevel):
         config = model.build_full_config()
 
         if not config.strip():
-            self._log_write(f"[{name}] No config to send — run Generate first.\n")
+            self._log_write(f"[{name}] No config to send \u2014 run Generate first.\n")
             self._set_plan_status(plan, "no config")
             return
 
-        # ── Hash check: skip if unchanged since last successful deploy ──
         current_hash = _config_hash(config)
         stored_hash  = plan.get("_stored_hash", "")
         if stored_hash and current_hash == stored_hash and not force:
             self._log_write(
-                f"[{name}] Config unchanged since last deploy — skipping. "
+                f"[{name}] Config unchanged since last deploy \u2014 skipping. "
                 f"Enable 'Force re-deploy' to push anyway.\n"
             )
-            self._set_plan_status(plan, "✓ Up-to-date")
+            self._set_plan_status(plan, "\u2713 Up-to-date")
             self._set_plan_status_color(plan, _GREEN)
             return
 
         self._log_write(f"[{name}] Connecting to {host}:{port}...\n")
-        self._set_plan_status(plan, "connecting…")
+        self._set_plan_status(plan, "connecting\u2026")
         self._set_plan_status_color(plan, _MUTED)
 
         try:
@@ -764,7 +791,6 @@ class BulkDeployPanel(ctk.CTkToplevel):
         except (ValueError, TypeError):
             port_int = 23
 
-        # Use credentials from identity_data if available (more reliable than raw meta)
         identity = plan.get("buckets", {}).get("identity_data", {})
         username = identity.get("username") or meta.get("username", "")
         password = identity.get("password") or meta.get("password", "")
@@ -780,15 +806,14 @@ class BulkDeployPanel(ctk.CTkToplevel):
                 enable_pw=enable_pw,
                 text=config,
             )
-            # Persist hash so future deploys detect "already deployed"
             _save_deployed_hash(name, current_hash)
             plan["_stored_hash"] = current_hash
             self._log_write(f"[{name}] Config sent successfully.\n")
-            self._set_plan_status(plan, "✓ Deployed")
+            self._set_plan_status(plan, "\u2713 Deployed")
             self._set_plan_status_color(plan, _GREEN)
         except Exception as e:
             self._log_write(f"[{name}] ERROR: {e}\n")
-            self._set_plan_status(plan, "✗ Failed")
+            self._set_plan_status(plan, "\u2717 Failed")
             self._set_plan_status_color(plan, _RED)
 
     # ── Helpers ───────────────────────────────────────────────────────────────
@@ -808,7 +833,6 @@ class BulkDeployPanel(ctk.CTkToplevel):
         else:
             device_role = "access"
 
-        # Use the wizard in headless mode to reuse all renderers
         wiz = GuidedSetupWizard(
             self, name, model,
             device_role=device_role,
@@ -826,37 +850,40 @@ class BulkDeployPanel(ctk.CTkToplevel):
         wiz.enable_rip       = bkts["enable_rip"]
         wiz.rip_networks     = list(bkts["rip_networks"])
         wiz._write_templates()
-        # Destroy the hidden window immediately
-        wiz.destroy()
+        wiz.close()
 
-    def _on_close_request(self):
+    def closeEvent(self, event):
         """Guard window close while deploy threads are running."""
-        from tkinter import messagebox as _mb
         if self._deploy_running:
-            if not _mb.askokcancel(
+            reply = QMessageBox.question(
+                self,
                 "Deploy in progress",
                 "A bulk deploy is currently running.\n"
                 "Closing now may leave devices partially configured.\n\n"
                 "Close anyway?",
-                parent=self,
-            ):
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                event.ignore()
                 return
-        self.grab_release()
-        self.destroy()
+        event.accept()
 
     def _set_plan_status(self, plan: dict, text: str):
-        """Thread-safe wrapper for updating a plan's status StringVar."""
+        """Thread-safe wrapper for updating a plan's status label."""
         try:
-            self.after(0, lambda v=plan["_status_var"], t=text: v.set(t))
+            lbl = plan.get("_status_lbl")
+            if lbl:
+                QTimer.singleShot(0, lambda: lbl.setText(text))
         except Exception:
             pass
 
     def _set_plan_status_color(self, plan: dict, color: str):
-        """Thread-safe wrapper for updating the status label text_color."""
+        """Thread-safe wrapper for updating the status label color."""
         try:
             lbl = plan.get("_status_lbl")
             if lbl:
-                self.after(0, lambda l=lbl, c=color: l.configure(text_color=c))
+                QTimer.singleShot(0, lambda: lbl.setStyleSheet(f"color: {color};"))
         except Exception:
             pass
 
@@ -864,13 +891,9 @@ class BulkDeployPanel(ctk.CTkToplevel):
         """Thread-safe log write — updates local log_box AND main app Logs tab."""
         def _write():
             try:
-                self.log_box.configure(state="normal")
-                self.log_box.insert("end", msg)
-                self.log_box.see("end")
-                self.log_box.configure(state="disabled")
+                self.log_box.appendPlainText(msg.rstrip("\n"))
             except Exception:
                 pass
-            # Mirror every non-blank line to the main application Logs tab
             stripped = msg.strip()
             if stripped:
                 try:
@@ -878,6 +901,6 @@ class BulkDeployPanel(ctk.CTkToplevel):
                 except Exception:
                     pass
         try:
-            self.after(0, _write)
+            QTimer.singleShot(0, _write)
         except Exception:
             pass
