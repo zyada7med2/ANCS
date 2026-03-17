@@ -702,20 +702,42 @@ class App(QMainWindow):
         super().changeEvent(event)
 
     def _toggle_max_restore(self):
+        from PySide6.QtCore import QRect
+        current_geo = self.geometry()
+
         if self._is_custom_maximized:
-            self.showNormal()
+            # Restoring — animate from maximized to saved normal geometry
+            target_geo = getattr(self, '_normal_geometry', current_geo)
             self._is_custom_maximized = False
+            self._update_max_restore_button()
+
+            # Temporarily stay at current size, animate geometry
+            self.setWindowFlag(Qt.FramelessWindowHint, True)
+            self.show()
+            self._geo_anim = QPropertyAnimation(self, b"geometry")
+            self._geo_anim.setDuration(280)
+            self._geo_anim.setStartValue(current_geo)
+            self._geo_anim.setEndValue(target_geo)
+            self._geo_anim.setEasingCurve(QEasingCurve.InOutCubic)
+            self._geo_anim.start()
         else:
-            self.showMaximized()
+            # Maximizing — save current geo, animate to screen
+            self._normal_geometry = QRect(current_geo)
+            screen = self.screen()
+            if screen:
+                available = screen.availableGeometry()
+            else:
+                available = QRect(0, 0, 1920, 1080)
+
             self._is_custom_maximized = True
-        self._update_max_restore_button()
-        # Brief opacity dip for visual feedback
-        self._max_anim = QPropertyAnimation(self, b"windowOpacity")
-        self._max_anim.setDuration(200)
-        self._max_anim.setKeyValueAt(0, 0.85)
-        self._max_anim.setKeyValueAt(1, 1.0)
-        self._max_anim.setEasingCurve(QEasingCurve.OutCubic)
-        self._max_anim.start()
+            self._update_max_restore_button()
+
+            self._geo_anim = QPropertyAnimation(self, b"geometry")
+            self._geo_anim.setDuration(280)
+            self._geo_anim.setStartValue(current_geo)
+            self._geo_anim.setEndValue(available)
+            self._geo_anim.setEasingCurve(QEasingCurve.InOutCubic)
+            self._geo_anim.start()
 
     def _animated_minimize(self):
         """Fade-out then minimize."""
@@ -760,11 +782,14 @@ class App(QMainWindow):
             if et == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                 gp = event.globalPosition().toPoint()
                 if self._is_custom_maximized:
-                    self.showNormal()
-                    self._is_custom_maximized = False # Update state
+                    # Restore to normal size for dragging
+                    saved = getattr(self, '_normal_geometry', None)
+                    w = saved.width() if saved else self.width() // 2
+                    h = saved.height() if saved else self.height() // 2
+                    self._is_custom_maximized = False
                     self._update_max_restore_button()
-                    self._title_drag_offset = QPoint(self.width() // 2, 16)
-                    self.move(gp - self._title_drag_offset)
+                    self._title_drag_offset = QPoint(w // 2, 16)
+                    self.setGeometry(gp.x() - w // 2, gp.y() - 16, w, h)
                 else:
                     self._title_drag_offset = gp - self.frameGeometry().topLeft()
                 return True
