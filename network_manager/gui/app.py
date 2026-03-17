@@ -685,29 +685,42 @@ class App(QMainWindow):
         for delay in (0, 80, 220, 500):
             QTimer.singleShot(delay, self._apply_windows_dark_title_bar)
 
+    def changeEvent(self, event):
+        if event.type() in (QEvent.WindowStateChange, QEvent.ActivationChange):
+            pass # We trace state manually now, don't update button here because it causes loops
+        super().changeEvent(event)
+
     def _toggle_max_restore(self):
-        if self.isMaximized():
+        if self._is_custom_maximized:
             self.showNormal()
+            self._is_custom_maximized = False
         else:
             self.showMaximized()
+            self._is_custom_maximized = True
         self._update_max_restore_button()
 
     def _update_max_restore_button(self):
         btn = getattr(self, "_btn_title_max", None)
         if btn is None:
             return
-        btn.setText("□" if not self.isMaximized() else "❐")
+        btn.setText("❐" if self._is_custom_maximized else "□")
 
     def eventFilter(self, obj, event):
         if self._use_custom_title_bar and obj in self._title_drag_widgets:
             et = event.type()
+            # Ignore events when the actual click target is a title-bar button
+            # (min / max / close).
+            child_at = obj.childAt(event.position().toPoint()) if hasattr(event, 'position') else None
+            if isinstance(child_at, QPushButton):
+                return False  # let the button handle it normally
             if et == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
                 self._toggle_max_restore()
                 return True
             if et == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                 gp = event.globalPosition().toPoint()
-                if self.isMaximized():
+                if self._is_custom_maximized:
                     self.showNormal()
+                    self._is_custom_maximized = False # Update state
                     self._update_max_restore_button()
                     self._title_drag_offset = QPoint(self.width() // 2, 16)
                     self.move(gp - self._title_drag_offset)
@@ -723,22 +736,6 @@ class App(QMainWindow):
                 return True
         return super().eventFilter(obj, event)
 
-    def nativeEvent(self, eventType, message):
-        """Handle WM_NCCALCSIZE to keep the window truly frameless on Windows."""
-        if not self._use_custom_title_bar or sys.platform != "win32":
-            return super().nativeEvent(eventType, message)
-        try:
-            et = eventType.decode("utf-8", errors="ignore") if isinstance(eventType, (bytes, bytearray)) else str(eventType)
-            if et not in ("windows_generic_MSG", "windows_dispatcher_MSG"):
-                return super().nativeEvent(eventType, message)
-            msg_ptr = ctypes.cast(ctypes.c_void_p(int(message)), ctypes.POINTER(wintypes.MSG))
-            msg = msg_ptr.contents
-            WM_NCCALCSIZE = 0x0083
-            if msg.message == WM_NCCALCSIZE and msg.wParam:
-                return True, 0
-        except Exception:
-            pass
-        return super().nativeEvent(eventType, message)
 
     def _get_export_path(self) -> str:
         """Open themed save-file dialog for project export."""
@@ -819,31 +816,21 @@ class App(QMainWindow):
     def showEvent(self, event):
         super().showEvent(event)
         QTimer.singleShot(50, self._refresh_button_styles)
-        if self._use_custom_title_bar:
-            self._update_max_restore_button()
-        else:
+        if not self._use_custom_title_bar:
             self._schedule_title_bar_theme_refresh()
-
-    def changeEvent(self, event):
-        super().changeEvent(event)
-        if event.type() in (QEvent.WindowStateChange, QEvent.ActivationChange):
-            if self._use_custom_title_bar:
-                self._update_max_restore_button()
-            else:
-                self._schedule_title_bar_theme_refresh()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         if self._use_custom_title_bar:
-            self._update_max_restore_button()
             # Reposition edge grips
             for grip in getattr(self, '_resize_grips', []):
-                if self.isMaximized():
+                if self._is_custom_maximized: # Use custom state here
                     grip.hide()
                 else:
                     grip.reposition()
                     grip.show()
         else:
+            self._schedule_title_bar_theme_refresh()
             self._schedule_title_bar_theme_refresh()
 
     def _refresh_button_styles(self):
@@ -965,6 +952,7 @@ class App(QMainWindow):
         # Install invisible edge grips for frameless resize
         if self._use_custom_title_bar:
             self._resize_grips = []
+            self._is_custom_maximized = False # Initialize custom maximized state
             for edge in ('left', 'right', 'top', 'bottom',
                          'top-left', 'top-right', 'bottom-left', 'bottom-right'):
                 g = _EdgeGrip(self, edge, thickness=6)
