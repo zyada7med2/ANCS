@@ -3,6 +3,7 @@ Main application GUI — PySide6 version with true glass transparency.
 bg.png is painted on the main window; every panel uses rgba() for see-through glass.
 """
 import sys, os, re, json, time, threading, ipaddress, base64, ctypes
+from ctypes import wintypes
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -241,12 +242,8 @@ GLASS_STYLE = """
         max-width: 40px;
         min-height: 28px;
         padding: 0px;
-        font-size: 13px;
+        font-size: 15px;
         font-weight: 600;
-    }
-    QPushButton[titleControlMin="true"] {
-        font-size: 14px;
-        font-weight: 700;
     }
     QPushButton[titleControl="true"]:hover {
         background-color: rgba(88, 166, 255, 72);
@@ -261,7 +258,7 @@ GLASS_STYLE = """
         max-width: 40px;
         min-height: 28px;
         padding: 0px;
-        font-size: 13px;
+        font-size: 15px;
         font-weight: 700;
     }
     QPushButton[titleControlClose="true"]:hover {
@@ -449,6 +446,101 @@ GLASS_STYLE = """
     }
 """
 
+# ── Frameless resize grips ───────────────────────────────────────────────
+
+class _EdgeGrip(QWidget):
+    """Invisible widget placed on a window edge/corner to handle resize."""
+
+    # edge is a combination of: 'left', 'right', 'top', 'bottom'
+    _CURSORS = {
+        'left':         Qt.SizeHorCursor,
+        'right':        Qt.SizeHorCursor,
+        'top':          Qt.SizeVerCursor,
+        'bottom':       Qt.SizeVerCursor,
+        'top-left':     Qt.SizeFDiagCursor,
+        'bottom-right': Qt.SizeFDiagCursor,
+        'top-right':    Qt.SizeBDiagCursor,
+        'bottom-left':  Qt.SizeBDiagCursor,
+    }
+
+    def __init__(self, parent: QMainWindow, edge: str, thickness: int = 6):
+        super().__init__(parent)
+        self._edge = edge
+        self._thickness = thickness
+        self._drag_start_pos = None
+        self._drag_start_geo = None
+        self.setMouseTracking(True)
+        self.setCursor(self._CURSORS.get(edge, Qt.ArrowCursor))
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setStyleSheet("background: transparent;")
+        self.raise_()
+
+    def reposition(self):
+        """Recompute geometry relative to parent window size."""
+        pw = self.parent().width()
+        ph = self.parent().height()
+        t = self._thickness
+        e = self._edge
+        if e == 'left':
+            self.setGeometry(0, t, t, ph - 2 * t)
+        elif e == 'right':
+            self.setGeometry(pw - t, t, t, ph - 2 * t)
+        elif e == 'top':
+            self.setGeometry(t, 0, pw - 2 * t, t)
+        elif e == 'bottom':
+            self.setGeometry(t, ph - t, pw - 2 * t, t)
+        elif e == 'top-left':
+            self.setGeometry(0, 0, t, t)
+        elif e == 'top-right':
+            self.setGeometry(pw - t, 0, t, t)
+        elif e == 'bottom-left':
+            self.setGeometry(0, ph - t, t, t)
+        elif e == 'bottom-right':
+            self.setGeometry(pw - t, ph - t, t, t)
+        self.raise_()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.LeftButton:
+            self._drag_start_pos = event.globalPosition().toPoint()
+            self._drag_start_geo = self.parent().geometry()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start_pos is None or self._drag_start_geo is None:
+            return
+        delta = event.globalPosition().toPoint() - self._drag_start_pos
+        geo = self._drag_start_geo
+        parent = self.parent()
+        min_w = parent.minimumWidth()
+        min_h = parent.minimumHeight()
+
+        new_x, new_y = geo.x(), geo.y()
+        new_w, new_h = geo.width(), geo.height()
+
+        e = self._edge
+        if 'left' in e:
+            proposed_w = geo.width() - delta.x()
+            if proposed_w >= min_w:
+                new_x = geo.x() + delta.x()
+                new_w = proposed_w
+        if 'right' in e:
+            new_w = max(min_w, geo.width() + delta.x())
+        if 'top' in e:
+            proposed_h = geo.height() - delta.y()
+            if proposed_h >= min_h:
+                new_y = geo.y() + delta.y()
+                new_h = proposed_h
+        if 'bottom' in e:
+            new_h = max(min_h, geo.height() + delta.y())
+
+        parent.setGeometry(new_x, new_y, new_w, new_h)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_pos = None
+        self._drag_start_geo = None
+        super().mouseReleaseEvent(event)
+
+
 # ── Main Window ─────────────────────────────────────────────────────────
 
 class App(QMainWindow):
@@ -461,7 +553,6 @@ class App(QMainWindow):
         self._use_custom_title_bar = (sys.platform == "win32")
         self._title_drag_offset: Optional[QPoint] = None
         self._title_drag_widgets: tuple[QWidget, ...] = tuple()
-        self._window_is_maximized = False
         if self._use_custom_title_bar:
             self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setWindowTitle("ANCS - Network Manager")
@@ -595,19 +686,17 @@ class App(QMainWindow):
             QTimer.singleShot(delay, self._apply_windows_dark_title_bar)
 
     def _toggle_max_restore(self):
-        if self._window_is_maximized:
+        if self.isMaximized():
             self.showNormal()
-            self._window_is_maximized = False
         else:
             self.showMaximized()
-            self._window_is_maximized = True
-        QTimer.singleShot(0, self._update_max_restore_button)
+        self._update_max_restore_button()
 
     def _update_max_restore_button(self):
         btn = getattr(self, "_btn_title_max", None)
         if btn is None:
             return
-        btn.setText("□" if not self._window_is_maximized else "❐")
+        btn.setText("□" if not self.isMaximized() else "❐")
 
     def eventFilter(self, obj, event):
         if self._use_custom_title_bar and obj in self._title_drag_widgets:
@@ -617,9 +706,8 @@ class App(QMainWindow):
                 return True
             if et == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
                 gp = event.globalPosition().toPoint()
-                if self._window_is_maximized:
+                if self.isMaximized():
                     self.showNormal()
-                    self._window_is_maximized = False
                     self._update_max_restore_button()
                     self._title_drag_offset = QPoint(self.width() // 2, 16)
                     self.move(gp - self._title_drag_offset)
@@ -636,44 +724,18 @@ class App(QMainWindow):
         return super().eventFilter(obj, event)
 
     def nativeEvent(self, eventType, message):
-        if not self._use_custom_title_bar or sys.platform != "win32" or self.isMaximized():
+        """Handle WM_NCCALCSIZE to keep the window truly frameless on Windows."""
+        if not self._use_custom_title_bar or sys.platform != "win32":
             return super().nativeEvent(eventType, message)
         try:
-            msg = ctypes.wintypes.MSG.from_address(int(message))
-            WM_NCHITTEST = 0x0084
-            if msg.message != WM_NCHITTEST:
+            et = eventType.decode("utf-8", errors="ignore") if isinstance(eventType, (bytes, bytearray)) else str(eventType)
+            if et not in ("windows_generic_MSG", "windows_dispatcher_MSG"):
                 return super().nativeEvent(eventType, message)
-
-            HTLEFT, HTRIGHT = 10, 11
-            HTTOP, HTTOPLEFT, HTTOPRIGHT = 12, 13, 14
-            HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT = 15, 16, 17
-
-            x = ctypes.c_short(msg.lParam & 0xFFFF).value
-            y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
-            fg = self.frameGeometry()
-            border = 8
-
-            left = x < fg.left() + border
-            right = x > fg.right() - border
-            top = y < fg.top() + border
-            bottom = y > fg.bottom() - border
-
-            if top and left:
-                return True, HTTOPLEFT
-            if top and right:
-                return True, HTTOPRIGHT
-            if bottom and left:
-                return True, HTBOTTOMLEFT
-            if bottom and right:
-                return True, HTBOTTOMRIGHT
-            if left:
-                return True, HTLEFT
-            if right:
-                return True, HTRIGHT
-            if top:
-                return True, HTTOP
-            if bottom:
-                return True, HTBOTTOM
+            msg_ptr = ctypes.cast(ctypes.c_void_p(int(message)), ctypes.POINTER(wintypes.MSG))
+            msg = msg_ptr.contents
+            WM_NCCALCSIZE = 0x0083
+            if msg.message == WM_NCCALCSIZE and msg.wParam:
+                return True, 0
         except Exception:
             pass
         return super().nativeEvent(eventType, message)
@@ -765,7 +827,6 @@ class App(QMainWindow):
     def changeEvent(self, event):
         super().changeEvent(event)
         if event.type() in (QEvent.WindowStateChange, QEvent.ActivationChange):
-            self._window_is_maximized = bool(self.windowState() & Qt.WindowMaximized)
             if self._use_custom_title_bar:
                 self._update_max_restore_button()
             else:
@@ -775,6 +836,13 @@ class App(QMainWindow):
         super().resizeEvent(event)
         if self._use_custom_title_bar:
             self._update_max_restore_button()
+            # Reposition edge grips
+            for grip in getattr(self, '_resize_grips', []):
+                if self.isMaximized():
+                    grip.hide()
+                else:
+                    grip.reposition()
+                    grip.show()
         else:
             self._schedule_title_bar_theme_refresh()
 
@@ -894,9 +962,16 @@ class App(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
+        # Install invisible edge grips for frameless resize
+        if self._use_custom_title_bar:
+            self._resize_grips = []
+            for edge in ('left', 'right', 'top', 'bottom',
+                         'top-left', 'top-right', 'bottom-left', 'bottom-right'):
+                g = _EdgeGrip(self, edge, thickness=6)
+                self._resize_grips.append(g)
+
         if self._use_custom_title_bar:
             title_bar = QFrame()
-            self._title_bar = title_bar
             title_bar.setProperty("windowTitleBar", True)
             title_bar.setFixedHeight(34)
             tb_layout = QHBoxLayout(title_bar)
@@ -908,36 +983,22 @@ class App(QMainWindow):
             tb_layout.addWidget(title_lbl)
             tb_layout.addStretch()
 
-            btn_min = QPushButton("–")
+            btn_min = QPushButton("—")
             btn_min.setProperty("titleControl", True)
-            btn_min.setProperty("titleControlMin", True)
-            btn_min.setFocusPolicy(Qt.NoFocus)
-            btn_min.setAutoDefault(False)
-            btn_min.setDefault(False)
-            btn_min.pressed.connect(self.showMinimized)
+            btn_min.clicked.connect(self.showMinimized)
             tb_layout.addWidget(btn_min)
 
             self._btn_title_max = QPushButton("□")
             self._btn_title_max.setProperty("titleControl", True)
-            self._btn_title_max.setFocusPolicy(Qt.NoFocus)
-            self._btn_title_max.setAutoDefault(False)
-            self._btn_title_max.setDefault(False)
-            self._btn_title_max.pressed.connect(self._toggle_max_restore)
+            self._btn_title_max.clicked.connect(self._toggle_max_restore)
             tb_layout.addWidget(self._btn_title_max)
 
             btn_close = QPushButton("✕")
             btn_close.setProperty("titleControlClose", True)
-            btn_close.setFocusPolicy(Qt.NoFocus)
-            btn_close.setAutoDefault(False)
-            btn_close.setDefault(False)
-            btn_close.pressed.connect(self.close)
+            btn_close.clicked.connect(self.close)
             tb_layout.addWidget(btn_close)
 
-            drag_area = QWidget()
-            drag_area.setAttribute(Qt.WA_TranslucentBackground)
-            tb_layout.insertWidget(1, drag_area, 1)
-
-            self._title_drag_widgets = (title_lbl, drag_area)
+            self._title_drag_widgets = (title_bar, title_lbl)
             for w in self._title_drag_widgets:
                 w.installEventFilter(self)
 
