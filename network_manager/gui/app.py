@@ -14,11 +14,16 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QMenu, QMenuBar,
     QSizePolicy, QAbstractItemView, QStackedWidget, QToolTip,
 )
-from PySide6.QtCore import Qt, QTimer, QSize, Signal, QMetaObject, Q_ARG, QThread, QEvent, QPoint
+from PySide6.QtCore import (
+    Qt, QTimer, QSize, Signal, QMetaObject, Q_ARG, QThread, QEvent, QPoint,
+    QPropertyAnimation, QEasingCurve, QParallelAnimationGroup,
+    QSequentialAnimationGroup, QAbstractAnimation, Property,
+)
 from PySide6.QtGui import (
     QPixmap, QPainter, QFont, QColor, QIcon, QPalette, QAction,
     QFontDatabase,
 )
+from PySide6.QtWidgets import QGraphicsOpacityEffect
 
 # ── helper functions (kept from original) ───────────────────────────────
 
@@ -606,6 +611,12 @@ class App(QMainWindow):
             self._schedule_title_bar_theme_refresh()
         self.statusBar().showMessage("Ready")
 
+        # ── Animation state ──────────────────────────────────────────
+        self._fade_in_done = False
+        self._tab_animating = False
+        self._status_overlay = None
+        self._setup_animations()
+
         if _db_error:
             QTimer.singleShot(200, lambda: QMessageBox.warning(
                 self, "Database Error",
@@ -698,6 +709,36 @@ class App(QMainWindow):
             self.showMaximized()
             self._is_custom_maximized = True
         self._update_max_restore_button()
+        # Brief opacity dip for visual feedback
+        self._max_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._max_anim.setDuration(200)
+        self._max_anim.setKeyValueAt(0, 0.85)
+        self._max_anim.setKeyValueAt(1, 1.0)
+        self._max_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._max_anim.start()
+
+    def _animated_minimize(self):
+        """Fade-out then minimize."""
+        self._min_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._min_anim.setDuration(180)
+        self._min_anim.setStartValue(1.0)
+        self._min_anim.setEndValue(0.0)
+        self._min_anim.setEasingCurve(QEasingCurve.InQuad)
+        def do_minimize():
+            self.showMinimized()
+            self.setWindowOpacity(1.0)
+        self._min_anim.finished.connect(do_minimize)
+        self._min_anim.start()
+
+    def _animated_close(self):
+        """Fade-out then close."""
+        self._close_anim = QPropertyAnimation(self, b"windowOpacity")
+        self._close_anim.setDuration(220)
+        self._close_anim.setStartValue(1.0)
+        self._close_anim.setEndValue(0.0)
+        self._close_anim.setEasingCurve(QEasingCurve.InQuad)
+        self._close_anim.finished.connect(self.close)
+        self._close_anim.start()
 
     def _update_max_restore_button(self):
         btn = getattr(self, "_btn_title_max", None)
@@ -818,6 +859,16 @@ class App(QMainWindow):
         QTimer.singleShot(50, self._refresh_button_styles)
         if not self._use_custom_title_bar:
             self._schedule_title_bar_theme_refresh()
+        # ── Fade-in on first show ────────────────────────────────────
+        if not self._fade_in_done:
+            self._fade_in_done = True
+            self.setWindowOpacity(0.0)
+            self._fade_anim = QPropertyAnimation(self, b"windowOpacity")
+            self._fade_anim.setDuration(420)
+            self._fade_anim.setStartValue(0.0)
+            self._fade_anim.setEndValue(1.0)
+            self._fade_anim.setEasingCurve(QEasingCurve.OutCubic)
+            self._fade_anim.start()
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -830,7 +881,6 @@ class App(QMainWindow):
                     grip.reposition()
                     grip.show()
         else:
-            self._schedule_title_bar_theme_refresh()
             self._schedule_title_bar_theme_refresh()
 
     def _refresh_button_styles(self):
@@ -858,8 +908,64 @@ class App(QMainWindow):
             button.setIconSize(QSize(size, size))
 
     def _set_status_message(self, text: str, timeout_ms: int = 0):
+        """Show an animated status notification."""
         try:
             self.statusBar().showMessage(text, timeout_ms)
+            # Animated overlay notification
+            self._show_status_toast(text, timeout_ms)
+        except Exception:
+            pass
+
+    def _show_status_toast(self, text: str, timeout_ms: int = 0):
+        """Show a floating toast notification that fades in and out."""
+        try:
+            if self._status_overlay is None:
+                self._status_overlay = QLabel(self)
+                self._status_overlay.setStyleSheet("""
+                    background-color: rgba(37, 99, 235, 200);
+                    color: #FFFFFF;
+                    border-radius: 8px;
+                    padding: 8px 18px;
+                    font-size: 13px;
+                    font-weight: 600;
+                """)
+                self._status_overlay.setAlignment(Qt.AlignCenter)
+                self._status_overlay_effect = QGraphicsOpacityEffect(self._status_overlay)
+                self._status_overlay.setGraphicsEffect(self._status_overlay_effect)
+
+            overlay = self._status_overlay
+            overlay.setText(text)
+            overlay.adjustSize()
+            # Position at bottom-center
+            x = (self.width() - overlay.width()) // 2
+            y = self.height() - overlay.height() - 50
+            overlay.move(x, y)
+            overlay.show()
+            overlay.raise_()
+
+            # Fade in
+            fade_in = QPropertyAnimation(self._status_overlay_effect, b"opacity")
+            fade_in.setDuration(250)
+            fade_in.setStartValue(0.0)
+            fade_in.setEndValue(1.0)
+            fade_in.setEasingCurve(QEasingCurve.OutCubic)
+
+            if timeout_ms <= 0:
+                timeout_ms = 3000
+
+            # Fade out after timeout
+            fade_out = QPropertyAnimation(self._status_overlay_effect, b"opacity")
+            fade_out.setDuration(400)
+            fade_out.setStartValue(1.0)
+            fade_out.setEndValue(0.0)
+            fade_out.setEasingCurve(QEasingCurve.InCubic)
+
+            self._toast_seq = QSequentialAnimationGroup()
+            self._toast_seq.addAnimation(fade_in)
+            self._toast_seq.addPause(max(timeout_ms - 650, 500))
+            self._toast_seq.addAnimation(fade_out)
+            self._toast_seq.finished.connect(lambda: overlay.hide())
+            self._toast_seq.start()
         except Exception:
             pass
 
@@ -871,6 +977,30 @@ class App(QMainWindow):
             field.setToolTip(tooltip if has_error else "")
         except Exception:
             pass
+
+    def _setup_animations(self):
+        """Initialize recurring UI micro-animations."""
+        # Accent button breathing glow
+        self._glow_phase = 0.0
+        self._glow_timer = QTimer(self)
+        self._glow_timer.timeout.connect(self._tick_accent_glow)
+        self._glow_timer.start(50)  # 20fps for smoothness
+
+    def _tick_accent_glow(self):
+        """Advance the breathing glow animation on accent buttons."""
+        import math
+        self._glow_phase += 0.06
+        # Sine wave from 0.35 → 1.0 for subtle breathing
+        t = (math.sin(self._glow_phase) + 1.0) / 2.0  # 0→1
+        alpha = int(80 + t * 120)  # 80 → 200
+        brightness = int(120 + t * 135)  # 120 → 255
+        glow_color = f"rgba({brightness}, {min(brightness + 30, 255)}, 255, {alpha})"
+        for btn in self.findChildren(QPushButton):
+            if btn.property("accent") is True:
+                btn.setStyleSheet(
+                    f"border: 1px solid {glow_color}; "
+                    f"border-radius: 8px;"
+                )
 
     def _validate_send_inputs(self) -> tuple[bool, str]:
         method = self.send_method.currentText().lower()
@@ -973,7 +1103,7 @@ class App(QMainWindow):
 
             btn_min = QPushButton("—")
             btn_min.setProperty("titleControl", True)
-            btn_min.clicked.connect(self.showMinimized)
+            btn_min.clicked.connect(self._animated_minimize)
             tb_layout.addWidget(btn_min)
 
             self._btn_title_max = QPushButton("□")
@@ -983,7 +1113,7 @@ class App(QMainWindow):
 
             btn_close = QPushButton("✕")
             btn_close.setProperty("titleControlClose", True)
-            btn_close.clicked.connect(self.close)
+            btn_close.clicked.connect(self._animated_close)
             tb_layout.addWidget(btn_close)
 
             self._title_drag_widgets = (title_bar, title_lbl)
@@ -1477,20 +1607,64 @@ class App(QMainWindow):
     # ── Tab switching ───────────────────────────────────────────────────
 
     def _switch_tab(self, tab: str):
+        old_idx = self._stack.currentIndex()
+        new_idx = 0 if tab == "main" else 1
+
         if tab == "main":
-            self._stack.setCurrentIndex(0)
             self.btn_main_nav.setProperty("navTab", "active")
             self.btn_logs_nav.setProperty("navTab", "inactive")
         else:
-            self._stack.setCurrentIndex(1)
             self.btn_main_nav.setProperty("navTab", "inactive")
             self.btn_logs_nav.setProperty("navTab", "active")
             self._refresh_logs_history()
-            
+
         self.btn_main_nav.style().unpolish(self.btn_main_nav)
         self.btn_main_nav.style().polish(self.btn_main_nav)
         self.btn_logs_nav.style().unpolish(self.btn_logs_nav)
         self.btn_logs_nav.style().polish(self.btn_logs_nav)
+
+        # ── Animated slide transition ────────────────────────────────
+        if old_idx == new_idx or self._tab_animating:
+            self._stack.setCurrentIndex(new_idx)
+            return
+
+        self._tab_animating = True
+        incoming = self._stack.widget(new_idx)
+        outgoing = self._stack.widget(old_idx)
+        direction = 1 if new_idx > old_idx else -1  # slide left or right
+        width = self._stack.width()
+
+        # Set up the incoming widget off-screen
+        self._stack.setCurrentIndex(new_idx)
+        incoming.setGeometry(direction * width, 0, width, self._stack.height())
+        outgoing.show()  # keep it visible during animation
+        outgoing.raise_()
+
+        # Animate outgoing sliding out
+        anim_out = QPropertyAnimation(outgoing, b"pos")
+        anim_out.setDuration(280)
+        anim_out.setStartValue(outgoing.pos())
+        anim_out.setEndValue(QPoint(-direction * width, 0))
+        anim_out.setEasingCurve(QEasingCurve.InOutCubic)
+
+        # Animate incoming sliding in
+        anim_in = QPropertyAnimation(incoming, b"pos")
+        anim_in.setDuration(280)
+        anim_in.setStartValue(QPoint(direction * width, 0))
+        anim_in.setEndValue(QPoint(0, 0))
+        anim_in.setEasingCurve(QEasingCurve.InOutCubic)
+
+        self._tab_group = QParallelAnimationGroup()
+        self._tab_group.addAnimation(anim_out)
+        self._tab_group.addAnimation(anim_in)
+
+        def on_finished():
+            self._tab_animating = False
+            outgoing.hide()
+            incoming.setGeometry(0, 0, width, self._stack.height())
+
+        self._tab_group.finished.connect(on_finished)
+        self._tab_group.start()
 
     # ── Thread-safe UI helpers (replaces self.after) ────────────────────
 
