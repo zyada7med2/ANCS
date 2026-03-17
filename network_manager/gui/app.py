@@ -2,7 +2,7 @@
 Main application GUI — PySide6 version with true glass transparency.
 bg.png is painted on the main window; every panel uses rgba() for see-through glass.
 """
-import sys, os, re, json, time, threading, ipaddress, base64
+import sys, os, re, json, time, threading, ipaddress, base64, ctypes
 from typing import Optional
 
 from PySide6.QtWidgets import (
@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QTableWidget, QTableWidgetItem, QHeaderView, QMenu, QMenuBar,
     QSizePolicy, QAbstractItemView, QStackedWidget, QToolTip,
 )
-from PySide6.QtCore import Qt, QTimer, QSize, Signal, QMetaObject, Q_ARG, QThread
+from PySide6.QtCore import Qt, QTimer, QSize, Signal, QMetaObject, Q_ARG, QThread, QEvent, QPoint
 from PySide6.QtGui import (
     QPixmap, QPainter, QFont, QColor, QIcon, QPalette, QAction,
     QFontDatabase,
@@ -39,6 +39,11 @@ def _truncate(text: str, max_chars: int = 22) -> str:
         return text
     return text[: max_chars - 1] + "\u2026"
 
+
+def _gui_path(*parts: str) -> str:
+    """Absolute path helper rooted at this gui package directory."""
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), *parts)
+
 # ── project imports ─────────────────────────────────────────────────────
 
 from ..config import DB_PATH, GNS3_DEFAULT_URL, CONFIG_FILE, conn, cur, db_lock, _db_error
@@ -55,16 +60,17 @@ except Exception:
 
 GLASS_PANEL = """
     QFrame[glassPanel="true"] {
-        background-color: rgba(7, 16, 31, 160);
+        background-color: rgba(8, 18, 34, 168);
         border-radius: 16px;
-        border: 1px solid rgba(70, 140, 230, 60);
+        border: 1px solid rgba(86, 146, 228, 72);
     }
 """
 
 GLASS_STYLE = """
     * {
-        font-family: 'Segoe UI', 'Inter', sans-serif;
+        font-family: 'Segoe UI', sans-serif;
         color: #C9D1D9;
+        font-size: 15px;
     }
 
     QMainWindow {
@@ -72,16 +78,28 @@ GLASS_STYLE = """
     }
 
     QFrame[glassPanel="true"] {
-        background-color: rgba(7, 16, 31, 160);
+        background-color: rgba(8, 18, 34, 168);
         border-radius: 16px;
-        border: 1px solid rgba(70, 140, 230, 60);
+        border: 1px solid rgba(86, 146, 228, 72);
     }
 
     QFrame[topBar="true"] {
-        background-color: rgba(7, 16, 31, 180);
+        background-color: rgba(8, 18, 34, 192);
         border-radius: 0px;
         border: none;
-        border-bottom: 1px solid rgba(70, 140, 230, 40);
+        border-bottom: 1px solid rgba(86, 146, 228, 48);
+    }
+
+    QFrame[windowTitleBar="true"] {
+        background-color: rgba(8, 18, 34, 236);
+        border: none;
+        border-bottom: 1px solid rgba(86, 146, 228, 52);
+    }
+
+    QLabel[windowTitleText="true"] {
+        color: #D3DCE8;
+        font-size: 14px;
+        font-weight: 600;
     }
 
     QLabel {
@@ -90,15 +108,16 @@ GLASS_STYLE = """
     }
 
     QPushButton {
-        background-color: rgba(55, 65, 81, 200);
-        color: #9ca3af;
+        background-color: rgba(49, 61, 78, 208);
+        color: #A6B2C2;
         border: none;
         border-radius: 8px;
-        padding: 6px 14px;
-        font-size: 13px;
+        padding: 7px 14px;
+        font-size: 15px;
+        min-height: 30px;
     }
     QPushButton:hover {
-        background-color: rgba(75, 85, 99, 220);
+        background-color: rgba(68, 84, 108, 228);
         color: #FFFFFF;
     }
     QPushButton:pressed {
@@ -108,9 +127,12 @@ GLASS_STYLE = """
         background-color: rgba(40, 50, 60, 150);
         color: #555;
     }
+    QPushButton:focus {
+        border: 1px solid rgba(147, 197, 253, 210);
+    }
 
     QPushButton[accent="true"] {
-        background-color: rgba(37, 99, 235, 220); /* Figma's vibrant blue */
+        background-color: rgba(37, 99, 235, 224);
         color: white;
         font-weight: 700;
     }
@@ -120,8 +142,8 @@ GLASS_STYLE = """
     
     QPushButton[pill="true"] {
         border-radius: 20px;
-        padding: 8px 20px;
-        font-size: 14px;
+        padding: 9px 20px;
+        font-size: 16px;
         font-weight: 700;
     }
 
@@ -156,34 +178,104 @@ GLASS_STYLE = """
     QPushButton[navTab="active"] {
         background: transparent;
         color: #3B82F6;
-        font-size: 16px;
-        font-weight: 800;
+        font-size: 17px;
+        font-weight: 700;
         border: none;
         border-bottom: 2px solid #3B82F6;
         border-radius: 0px;
-        padding: 6px 16px;
+        padding: 8px 14px;
     }
     QPushButton[navTab="inactive"] {
         background: transparent;
         color: #6B7280;
-        font-size: 16px;
+        font-size: 17px;
         font-weight: 600;
         border: none;
         border-radius: 0px;
-        padding: 6px 16px;
+        padding: 8px 14px;
     }
     QPushButton[navTab="inactive"]:hover {
         color: #D1D5DB;
         background: transparent;
     }
 
-    QLineEdit {
-        background-color: rgba(43, 50, 63, 200);
+    /* Preview panel tab strip */
+    QPushButton[previewTab="active"] {
+        background: transparent;
+        color: #EAF2FF;
+        font-size: 16px;
+        font-weight: 700;
+        border: none;
+        border-bottom: 2px solid #58A6FF;
+        border-radius: 0px;
+        padding: 3px 10px;
+        min-height: 26px;
+    }
+    QPushButton[previewTab="active"]:hover {
+        background: transparent;
         color: #FFFFFF;
-        border: 1px solid #6B7280;
-        border-radius: 8px;
-        padding: 8px 12px;
+    }
+    QPushButton[previewTab="inactive"] {
+        background: transparent;
+        color: #A6B5CA;
+        font-size: 16px;
+        font-weight: 500;
+        border: none;
+        border-bottom: 2px solid transparent;
+        border-radius: 0px;
+        padding: 3px 10px;
+        min-height: 26px;
+    }
+    QPushButton[previewTab="inactive"]:hover {
+        background: transparent;
+        color: #DCE9FA;
+        border-bottom: 2px solid rgba(88, 166, 255, 120);
+    }
+
+    QPushButton[titleControl="true"] {
+        background: transparent;
+        color: #C9D1D9;
+        border: none;
+        border-radius: 6px;
+        min-width: 40px;
+        max-width: 40px;
+        min-height: 28px;
+        padding: 0px;
         font-size: 13px;
+        font-weight: 600;
+    }
+    QPushButton[titleControlMin="true"] {
+        font-size: 14px;
+        font-weight: 700;
+    }
+    QPushButton[titleControl="true"]:hover {
+        background-color: rgba(88, 166, 255, 72);
+        color: #FFFFFF;
+    }
+    QPushButton[titleControlClose="true"] {
+        background: transparent;
+        color: #E6EDF3;
+        border: none;
+        border-radius: 6px;
+        min-width: 40px;
+        max-width: 40px;
+        min-height: 28px;
+        padding: 0px;
+        font-size: 13px;
+        font-weight: 700;
+    }
+    QPushButton[titleControlClose="true"]:hover {
+        background-color: rgba(220, 38, 38, 208);
+        color: #FFFFFF;
+    }
+
+    QLineEdit {
+        background-color: rgba(31, 42, 58, 208);
+        color: #FFFFFF;
+        border: 1px solid rgba(103, 118, 138, 170);
+        border-radius: 8px;
+        padding: 9px 12px;
+        font-size: 15px;
     }
     QLineEdit:disabled {
         background-color: rgba(96, 101, 111, 150);
@@ -193,6 +285,13 @@ GLASS_STYLE = """
     QLineEdit:focus {
         border-color: #58A6FF;
     }
+    QLineEdit::placeholder {
+        color: #7B8798;
+    }
+    QLineEdit[hasError="true"] {
+        border: 1px solid #F87171;
+        background-color: rgba(58, 24, 28, 208);
+    }
 
     QPlainTextEdit {
         background-color: rgba(22, 27, 34, 220);
@@ -200,17 +299,20 @@ GLASS_STYLE = """
         border: none;
         border-radius: 8px;
         font-family: 'Consolas', 'Courier New', monospace;
-        font-size: 13px;
+        font-size: 15px;
         padding: 8px;
     }
 
     QComboBox {
-        background-color: rgba(12, 26, 46, 200);
+        background-color: rgba(18, 32, 54, 206);
         color: #FFFFFF;
-        border: 1px solid rgba(70, 140, 230, 40);
+        border: 1px solid rgba(86, 146, 228, 62);
         border-radius: 8px;
-        padding: 6px 12px;
-        font-size: 13px;
+        padding: 7px 12px;
+        font-size: 15px;
+    }
+    QComboBox:focus {
+        border: 1px solid #58A6FF;
     }
     QComboBox::drop-down {
         border: none;
@@ -240,14 +342,17 @@ GLASS_STYLE = """
     }
 
     QListWidget {
-        background-color: rgba(12, 26, 46, 180);
-        border: 1px solid rgba(26, 40, 64, 200);
+        background-color: rgba(10, 22, 40, 180);
+        border: 1px solid rgba(72, 124, 196, 72);
         border-radius: 8px;
-        padding: 4px;
-        font-size: 12px;
+        padding: 6px;
+        font-size: 15px;
+    }
+    QListWidget:focus {
+        border: 1px solid #58A6FF;
     }
     QListWidget::item {
-        padding: 8px 10px;
+        padding: 9px 10px;
         border-radius: 4px;
     }
     QListWidget::item:selected {
@@ -267,12 +372,12 @@ GLASS_STYLE = """
     }
 
     QScrollBar:vertical {
-        background: rgba(12, 26, 46, 100);
-        width: 8px;
+        background: rgba(12, 26, 46, 88);
+        width: 7px;
         border-radius: 4px;
     }
     QScrollBar::handle:vertical {
-        background: rgba(88, 166, 255, 80);
+        background: rgba(88, 166, 255, 120);
         border-radius: 4px;
         min-height: 30px;
     }
@@ -286,7 +391,10 @@ GLASS_STYLE = """
         border: none;
         border-radius: 8px;
         gridline-color: rgba(48, 54, 61, 150);
-        font-size: 12px;
+        font-size: 14px;
+    }
+    QTableWidget:focus {
+        border: 1px solid #58A6FF;
     }
     QTableWidget::item:selected {
         background-color: rgba(38, 79, 120, 200);
@@ -296,8 +404,9 @@ GLASS_STYLE = """
         background-color: rgba(31, 38, 48, 220);
         color: #8B949E;
         border: none;
-        padding: 6px;
+        padding: 7px 10px;
         font-weight: bold;
+        font-size: 14px;
     }
 
     QMenuBar {
@@ -315,6 +424,29 @@ GLASS_STYLE = """
     QMenu::item:selected {
         background-color: rgba(88, 166, 255, 80);
     }
+
+    /* Unified dialog theming (message boxes, input dialogs, file dialogs) */
+    QDialog, QMessageBox, QInputDialog, QFileDialog {
+        background-color: rgba(8, 18, 34, 232);
+        color: #D3DCE8;
+    }
+    QMessageBox QLabel, QInputDialog QLabel, QFileDialog QLabel {
+        color: #D3DCE8;
+        font-size: 14px;
+    }
+    QDialogButtonBox QPushButton {
+        min-width: 92px;
+    }
+    QFileDialog QTreeView, QFileDialog QListView {
+        background-color: rgba(14, 28, 46, 228);
+        color: #D3DCE8;
+        border: 1px solid rgba(86, 146, 228, 64);
+        border-radius: 8px;
+        selection-background-color: rgba(88, 166, 255, 72);
+    }
+    QFileDialog QLineEdit {
+        background-color: rgba(18, 32, 54, 220);
+    }
 """
 
 # ── Main Window ─────────────────────────────────────────────────────────
@@ -326,26 +458,40 @@ class App(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self._use_custom_title_bar = (sys.platform == "win32")
+        self._title_drag_offset: Optional[QPoint] = None
+        self._title_drag_widgets: tuple[QWidget, ...] = tuple()
+        self._window_is_maximized = False
+        if self._use_custom_title_bar:
+            self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setWindowTitle("ANCS - Network Manager")
-        screen = QApplication.primaryScreen().geometry()
-        w = min(1180, screen.width() - 80)
-        h = min(720, screen.height() - 80)
-        self.resize(w, h)
-        self.setMinimumSize(650, 450)
+        apply_responsive_geometry(
+            self,
+            desired_w=1360,
+            desired_h=800,
+            min_w=1240,
+            min_h=700,
+            margin=80,
+        )
 
         # Load bg.png
         gui_dir = os.path.dirname(os.path.abspath(__file__))
-        bg_path = os.path.join(gui_dir, "bg.png")
+        bg_path = _gui_path("bg.png")
         self._bg_pixmap = QPixmap(bg_path) if os.path.exists(bg_path) else QPixmap()
 
         # Load logo
         self._logo_pixmap = QPixmap()
         for name in ("ancs_logo.png", "logo.png", "ANCS_Logo.png"):
-            lp = os.path.join(gui_dir, name)
+            lp = _gui_path(name)
             if os.path.exists(lp):
                 self._logo_pixmap = QPixmap(lp)
                 break
 
+        self._icon_cache: dict[str, QIcon] = {}
+
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(GLASS_STYLE)
         self.setStyleSheet(GLASS_STYLE)
 
         # State
@@ -362,6 +508,12 @@ class App(QMainWindow):
         self._main_thread_call.connect(self._execute_main_thread_call)
 
         self._build_ui()
+        self._apply_main_window_min_size()
+        if self._use_custom_title_bar:
+            self._update_max_restore_button()
+        else:
+            self._schedule_title_bar_theme_refresh()
+        self.statusBar().showMessage("Ready")
 
         if _db_error:
             QTimer.singleShot(200, lambda: QMessageBox.warning(
@@ -375,6 +527,187 @@ class App(QMainWindow):
     def _config_path(self) -> str:
         """Path to config file (from config module; exe dir when frozen)."""
         return CONFIG_FILE
+
+    def _apply_windows_dark_title_bar(self):
+        """Request dark title bar on Windows for better visual match with app theme."""
+        if self._use_custom_title_bar:
+            return
+        if sys.platform != "win32":
+            return
+        try:
+            hwnd = int(self.winId())
+            DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+            DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19
+            DWMWA_BORDER_COLOR = 34
+            DWMWA_CAPTION_COLOR = 35
+            DWMWA_TEXT_COLOR = 36
+            value = ctypes.c_int(1)
+            set_attr = ctypes.windll.dwmapi.DwmSetWindowAttribute
+
+            # Try modern attribute first, then fallback for older Windows builds.
+            hr = set_attr(
+                ctypes.c_void_p(hwnd),
+                ctypes.c_uint(DWMWA_USE_IMMERSIVE_DARK_MODE),
+                ctypes.byref(value),
+                ctypes.sizeof(value),
+            )
+            if hr != 0:
+                set_attr(
+                    ctypes.c_void_p(hwnd),
+                    ctypes.c_uint(DWMWA_USE_IMMERSIVE_DARK_MODE_OLD),
+                    ctypes.byref(value),
+                    ctypes.sizeof(value),
+                )
+
+            # Force caption colors for Windows builds that ignore immersive dark flag.
+            # COLORREF is 0x00BBGGRR.
+            caption_color = ctypes.c_uint(0x002E1A0C)  # rgb(12, 26, 46)
+            text_color = ctypes.c_uint(0x00E8DCD3)     # rgb(211, 220, 232)
+            border_color = ctypes.c_uint(0x00342818)   # rgb(24, 40, 52)
+            set_attr(
+                ctypes.c_void_p(hwnd),
+                ctypes.c_uint(DWMWA_CAPTION_COLOR),
+                ctypes.byref(caption_color),
+                ctypes.sizeof(caption_color),
+            )
+            set_attr(
+                ctypes.c_void_p(hwnd),
+                ctypes.c_uint(DWMWA_TEXT_COLOR),
+                ctypes.byref(text_color),
+                ctypes.sizeof(text_color),
+            )
+            set_attr(
+                ctypes.c_void_p(hwnd),
+                ctypes.c_uint(DWMWA_BORDER_COLOR),
+                ctypes.byref(border_color),
+                ctypes.sizeof(border_color),
+            )
+        except Exception:
+            pass
+
+    def _schedule_title_bar_theme_refresh(self):
+        """Re-apply title bar theming across startup timing differences on Windows."""
+        if self._use_custom_title_bar:
+            return
+        if sys.platform != "win32":
+            return
+        for delay in (0, 80, 220, 500):
+            QTimer.singleShot(delay, self._apply_windows_dark_title_bar)
+
+    def _toggle_max_restore(self):
+        if self._window_is_maximized:
+            self.showNormal()
+            self._window_is_maximized = False
+        else:
+            self.showMaximized()
+            self._window_is_maximized = True
+        QTimer.singleShot(0, self._update_max_restore_button)
+
+    def _update_max_restore_button(self):
+        btn = getattr(self, "_btn_title_max", None)
+        if btn is None:
+            return
+        btn.setText("□" if not self._window_is_maximized else "❐")
+
+    def eventFilter(self, obj, event):
+        if self._use_custom_title_bar and obj in self._title_drag_widgets:
+            et = event.type()
+            if et == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton:
+                self._toggle_max_restore()
+                return True
+            if et == QEvent.MouseButtonPress and event.button() == Qt.LeftButton:
+                gp = event.globalPosition().toPoint()
+                if self._window_is_maximized:
+                    self.showNormal()
+                    self._window_is_maximized = False
+                    self._update_max_restore_button()
+                    self._title_drag_offset = QPoint(self.width() // 2, 16)
+                    self.move(gp - self._title_drag_offset)
+                else:
+                    self._title_drag_offset = gp - self.frameGeometry().topLeft()
+                return True
+            if et == QEvent.MouseMove and self._title_drag_offset is not None and (event.buttons() & Qt.LeftButton):
+                gp = event.globalPosition().toPoint()
+                self.move(gp - self._title_drag_offset)
+                return True
+            if et == QEvent.MouseButtonRelease:
+                self._title_drag_offset = None
+                return True
+        return super().eventFilter(obj, event)
+
+    def nativeEvent(self, eventType, message):
+        if not self._use_custom_title_bar or sys.platform != "win32" or self.isMaximized():
+            return super().nativeEvent(eventType, message)
+        try:
+            msg = ctypes.wintypes.MSG.from_address(int(message))
+            WM_NCHITTEST = 0x0084
+            if msg.message != WM_NCHITTEST:
+                return super().nativeEvent(eventType, message)
+
+            HTLEFT, HTRIGHT = 10, 11
+            HTTOP, HTTOPLEFT, HTTOPRIGHT = 12, 13, 14
+            HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT = 15, 16, 17
+
+            x = ctypes.c_short(msg.lParam & 0xFFFF).value
+            y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+            fg = self.frameGeometry()
+            border = 8
+
+            left = x < fg.left() + border
+            right = x > fg.right() - border
+            top = y < fg.top() + border
+            bottom = y > fg.bottom() - border
+
+            if top and left:
+                return True, HTTOPLEFT
+            if top and right:
+                return True, HTTOPRIGHT
+            if bottom and left:
+                return True, HTBOTTOMLEFT
+            if bottom and right:
+                return True, HTBOTTOMRIGHT
+            if left:
+                return True, HTLEFT
+            if right:
+                return True, HTRIGHT
+            if top:
+                return True, HTTOP
+            if bottom:
+                return True, HTBOTTOM
+        except Exception:
+            pass
+        return super().nativeEvent(eventType, message)
+
+    def _get_export_path(self) -> str:
+        """Open themed save-file dialog for project export."""
+        dlg = QFileDialog(self, "Export ANCS Project")
+        dlg.setAcceptMode(QFileDialog.AcceptSave)
+        dlg.setNameFilters(["ANCS Project (*.ancs)", "JSON (*.json)", "All files (*.*)"])
+        dlg.setDefaultSuffix("ancs")
+        dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return ""
+        files = dlg.selectedFiles()
+        return files[0] if files else ""
+
+    def _get_import_path(self) -> str:
+        """Open themed open-file dialog for project import."""
+        dlg = QFileDialog(self, "Import ANCS Project")
+        dlg.setAcceptMode(QFileDialog.AcceptOpen)
+        dlg.setFileMode(QFileDialog.ExistingFile)
+        dlg.setNameFilters(["ANCS Project (*.ancs)", "JSON (*.json)", "All files (*.*)"])
+        dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return ""
+        files = dlg.selectedFiles()
+        return files[0] if files else ""
+
+    def _apply_main_window_min_size(self):
+        """Enforce a practical minimum size so the three-panel layout remains usable."""
+        # Keep this aligned with _build_ui fixed widths and spacing values.
+        layout_min_width = 340 + 560 + 350 + (18 * 2) + (20 * 2)
+        layout_min_height = 700
+        self.setMinimumSize(layout_min_width, layout_min_height)
 
     def _load_gns3_url(self) -> str:
         """Load last used GNS3 URL from config file."""
@@ -424,6 +757,26 @@ class App(QMainWindow):
     def showEvent(self, event):
         super().showEvent(event)
         QTimer.singleShot(50, self._refresh_button_styles)
+        if self._use_custom_title_bar:
+            self._update_max_restore_button()
+        else:
+            self._schedule_title_bar_theme_refresh()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() in (QEvent.WindowStateChange, QEvent.ActivationChange):
+            self._window_is_maximized = bool(self.windowState() & Qt.WindowMaximized)
+            if self._use_custom_title_bar:
+                self._update_max_restore_button()
+            else:
+                self._schedule_title_bar_theme_refresh()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._use_custom_title_bar:
+            self._update_max_restore_button()
+        else:
+            self._schedule_title_bar_theme_refresh()
 
     def _refresh_button_styles(self):
         """Ensure buttons with setProperty get correct styling after layout."""
@@ -433,6 +786,93 @@ class App(QMainWindow):
                 w.style().polish(w)
             except Exception:
                 pass
+
+    def _icon(self, name: str) -> QIcon:
+        cached = self._icon_cache.get(name)
+        if cached is not None:
+            return cached
+        icon_path = _gui_path("icons", name)
+        icon = QIcon(icon_path) if os.path.exists(icon_path) else QIcon()
+        self._icon_cache[name] = icon
+        return icon
+
+    def _apply_icon(self, button: QPushButton, name: str, size: int = 16):
+        icon = self._icon(name)
+        if not icon.isNull():
+            button.setIcon(icon)
+            button.setIconSize(QSize(size, size))
+
+    def _set_status_message(self, text: str, timeout_ms: int = 0):
+        try:
+            self.statusBar().showMessage(text, timeout_ms)
+        except Exception:
+            pass
+
+    def _set_field_error(self, field: QLineEdit, has_error: bool, tooltip: str = ""):
+        try:
+            field.setProperty("hasError", has_error)
+            field.style().unpolish(field)
+            field.style().polish(field)
+            field.setToolTip(tooltip if has_error else "")
+        except Exception:
+            pass
+
+    def _validate_send_inputs(self) -> tuple[bool, str]:
+        method = self.send_method.currentText().lower()
+        content = self.preview.toPlainText().strip()
+        if not content:
+            return False, "Generate a config first"
+
+        # Reset field error state before checking.
+        for field in (self.ent_serial_port, self.ent_serial_baud, self.ent_host,
+                      self.ent_port, self.ent_user, self.ent_pass):
+            self._set_field_error(field, False)
+
+        if method == "serial":
+            port = self.ent_serial_port.text().strip()
+            baud_raw = self.ent_serial_baud.text().strip() or "9600"
+            if not port:
+                self._set_field_error(self.ent_serial_port, True, "Serial port is required")
+                return False, "Serial port is required"
+            try:
+                int(baud_raw)
+            except Exception:
+                self._set_field_error(self.ent_serial_baud, True, "Baud rate must be a number")
+                return False, "Baud rate is invalid"
+            return True, "Ready to send over serial"
+
+        host = self.ent_host.text().strip()
+        if not host:
+            self._set_field_error(self.ent_host, True, "Host or IP is required")
+            return False, "Host is required"
+
+        port_raw = self.ent_port.text().strip() or ("22" if method == "ssh" else "23")
+        try:
+            port_val = int(port_raw)
+            if port_val <= 0 or port_val > 65535:
+                raise ValueError()
+        except Exception:
+            self._set_field_error(self.ent_port, True, "Port must be between 1 and 65535")
+            return False, "Port is invalid"
+
+        if method == "ssh":
+            user = self.ent_user.text().strip()
+            pw = self.ent_pass.text().strip()
+            if not user:
+                self._set_field_error(self.ent_user, True, "Username is required for SSH")
+                return False, "Username is required"
+            if not pw:
+                self._set_field_error(self.ent_pass, True, "Password is required for SSH")
+                return False, "Password is required"
+
+        return True, "Ready to send"
+
+    def _update_send_button_state(self):
+        if self._send_in_progress:
+            return
+        ok, reason = self._validate_send_inputs()
+        self.btn_send.setEnabled(ok)
+        self.btn_send.setToolTip("" if ok else reason)
 
     # ── bg.png painting ─────────────────────────────────────────────────
 
@@ -454,16 +894,65 @@ class App(QMainWindow):
         root_layout.setContentsMargins(0, 0, 0, 0)
         root_layout.setSpacing(0)
 
+        if self._use_custom_title_bar:
+            title_bar = QFrame()
+            self._title_bar = title_bar
+            title_bar.setProperty("windowTitleBar", True)
+            title_bar.setFixedHeight(34)
+            tb_layout = QHBoxLayout(title_bar)
+            tb_layout.setContentsMargins(10, 4, 6, 4)
+            tb_layout.setSpacing(6)
+
+            title_lbl = QLabel(self.windowTitle())
+            title_lbl.setProperty("windowTitleText", True)
+            tb_layout.addWidget(title_lbl)
+            tb_layout.addStretch()
+
+            btn_min = QPushButton("–")
+            btn_min.setProperty("titleControl", True)
+            btn_min.setProperty("titleControlMin", True)
+            btn_min.setFocusPolicy(Qt.NoFocus)
+            btn_min.setAutoDefault(False)
+            btn_min.setDefault(False)
+            btn_min.pressed.connect(self.showMinimized)
+            tb_layout.addWidget(btn_min)
+
+            self._btn_title_max = QPushButton("□")
+            self._btn_title_max.setProperty("titleControl", True)
+            self._btn_title_max.setFocusPolicy(Qt.NoFocus)
+            self._btn_title_max.setAutoDefault(False)
+            self._btn_title_max.setDefault(False)
+            self._btn_title_max.pressed.connect(self._toggle_max_restore)
+            tb_layout.addWidget(self._btn_title_max)
+
+            btn_close = QPushButton("✕")
+            btn_close.setProperty("titleControlClose", True)
+            btn_close.setFocusPolicy(Qt.NoFocus)
+            btn_close.setAutoDefault(False)
+            btn_close.setDefault(False)
+            btn_close.pressed.connect(self.close)
+            tb_layout.addWidget(btn_close)
+
+            drag_area = QWidget()
+            drag_area.setAttribute(Qt.WA_TranslucentBackground)
+            tb_layout.insertWidget(1, drag_area, 1)
+
+            self._title_drag_widgets = (title_lbl, drag_area)
+            for w in self._title_drag_widgets:
+                w.installEventFilter(self)
+
+            root_layout.addWidget(title_bar)
+
         # ── TOP BAR ─────────────────────────────────────────────────────
         top = QFrame()
         top.setProperty("topBar", True)
-        top.setFixedHeight(70)
+        top.setFixedHeight(72)
         top_layout = QHBoxLayout(top)
-        top_layout.setContentsMargins(8, 8, 8, 8)
+        top_layout.setContentsMargins(14, 10, 14, 10)
 
         # Logo
         logo_frame = QHBoxLayout()
-        logo_frame.setSpacing(8)
+        logo_frame.setSpacing(10)
         if not self._logo_pixmap.isNull():
             logo_lbl = QLabel()
             logo_lbl.setPixmap(self._logo_pixmap.scaled(
@@ -481,10 +970,10 @@ class App(QMainWindow):
         title_col = QVBoxLayout()
         title_col.setSpacing(0)
         lbl_title = QLabel("ANCS")
-        lbl_title.setStyleSheet("color: #4A9EFF; font-size: 20px; font-weight: bold;")
+        lbl_title.setStyleSheet("color: #4A9EFF; font-size: 21px; font-weight: 700;")
         title_col.addWidget(lbl_title)
         lbl_sub = QLabel("Auto Network Configuration System")
-        lbl_sub.setStyleSheet("color: #8B9AB0; font-size: 9px;")
+        lbl_sub.setStyleSheet("color: #8B9AB0; font-size: 12px;")
         title_col.addWidget(lbl_sub)
         logo_frame.addLayout(title_col)
         top_layout.addLayout(logo_frame)
@@ -515,37 +1004,42 @@ class App(QMainWindow):
         main_page = QWidget()
         main_page.setAttribute(Qt.WA_TranslucentBackground)
         main_layout = QHBoxLayout(main_page)
-        main_layout.setContentsMargins(24, 24, 24, 24)
-        main_layout.setSpacing(28)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+        main_layout.setSpacing(18)
 
         # LEFT PANEL (~1/5 width, fixed)
         left_panel = QFrame()
         left_panel.setProperty("glassPanel", True)
-        left_panel.setFixedWidth(320)
+        left_panel.setFixedWidth(340)
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(16, 16, 16, 16)
-        left_layout.setSpacing(8)
+        left_layout.setContentsMargins(18, 18, 18, 18)
+        left_layout.setSpacing(10)
 
         lbl_devices = QLabel("Devices")
-        lbl_devices.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: bold;")
+        lbl_devices.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: 700;")
         left_layout.addWidget(lbl_devices)
 
         self.device_list = QListWidget()
+        self.device_list.setIconSize(QSize(16, 16))
         self.device_list.setMinimumHeight(120)
         self.device_list.currentRowChanged.connect(self._on_device_row_changed)
         left_layout.addWidget(self.device_list)
 
         dev_btns = QHBoxLayout()
         btn_add = QPushButton("+ Add")
+        btn_add.setProperty("outlined", True)
+        btn_add.setFixedHeight(34)
         btn_add.clicked.connect(self.add_device_prompt)
         btn_remove = QPushButton("Remove")
+        btn_remove.setProperty("outlined", True)
+        btn_remove.setFixedHeight(34)
         btn_remove.clicked.connect(self.remove_selected_device)
         dev_btns.addWidget(btn_add)
         dev_btns.addWidget(btn_remove)
         left_layout.addLayout(dev_btns)
 
         lbl_templates = QLabel("Templates")
-        lbl_templates.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: bold;")
+        lbl_templates.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: 700;")
         left_layout.addWidget(lbl_templates)
 
         self.template_list = QListWidget()
@@ -554,12 +1048,23 @@ class App(QMainWindow):
 
         tpl_btns = QHBoxLayout()
         btn_tpl_add = QPushButton("+ Add")
+        self._apply_icon(btn_tpl_add, "doc.svg")
+        btn_tpl_add.setProperty("outlined", True)
+        btn_tpl_add.setFixedHeight(34)
         btn_tpl_add.clicked.connect(self.add_template_dialog)
         btn_tpl_edit = QPushButton("Edit")
+        self._apply_icon(btn_tpl_edit, "doc.svg")
+        btn_tpl_edit.setProperty("outlined", True)
+        btn_tpl_edit.setFixedHeight(34)
         btn_tpl_edit.clicked.connect(self.edit_template_dialog)
         tpl_btns.addWidget(btn_tpl_add)
         tpl_btns.addWidget(btn_tpl_edit)
         left_layout.addLayout(tpl_btns)
+
+        left_sep_top = QFrame()
+        left_sep_top.setFrameShape(QFrame.HLine)
+        left_sep_top.setStyleSheet("color: rgba(86,146,228,45);")
+        left_layout.addWidget(left_sep_top)
 
         # Action buttons
         btn_guided = QPushButton("Guided Setup")
@@ -578,15 +1083,13 @@ class App(QMainWindow):
         btn_monitor.clicked.connect(self.open_monitor)
         left_layout.addWidget(btn_monitor)
 
-        btn_topo = QPushButton("Topology")
-        btn_topo.clicked.connect(self.open_topology)
-        left_layout.addWidget(btn_topo)
-
         btn_subnet = QPushButton("Subnet Calculator")
+        btn_subnet.setProperty("outlined", True)
         btn_subnet.clicked.connect(lambda: self._open_subnet_calculator())
         left_layout.addWidget(btn_subnet)
 
         btn_history = QPushButton("Send History")
+        btn_history.setProperty("outlined", True)
         btn_history.clicked.connect(self.open_audit_log)
         left_layout.addWidget(btn_history)
 
@@ -596,35 +1099,72 @@ class App(QMainWindow):
         self.btn_rollback.setVisible(False)
         left_layout.addWidget(self.btn_rollback)
 
+        left_sep_bottom = QFrame()
+        left_sep_bottom.setFrameShape(QFrame.HLine)
+        left_sep_bottom.setStyleSheet("color: rgba(86,146,228,35);")
+        left_layout.addWidget(left_sep_bottom)
+
         left_layout.addStretch()
 
-        # CENTER PANEL
-        center_panel = QFrame()
-        center_panel.setProperty("glassPanel", True)
-        center_layout = QVBoxLayout(center_panel)
-        center_layout.setContentsMargins(16, 16, 16, 16)
-        center_layout.setSpacing(12)
+        # CENTER COLUMN (header outside panel + panel content)
+        center_column = QWidget()
+        center_column.setAttribute(Qt.WA_TranslucentBackground)
+        center_column.setMinimumWidth(560)
+        center_column.setMaximumWidth(960)
+        center_column.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        center_column_layout = QVBoxLayout(center_column)
+        center_column_layout.setContentsMargins(0, 0, 0, 0)
+        center_column_layout.setSpacing(8)
 
-        center_top = QHBoxLayout()
+        center_header = QHBoxLayout()
         lbl_preview = QLabel("Preview")
-        lbl_preview.setStyleSheet("color: #C9D1D9; font-size: 24px; font-weight: bold;")
-        center_top.addWidget(lbl_preview)
-        center_top.addStretch()
+        lbl_preview.setStyleSheet("color: #F0F2F4; font-size: 24px; font-weight: 700;")
+        center_header.addWidget(lbl_preview)
+        center_header.addStretch()
 
         btn_export = QPushButton("Export Project")
         btn_export.setProperty("outlined", True)
+        btn_export.setFixedHeight(36)
         btn_export.clicked.connect(self.export_project)
-        center_top.addWidget(btn_export)
+        center_header.addWidget(btn_export)
 
         btn_import = QPushButton("Import Project")
         btn_import.setProperty("outlined", True)
+        btn_import.setFixedHeight(36)
         btn_import.clicked.connect(self.import_project)
-        center_top.addWidget(btn_import)
-        center_layout.addLayout(center_top)
+        center_header.addWidget(btn_import)
+        center_column_layout.addLayout(center_header)
+
+        center_panel = QFrame()
+        center_panel.setProperty("glassPanel", True)
+        center_panel.setMinimumHeight(470)
+        center_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Maximum)
+        center_layout = QVBoxLayout(center_panel)
+        center_layout.setContentsMargins(14, 12, 14, 14)
+        center_layout.setSpacing(10)
+
+        center_tabs = QHBoxLayout()
+        center_tabs.setSpacing(8)
+        center_tabs.setContentsMargins(0, 0, 0, 2)
+        btn_cfg_tab = QPushButton("Config Preview")
+        btn_cfg_tab.setProperty("previewTab", "active")
+        btn_cfg_tab.setFocusPolicy(Qt.NoFocus)
+        btn_cfg_tab.setFixedHeight(32)
+        center_tabs.addWidget(btn_cfg_tab)
+
+        btn_topo_tab = QPushButton("GNS3 Topology View")
+        btn_topo_tab.setProperty("previewTab", "inactive")
+        btn_topo_tab.setFocusPolicy(Qt.NoFocus)
+        btn_topo_tab.setFixedHeight(32)
+        btn_topo_tab.clicked.connect(self.open_topology)
+        center_tabs.addWidget(btn_topo_tab)
+        center_tabs.addStretch()
+        center_layout.addLayout(center_tabs)
 
         self.preview = QPlainTextEdit()
         self.preview.setPlaceholderText("Configuration preview will appear here...")
-        center_layout.addWidget(self.preview, 1)
+        self.preview.setFixedHeight(350)
+        center_layout.addWidget(self.preview)
 
         center_bottom = QHBoxLayout()
         btn_generate = QPushButton("Generate")
@@ -640,27 +1180,28 @@ class App(QMainWindow):
         btn_clear.clicked.connect(self.clear_preview)
         center_bottom.addWidget(btn_clear)
         center_layout.addLayout(center_bottom)
+        center_column_layout.addWidget(center_panel)
 
         # RIGHT PANEL (~1/5 width, fixed)
         self.right_panel = QFrame()
         self.right_panel.setProperty("glassPanel", True)
-        self.right_panel.setMinimumWidth(300)
+        self.right_panel.setMinimumWidth(340)
         right_scroll = QScrollArea()
         right_scroll.setWidget(self.right_panel)
         right_scroll.setWidgetResizable(True)
         right_scroll.setFrameShape(QFrame.NoFrame)
         right_scroll.setStyleSheet("background: transparent;")
-        right_scroll.setFixedWidth(320)
+        right_scroll.setFixedWidth(350)
         right_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         right_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
         right_layout = QVBoxLayout(self.right_panel)
-        right_layout.setContentsMargins(16, 16, 16, 16)
-        right_layout.setSpacing(8)
+        right_layout.setContentsMargins(18, 18, 18, 18)
+        right_layout.setSpacing(10)
 
         # GNS3 section
         lbl_gns3 = QLabel("GNS3 Project")
-        lbl_gns3.setStyleSheet("color: white; font-size: 18px; font-weight: bold;")
+        lbl_gns3.setStyleSheet("color: white; font-size: 18px; font-weight: 700;")
         right_layout.addWidget(lbl_gns3)
 
         gns3_row = QHBoxLayout()
@@ -669,8 +1210,9 @@ class App(QMainWindow):
         gns3_row.addWidget(self.lbl_gns3_project_name, 1)
         self.lbl_gns3_status = QLabel("Click Import")
         self.lbl_gns3_status.setStyleSheet(
-            "color: #9BA3AF; background-color: rgba(12,26,46,200); "
-            "border-radius: 6px; padding: 4px 10px; font-size: 12px;")
+            "color: #D1D7E0; background-color: rgba(18,34,56,210); "
+            "border: 1px solid rgba(76,137,219,70); border-radius: 7px; "
+            "padding: 5px 11px; font-size: 13px;")
         gns3_row.addWidget(self.lbl_gns3_status)
         right_layout.addLayout(gns3_row)
 
@@ -684,51 +1226,70 @@ class App(QMainWindow):
         gns3_btns.addWidget(btn_gns3_refresh)
         right_layout.addLayout(gns3_btns)
 
+        right_sep_top = QFrame()
+        right_sep_top.setFrameShape(QFrame.HLine)
+        right_sep_top.setStyleSheet("color: rgba(86,146,228,45);")
+        right_layout.addWidget(right_sep_top)
+
         # Send / Connect section
         lbl_send = QLabel("Send / Connect")
-        lbl_send.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: bold;")
+        lbl_send.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: 700;")
         right_layout.addWidget(lbl_send)
 
         self.send_method = QComboBox()
         self.send_method.addItems(["Telnet", "Serial", "SSH"])
         self.send_method.currentTextChanged.connect(self._on_protocol_changed)
+        self.send_method.currentTextChanged.connect(lambda _: self._update_send_button_state())
         right_layout.addWidget(self.send_method)
 
         # Serial fields
         self.lbl_serial_title = QLabel("Serial")
-        self.lbl_serial_title.setStyleSheet("color: #C9D1D9; font-size: 15px; font-weight: bold;")
+        self.lbl_serial_title.setStyleSheet("color: #C9D1D9; font-size: 15px; font-weight: 700;")
         right_layout.addWidget(self.lbl_serial_title)
         self.ent_serial_port = QLineEdit()
         self.ent_serial_port.setPlaceholderText("COM3 or /dev/ttyUSB0")
+        self.ent_serial_port.setAccessibleName("Serial Port")
+        self.ent_serial_port.textChanged.connect(lambda _: self._update_send_button_state())
         right_layout.addWidget(self.ent_serial_port)
         self.ent_serial_baud = QLineEdit()
         self.ent_serial_baud.setPlaceholderText("9600")
+        self.ent_serial_baud.setAccessibleName("Serial Baud")
+        self.ent_serial_baud.textChanged.connect(lambda _: self._update_send_button_state())
         right_layout.addWidget(self.ent_serial_baud)
 
         # Network fields
         self.lbl_network_title = QLabel("Network")
-        self.lbl_network_title.setStyleSheet("color: #C9D1D9; font-size: 15px; font-weight: bold;")
+        self.lbl_network_title.setStyleSheet("color: #C9D1D9; font-size: 15px; font-weight: 700;")
         right_layout.addWidget(self.lbl_network_title)
         self.ent_host = QLineEdit()
         self.ent_host.setPlaceholderText("Host or IP")
+        self.ent_host.setAccessibleName("Host or IP")
+        self.ent_host.textChanged.connect(lambda _: self._update_send_button_state())
         right_layout.addWidget(self.ent_host)
         self.ent_port = QLineEdit()
         self.ent_port.setPlaceholderText("Port")
+        self.ent_port.setAccessibleName("Port")
+        self.ent_port.textChanged.connect(lambda _: self._update_send_button_state())
         right_layout.addWidget(self.ent_port)
         self.ent_user = QLineEdit()
         self.ent_user.setPlaceholderText("Username")
+        self.ent_user.setAccessibleName("Username")
+        self.ent_user.textChanged.connect(lambda _: self._update_send_button_state())
         right_layout.addWidget(self.ent_user)
         self.ent_pass = QLineEdit()
         self.ent_pass.setPlaceholderText("Password")
         self.ent_pass.setEchoMode(QLineEdit.Password)
+        self.ent_pass.setAccessibleName("Password")
+        self.ent_pass.textChanged.connect(lambda _: self._update_send_button_state())
         right_layout.addWidget(self.ent_pass)
 
         lbl_optional = QLabel("Optional")
-        lbl_optional.setStyleSheet("color: #9BA3AF; font-size: 12px;")
+        lbl_optional.setStyleSheet("color: #9BA3AF; font-size: 13px;")
         right_layout.addWidget(lbl_optional)
         enable_row = QHBoxLayout()
         self.ent_enable = QLineEdit()
         self.ent_enable.setPlaceholderText("Enable Password")
+        self.ent_enable.setAccessibleName("Enable Password")
         self.enable_checkbox = QCheckBox()
         enable_row.addWidget(self.ent_enable, 1)
         enable_row.addWidget(self.enable_checkbox)
@@ -737,17 +1298,20 @@ class App(QMainWindow):
         self.btn_send = QPushButton("Send")
         self.btn_send.setProperty("accent", True)
         self.btn_send.setProperty("pill", True)
-        self.btn_send.setFixedHeight(40)
+        self.btn_send.setFixedHeight(42)
+        self._apply_icon(self.btn_send, "router.svg")
         self.btn_send.clicked.connect(self.send_now)
         right_layout.addWidget(self.btn_send)
 
         btn_save_creds = QPushButton("Save Credentials")
         btn_save_creds.setProperty("outlined", True)
+        btn_save_creds.setFixedHeight(34)
         btn_save_creds.clicked.connect(self.save_credentials)
         right_layout.addWidget(btn_save_creds)
 
         btn_terminal = QPushButton("Open Terminal")
         btn_terminal.setProperty("outlined", True)
+        btn_terminal.setFixedHeight(34)
         btn_terminal.clicked.connect(self.open_terminal)
         right_layout.addWidget(btn_terminal)
 
@@ -757,13 +1321,17 @@ class App(QMainWindow):
         self.network_widgets = [self.lbl_network_title, self.ent_host, self.ent_port,
                                 self.ent_user, self.ent_pass, self.ent_enable, self.enable_checkbox]
         self._on_protocol_changed("Telnet")
+        self.preview.textChanged.connect(self._update_send_button_state)
+        self._update_send_button_state()
 
         # Layout: left | gap | center (preview) | gap | right — gaps between panels, center widest
+        main_layout.addStretch(1)
         main_layout.addWidget(left_panel)
-        main_layout.addSpacing(28)
-        main_layout.addWidget(center_panel, 1)
-        main_layout.addSpacing(28)
+        main_layout.addSpacing(18)
+        main_layout.addWidget(center_column, 2, Qt.AlignTop)
+        main_layout.addSpacing(18)
         main_layout.addWidget(right_scroll)
+        main_layout.addStretch(1)
 
         self._stack.addWidget(main_page)
 
@@ -771,17 +1339,17 @@ class App(QMainWindow):
         logs_page = QWidget()
         logs_page.setAttribute(Qt.WA_TranslucentBackground)
         logs_layout = QVBoxLayout(logs_page)
-        logs_layout.setContentsMargins(16, 16, 16, 16)
+        logs_layout.setContentsMargins(20, 20, 20, 20)
 
         logs_panel = QFrame()
         logs_panel.setProperty("glassPanel", True)
         logs_inner = QVBoxLayout(logs_panel)
-        logs_inner.setContentsMargins(24, 24, 24, 24)
-        logs_inner.setSpacing(12)
+        logs_inner.setContentsMargins(20, 20, 20, 20)
+        logs_inner.setSpacing(14)
 
         logs_top = QHBoxLayout()
         lbl_logs_title = QLabel("Logs")
-        lbl_logs_title.setStyleSheet("color: #C9D1D9; font-size: 24px; font-weight: bold;")
+        lbl_logs_title.setStyleSheet("color: #C9D1D9; font-size: 24px; font-weight: 700;")
         logs_top.addWidget(lbl_logs_title)
 
         self.logs_device_var = QComboBox()
@@ -798,7 +1366,7 @@ class App(QMainWindow):
         logs_inner.addLayout(logs_top)
 
         lbl_hist = QLabel("History (by device)")
-        lbl_hist.setStyleSheet("color: #9ca3af; font-size: 14px; font-weight: bold;")
+        lbl_hist.setStyleSheet("color: #9ca3af; font-size: 15px; font-weight: bold;")
         logs_inner.addWidget(lbl_hist)
 
         self.logs_history_table = QTableWidget(0, 4)
@@ -809,7 +1377,7 @@ class App(QMainWindow):
         logs_inner.addWidget(self.logs_history_table)
 
         lbl_live = QLabel("Live output")
-        lbl_live.setStyleSheet("color: #9ca3af; font-size: 14px; font-weight: bold;")
+        lbl_live.setStyleSheet("color: #9ca3af; font-size: 15px; font-weight: bold;")
         logs_inner.addWidget(lbl_live)
 
         self.txt_logs = QPlainTextEdit()
@@ -824,11 +1392,28 @@ class App(QMainWindow):
         logs_layout.addWidget(logs_panel)
         self._stack.addWidget(logs_page)
 
-        # Menu bar
-        menubar = self.menuBar()
-        gns3_menu = menubar.addMenu("GNS3")
-        act_import = gns3_menu.addAction("Import from GNS3")
-        act_import.triggered.connect(self.gns3_list_projects)
+        # Hide native menu bar (custom title bar + in-panel controls handle GNS3 actions).
+        self.menuBar().setVisible(False)
+
+        act_generate = QAction("Generate", self)
+        act_generate.setShortcut("Ctrl+Return")
+        act_generate.triggered.connect(self.generate_full)
+        self.addAction(act_generate)
+
+        act_send = QAction("Send", self)
+        act_send.setShortcut("Ctrl+Shift+Return")
+        act_send.triggered.connect(self.send_now)
+        self.addAction(act_send)
+
+        act_main_tab = QAction("Switch to Main", self)
+        act_main_tab.setShortcut("Ctrl+1")
+        act_main_tab.triggered.connect(lambda: self._switch_tab("main"))
+        self.addAction(act_main_tab)
+
+        act_logs_tab = QAction("Switch to Logs", self)
+        act_logs_tab.setShortcut("Ctrl+2")
+        act_logs_tab.triggered.connect(lambda: self._switch_tab("logs"))
+        self.addAction(act_logs_tab)
 
         # DB tree stubs (kept for compatibility — database tab hidden)
         self.tree_devices = None
@@ -889,19 +1474,23 @@ class App(QMainWindow):
         self.device_list.clear()
         self.selected_device_name = None
         for idx, (n, obj, meta) in enumerate(self.devices):
-            icon = ""
+            icon_name = ""
             if isinstance(obj, RouterModel):
-                icon = "\U0001F4E1 "
+                icon_name = "router.svg"
             elif isinstance(obj, CoreSwitchModel):
-                icon = "\U0001F500 "
+                icon_name = "layer-3-switch.svg"
             elif isinstance(obj, SwitchModel):
-                icon = "\U0001F500 "
+                icon_name = "workgroup-switch.svg"
             else:
-                icon = "\U0001F6E1 "
-            label = f"{icon}{n} ({obj.__class__.__name__})"
+                icon_name = "router.svg"
+            label = f"{n} ({obj.__class__.__name__})"
             if meta.get("gns3_node"):
                 label += " [gns3]"
-            self.device_list.addItem(label)
+            item = QListWidgetItem(label)
+            icon = self._icon(icon_name)
+            if not icon.isNull():
+                item.setIcon(icon)
+            self.device_list.addItem(item)
         self.device_list.blockSignals(False)
         if self.device_list.count() > 0:
             self.device_list.setCurrentRow(0)
@@ -1057,6 +1646,7 @@ class App(QMainWindow):
                 w.setEnabled(False)
             self.lbl_network_title.setStyleSheet("color: #C9D1D9; font-size: 15px; font-weight: bold;")
             self.lbl_serial_title.setStyleSheet("color: #4b5563; font-size: 15px; font-weight: bold;")
+        self._update_send_button_state()
 
     # ── Generate / Preview ──────────────────────────────────────────────
 
@@ -1078,6 +1668,7 @@ class App(QMainWindow):
         txt = self.current_device[1].build_full_config().replace(
             "{name}", self.current_device[0])
         self.preview.setPlainText(txt)
+        self._set_status_message("Config generated", 2500)
 
     def clear_preview(self):
         self._run_on_main(lambda: self.preview.setPlainText(""))
@@ -1148,13 +1739,18 @@ class App(QMainWindow):
         try:
             self.btn_send.setEnabled(not busy)
             self.btn_send.setText("Sending\u2026" if busy else "Send")
+            self.btn_send.setToolTip("" if not busy else "Sending configuration")
+            if not busy:
+                self._update_send_button_state()
+            self._set_status_message("Sending configuration..." if busy else "Ready", 0 if busy else 2500)
         except Exception:
             pass
 
     def send_now(self):
         content = self.preview.toPlainText().strip()
-        if not content:
-            QMessageBox.information(self, "Info", "Nothing to send")
+        ok, reason = self._validate_send_inputs()
+        if not ok:
+            QMessageBox.information(self, "Send", reason)
             return
 
         try:
@@ -1233,6 +1829,9 @@ class App(QMainWindow):
                 self.clear_preview()
                 device_name = self.current_device[0] if self.current_device else "unknown"
                 self._write_audit_log(device_name, "serial", f"port={port} baud={baud}", config_content=content)
+                self._run_on_main(lambda: self._set_status_message("Serial send completed", 3500))
+            else:
+                self._run_on_main(lambda: self._set_status_message("Serial send failed", 3500))
         finally:
             self._run_on_main(lambda: self._set_send_busy(False))
 
@@ -1245,6 +1844,7 @@ class App(QMainWindow):
                 self.clear_preview()
                 device_name = self.current_device[0] if self.current_device else "unknown"
                 self._write_audit_log(device_name, "telnet", f"host={host} port={port}", config_content=content)
+                self._run_on_main(lambda: self._set_status_message("Telnet send completed", 3500))
                 cmds = ["show ip interface brief"]
                 try:
                     if self.current_device:
@@ -1258,6 +1858,8 @@ class App(QMainWindow):
                                                username=user, password=pw, enable_pw=enable)
                 if results:
                     self._run_on_main(lambda r=results: self._show_verify_dialog(r))
+            else:
+                self._run_on_main(lambda: self._set_status_message("Telnet send failed", 3500))
         finally:
             self._run_on_main(lambda: self._set_send_busy(False))
 
@@ -1270,6 +1872,9 @@ class App(QMainWindow):
                 self.clear_preview()
                 device_name = self.current_device[0] if self.current_device else "unknown"
                 self._write_audit_log(device_name, "ssh", f"host={host} port={port} user={user}", config_content=content)
+                self._run_on_main(lambda: self._set_status_message("SSH send completed", 3500))
+            else:
+                self._run_on_main(lambda: self._set_status_message("SSH send failed", 3500))
         finally:
             self._run_on_main(lambda: self._set_send_busy(False))
 
@@ -1284,7 +1889,7 @@ class App(QMainWindow):
                 border-radius: 8px;
                 padding: 8px;
                 font-family: Consolas, 'Courier New', monospace;
-                font-size: 12px;
+                font-size: 14px;
             }
             QTableWidget {
                 background-color: #161B22;
@@ -1307,7 +1912,7 @@ class App(QMainWindow):
                 border: none;
                 border-radius: 8px;
                 padding: 6px 14px;
-                font-size: 13px;
+                font-size: 14px;
             }
             QPushButton:hover { background-color: #4B5563; color: #FFFFFF; }
             QPushButton:disabled { background-color: #2B3340; color: #6B7280; }
@@ -1414,8 +2019,7 @@ class App(QMainWindow):
         if not self.devices:
             QMessageBox.information(self, "Export", "No devices to export.")
             return
-        filepath, _ = QFileDialog.getSaveFileName(
-            self, "Export ANCS Project", "", "ANCS Project (*.ancs);;JSON (*.json);;All files (*.*)")
+        filepath = self._get_export_path()
         if not filepath:
             return
         try:
@@ -1429,12 +2033,12 @@ class App(QMainWindow):
                 json.dump(export_data, f, indent=2)
             QMessageBox.information(self, "Export Complete", f"Exported {len(self.devices)} device(s) to:\n{filepath}")
             self.log(f"[export] saved project to {filepath}")
+            self._set_status_message(f"Exported {len(self.devices)} device(s)", 3500)
         except Exception as e:
             QMessageBox.critical(self, "Export Error", str(e))
 
     def import_project(self):
-        filepath, _ = QFileDialog.getOpenFileName(
-            self, "Import ANCS Project", "", "ANCS Project (*.ancs);;JSON (*.json);;All files (*.*)")
+        filepath = self._get_import_path()
         if not filepath:
             return
         try:
@@ -1476,6 +2080,7 @@ class App(QMainWindow):
             self, "Import Complete",
             f"Imported {added} device(s)." + (f"\nSkipped {skipped} duplicate(s)." if skipped else ""))
         self.log(f"[import] loaded {added} device(s) from {filepath}")
+        self._set_status_message(f"Imported {added} device(s)", 3500)
 
     # ── Cross-device context extraction ─────────────────────────────────
 
@@ -1664,25 +2269,30 @@ class App(QMainWindow):
         layout.setContentsMargins(18, 18, 18, 18)
 
         lbl = QLabel("Which device do you want to configure?")
-        lbl.setStyleSheet("color: #C9D1D9; font-size: 13px; font-weight: bold;")
+        lbl.setStyleSheet("color: #C9D1D9; font-size: 15px; font-weight: bold;")
         layout.addWidget(lbl)
         hint = QLabel("Recommended: start with the router or core switch.")
-        hint.setStyleSheet("color: #8B949E; font-size: 9px;")
+        hint.setStyleSheet("color: #8B949E; font-size: 12px;")
         hint.setWordWrap(True)
         layout.addWidget(hint)
 
         listbox = QListWidget()
+        listbox.setIconSize(QSize(16, 16))
         for name, model, meta in self.devices:
             if isinstance(model, RouterModel):
                 role = "Router / Gateway"
-                icon = "\U0001F500"
+                icon_name = "router.svg"
             elif isinstance(model, CoreSwitchModel):
                 role = "Core Switch (Layer 3)"
-                icon = "\U0001F536"
+                icon_name = "layer-3-switch.svg"
             else:
                 role = "Access Switch (Layer 2)"
-                icon = "\U0001F537"
-            listbox.addItem(f"  {icon}  {name}  \u2014  {role}")
+                icon_name = "workgroup-switch.svg"
+            item = QListWidgetItem(f"{name}  \u2014  {role}")
+            icon = self._icon(icon_name)
+            if not icon.isNull():
+                item.setIcon(icon)
+            listbox.addItem(item)
         if listbox.count() > 0:
             listbox.setCurrentRow(0)
         layout.addWidget(listbox, 1)
