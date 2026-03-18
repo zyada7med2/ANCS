@@ -2025,6 +2025,7 @@ class App(QMainWindow):
         self.selected_device_name = dname
         self.current_device = (dname, model, meta)
         self._refresh_template_list()
+        self._load_credentials(dname)
         if meta.get("gns3_node"):
             host = meta.get("console_host", "localhost")
             port = str(meta.get("console_port", ""))
@@ -2032,7 +2033,6 @@ class App(QMainWindow):
             self.ent_port.setText(port)
             self.send_method.setCurrentText("Telnet")
             self._on_protocol_changed("Telnet")
-        self._load_credentials(dname)
         self.preview.setPlainText(f"! device: {dname}\n")
         if model.has_snapshots():
             self.btn_rollback.setVisible(True)
@@ -2275,12 +2275,17 @@ class App(QMainWindow):
                              args=(port, baud, content), daemon=True).start()
         elif method == "telnet":
             host = self.ent_host.text().strip()
+            if not host and self.current_device and self.current_device[2].get("gns3_node"):
+                host = self.current_device[2].get("console_host", "")
             if not host:
                 self._set_send_busy(False)
                 QMessageBox.critical(self, "Error", "Enter host")
                 return
             try:
-                port = int(self.ent_port.text().strip() or "23")
+                port_raw = self.ent_port.text().strip()
+                if not port_raw and self.current_device and self.current_device[2].get("console_port"):
+                    port_raw = str(self.current_device[2]["console_port"])
+                port = int(port_raw or "23")
             except Exception:
                 self._set_send_busy(False)
                 QMessageBox.critical(self, "Error", "Invalid port")
@@ -2292,12 +2297,17 @@ class App(QMainWindow):
                              args=(host, port, user, pw, enable, content), daemon=True).start()
         elif method == "ssh":
             host = self.ent_host.text().strip()
+            if not host and self.current_device and self.current_device[2].get("gns3_node"):
+                host = self.current_device[2].get("console_host", "")
             if not host:
                 self._set_send_busy(False)
                 QMessageBox.critical(self, "Error", "Enter host")
                 return
             try:
-                port = int(self.ent_port.text().strip() or "22")
+                port_raw = self.ent_port.text().strip()
+                if not port_raw and self.current_device and self.current_device[2].get("console_port"):
+                    port_raw = str(self.current_device[2]["console_port"])
+                port = int(port_raw or "22")
             except Exception:
                 self._set_send_busy(False)
                 QMessageBox.critical(self, "Error", "Invalid port")

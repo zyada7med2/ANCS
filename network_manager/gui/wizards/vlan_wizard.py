@@ -82,15 +82,21 @@ class VlanGuiWindow(QDialog):
                 port_end = port_start + pcnt - 1
                 out.append(f"vlan {vid}")
                 out.append(f" name {pname}")
+                out.append("exit")
                 if pcnt > 0:
-                    out.append(f"interface range GigabitEthernet0/{port_start} - {port_end}")
-                    out.append(" switchport mode access")
-                    out.append(f" switchport access vlan {vid}")
+                    for pn in range(port_start, port_end + 1):
+                        out.append(f"interface Ethernet1/{pn}")
+                        out.append(" switchport mode access")
+                        out.append(f" switchport access vlan {vid}")
+                        out.append(" spanning-tree portfast")
+                        out.append(" no shutdown")
+                        out.append("exit")
                 out.append("")
                 port_start = port_end + 1
         except Exception:
             QMessageBox.critical(self, "Error", "Invalid numbers")
             return
-        out.append("! vlan gui wizard complete")
+        out.append("end")
+        out.append("write memory")
         self.result = "\n".join(out)
         self.accept()

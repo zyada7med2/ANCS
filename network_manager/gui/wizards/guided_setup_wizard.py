@@ -117,6 +117,7 @@ class GuidedSetupWizard(QDialog):
         "muted":    "#8B949E",
         "accent":   "#58A6FF",
         "success":  "#3FB950",
+        "danger":   "#F85149",
         "border":   "#30363D",
         "row_alt":  "#1A2030",
     }
@@ -202,6 +203,10 @@ class GuidedSetupWizard(QDialog):
             if link.get("remote_role") in roles:
                 return link
         return None
+
+    def _find_all_links_to(self, *roles: str) -> List[Dict]:
+        """Return ALL connected_links entries whose remote_role is one of *roles*."""
+        return [link for link in self.connected_links if link.get("remote_role") in roles]
 
     def _show_suggestion_banner(self, parent, text: str) -> QLabel:
         """Create a themed suggestion banner with a green left-border."""
@@ -682,9 +687,13 @@ class GuidedSetupWizard(QDialog):
         ]
 
         if self.device_role in ("core", "access"):
+            self.steps.append(Step("Uplinks / Trunks",
+                                   "Which ports connect to upstream routers or core switches?",
+                                   GuidedSetupWizard._build_step_uplinks,
+                                   GuidedSetupWizard._validate_uplinks))
             self.steps.append(Step(
                 "VLANs",
-                "How many VLANs? Ports are assigned automatically.",
+                "How many VLANs? Ports are assigned automatically, excluding the uplinks you just defined.",
                 GuidedSetupWizard._build_step_vlans,
                 GuidedSetupWizard._validate_vlans,
             ))
@@ -733,10 +742,6 @@ class GuidedSetupWizard(QDialog):
 
         else:
             self.steps += [
-                Step("Uplink",
-                     "Which port connects to the upstream device?",
-                     GuidedSetupWizard._build_step_uplinks,
-                     GuidedSetupWizard._validate_uplinks),
                 Step("Access Rules (optional)",
                      "Lightweight per-switch filtering.",
                      GuidedSetupWizard._build_step_acl_access,
@@ -1089,14 +1094,15 @@ class GuidedSetupWizard(QDialog):
         cnt_layout.setSpacing(10)
         cnt_layout.addWidget(self._lbl(body, "How many VLANs do you need?"))
         self.vlan_count_spin = QSpinBox()
-        self.vlan_count_spin.setRange(1, 12)
+        self.vlan_count_spin.setRange(0, 12)
         self.vlan_count_spin.setValue(max(2, len(self.vlans)))
         cnt_layout.addWidget(self.vlan_count_spin)
         cnt_layout.addWidget(self._lbl(body, "(ports are auto-assigned)", muted=True))
         layout.addWidget(cnt_f)
         has_picker = bool(self.known_interfaces) and self.device_role in ("access", "core")
         cols = [("VLAN ID", 9), ("Name", 22)]
-        cols.append(("Assign Ports (optional)", 34) if has_picker else ("Ports (e.g. Et0/0-3)", 30))
+        cols.append(("Assign Ports (optional)", 32) if has_picker else ("Ports (e.g. Et0/0-3) (optional)", 28))
+        cols.append(("", 4))
         layout.addWidget(self._section_hdr(body, cols))
         self.vlan_rows_widget = QWidget()
         self.vlan_rows_layout = QVBoxLayout(self.vlan_rows_widget)
@@ -1158,7 +1164,7 @@ class GuidedSetupWizard(QDialog):
                 rfl.setSpacing(8)
                 id_edit = self._entry(rf, vid, 9)
                 name_edit = self._entry(rf, vname, 22)
-                ports_edit = self._entry(rf, vport, 30)
+                ports_edit = self._entry(rf, vport, 28)
                 rfl.addWidget(id_edit)
                 rfl.addWidget(name_edit)
                 if has_picker:
@@ -1168,23 +1174,31 @@ class GuidedSetupWizard(QDialog):
                     rfl.addWidget(btn)
                 else:
                     rfl.addWidget(ports_edit)
+                
+                # Delete button for the row
+                del_btn = QPushButton("\u2715") # X symbol
+                del_btn.setFixedWidth(28)
+                del_btn.setStyleSheet(f"background: transparent; color: {t['danger']}; font-weight: bold; border: none;")
+                def _del_row(row_box=rf, p_edit=ports_edit, i_edit=id_edit, n_edit=name_edit):
+                    row_box.deleteLater()
+                    if (id_edit, name_edit, ports_edit) in self.vlan_row_entries:
+                        self.vlan_row_entries.remove((id_edit, name_edit, ports_edit))
+                    # Optionally decrease the spinbox visually, but avoid infinite rebuild loops
+                    new_val = max(0, self.vlan_count_spin.value() - 1)
+                    self.vlan_count_spin.blockSignals(True)
+                    self.vlan_count_spin.setValue(new_val)
+                    self.vlan_count_spin.blockSignals(False)
+                del_btn.clicked.connect(_del_row)
+                rfl.addWidget(del_btn)
+                
                 self.vlan_row_entries.append((id_edit, name_edit, ports_edit))
                 self.vlan_rows_layout.addWidget(rf)
         self.vlan_count_spin.valueChanged.connect(rebuild)
         rebuild()
 
     def _auto_ports(self, idx: int) -> str:
-        if self.known_interfaces:
-            total = len(self.known_interfaces)
-            n_vlans = max(1, self.vlan_count_spin.value())
-            per_vlan = max(1, total // n_vlans)
-            start_i = idx * per_vlan
-            end_i = min(start_i + per_vlan - 1, total - 1)
-            first, last = self.known_interfaces[start_i], self.known_interfaces[end_i]
-            if first == last:
-                return first
-            return f"{first.rsplit('/', 1)[0]}/{first.rsplit('/', 1)[1]}-{last.rsplit('/', 1)[1]}"
-        return f"Ethernet{idx}/0-3" if self.device_role == "access" else f"FastEthernet1/{idx*4+1}-{idx*4+4}"
+        # Ports are now entirely optional and empty by default, enforcing better UX
+        return ""
 
     def _validate_vlans(self) -> bool:
         self.vlans = []
@@ -1203,9 +1217,12 @@ class GuidedSetupWizard(QDialog):
                 QMessageBox.critical(self, "Duplicate VLAN ID", f"VLAN ID {vid} appears more than once.")
                 return False
             seen_ids.add(vid)
+            # Ports can be empty, we just pass the empty string which the generator ignores gracefully
+            if vport.lower() in ("auto", "none"):
+                vport = ""
             self.vlans.append({"id": vid, "name": vname or f"VLAN{vid}", "ports": vport})
-        if not self.vlans:
-            QMessageBox.critical(self, "Required", "Add at least one VLAN.")
+        if not self.vlans and self.device_role == "access":
+            QMessageBox.critical(self, "Required", "Add at least one VLAN for an Access Switch.")
             return False
         return True
 
@@ -1616,40 +1633,65 @@ class GuidedSetupWizard(QDialog):
         ctx = self.project_context
         layout = body.layout() or QVBoxLayout(body)
         layout.addWidget(self._help_link(body, "Trunk"))
-        layout.addWidget(self._lbl(body, "The uplink port connects this switch to the router or core switch.", muted=True))
+        layout.addWidget(self._lbl(body, "Identify ALL switchports that connect to routers or other switches.", muted=True))
+        layout.addWidget(self._lbl(body, "These ports will be configured as 802.1Q Trunks automatically.", muted=True))
+        
         ex0 = self.uplinks[0] if self.uplinks else {}
         ctx_vlan_ids = ",".join(v["id"] for v in ctx["vlans"]) if ctx.get("vlans") else ""
-        # Auto-detect the uplink from GNS3 cables
-        _link = self._find_link_to("core", "router")
-        if _link:
-            default_port = _link["local_interface"]
+
+        # Auto-detect ALL uplinks from GNS3 cables
+        _uplinks = self._find_all_links_to("core", "router")
+        _downlinks = self._find_all_links_to("access")
+
+        # Build auto-detected uplink port string
+        if _uplinks:
+            default_up = ", ".join(lk["local_interface"] for lk in _uplinks)
         else:
-            default_port = "Ethernet3/3" if self.device_role == "access" else "FastEthernet1/0"
+            default_up = ex0.get("ports", "Ethernet3/3" if self.device_role == "access" else "FastEthernet1/0")
+
+        # Build auto-detected downlink port string
+        ex1 = self.uplinks[1] if len(self.uplinks) > 1 else {}
+        if _downlinks:
+            default_down = ", ".join(lk["local_interface"] for lk in _downlinks)
+        else:
+            default_down = ex1.get("ports", "")
+
         primary = self._card(body)
         pl = QVBoxLayout(primary)
-        pl.addWidget(QLabel("Uplink to core switch or router (trunk port):"))
-        self.uplink_port_var = self._entry(body, ex0.get("ports", default_port), 22)
+        pl.addWidget(QLabel("Uplinks to Core Switch or Router (Trunks):"))
+        pl.addWidget(self._lbl(body, "Comma-separated (e.g. FastEthernet1/0, FastEthernet1/1)", muted=True))
+        self.uplink_port_var = self._entry(body, default_up, 22)
         pl.addWidget(self.uplink_port_var)
-        if _link:
+        if _uplinks:
+            detected_list = "; ".join(f"{lk['local_interface']} \u2194 {lk['remote_device']} ({lk['remote_interface']})" for lk in _uplinks)
             pl.addWidget(self._show_suggestion_banner(
                 body,
-                f"Detected cable: {_link['local_interface']} \u2194 {_link['remote_device']} ({_link['remote_interface']}). "
-                "Auto-filled as the uplink port.",
+                f"Detected cables: {detected_list}. "
+                "Auto-filled as uplink ports.",
             ))
         layout.addWidget(primary)
+
         allowed_f = QWidget()
         afl = QHBoxLayout(allowed_f)
-        afl.addWidget(QLabel("Allowed VLANs on this trunk:"))
+        afl.addWidget(QLabel("Allowed VLANs on trunks:"))
         self.uplink_vlans_var = self._entry(body, ex0.get("allowed vlans") or ctx_vlan_ids or "all", 22)
         afl.addWidget(self.uplink_vlans_var)
         layout.addWidget(allowed_f)
-        ex1 = self.uplinks[1] if len(self.uplinks) > 1 else {}
-        sec_f = QWidget()
-        sfl = QHBoxLayout(sec_f)
-        sfl.addWidget(QLabel("Second uplink port (optional):"))
-        self.uplink2_port_var = self._entry(body, ex1.get("ports", ""), 28)
+
+        sec = self._card(body)
+        sfl = QVBoxLayout(sec)
+        sfl.addWidget(QLabel("Downlinks to Access Switches (Trunks):"))
+        sfl.addWidget(self._lbl(body, "Comma-separated (e.g. FastEthernet2/0, FastEthernet2/1)", muted=True))
+        self.uplink2_port_var = self._entry(body, default_down, 28)
         sfl.addWidget(self.uplink2_port_var)
-        layout.addWidget(sec_f)
+        if _downlinks:
+            detected_list = "; ".join(f"{lk['local_interface']} \u2194 {lk['remote_device']} ({lk['remote_interface']})" for lk in _downlinks)
+            sfl.addWidget(self._show_suggestion_banner(
+                body,
+                f"Detected cables: {detected_list}. "
+                "Auto-filled as downlink ports.",
+            ))
+        layout.addWidget(sec)
 
     def _validate_uplinks(self) -> bool:
         self.uplinks = []
@@ -1866,6 +1908,14 @@ class GuidedSetupWizard(QDialog):
     def _render_vlan_block(self) -> str:
         if self.device_role == "router" or not self.vlans:
             return ""
+        
+        # Gather all ports configured as uplinks so we don't accidentally make them access ports
+        uplink_ports = set()
+        for link in self.uplinks:
+            for p in link.get("ports", "").split(","):
+                if p.strip():
+                    uplink_ports.add(p.strip())
+
         lines = []
         if self.device_role == "core":
             lines.append("vlan database")
@@ -1874,7 +1924,7 @@ class GuidedSetupWizard(QDialog):
             lines += ["exit", "!", "configure terminal"]
             for v in self.vlans:
                 for iface in self._expand_ports_to_list(v.get("ports", "")):
-                    if iface:
+                    if iface and iface not in uplink_ports:
                         lines += [f"interface {iface}", " switchport mode access", f" switchport access vlan {v.get('id')}", " no shutdown", "exit"]
             lines += ["!", "end"]
         else:
@@ -1884,8 +1934,8 @@ class GuidedSetupWizard(QDialog):
             lines.append("!")
             for v in self.vlans:
                 for iface in self._expand_ports_to_list(v.get("ports", "")):
-                    if iface:
-                        lines += [f"interface {iface}", " switchport mode access", f" switchport access vlan {v.get('id')}", " no shutdown", "exit"]
+                    if iface and iface not in uplink_ports:
+                        lines += [f"interface {iface}", " switchport mode access", f" switchport access vlan {v.get('id')}", " spanning-tree portfast", " no shutdown", "exit"]
             lines += ["!", "end"]
         return "\n".join(lines)
 
@@ -1909,6 +1959,11 @@ class GuidedSetupWizard(QDialog):
                     lines.append(" switchport mode access")
                     if allowed.lower() != "all":
                         lines.append(f" switchport access vlan {allowed}")
+                    lines.append(" spanning-tree portfast")
+                
+                if port.lower().startswith("fastethernet") or port.lower().startswith("ethernet"):
+                    lines.append(" speed 100")
+                    lines.append(" duplex full")
                 lines += [" no shutdown", "exit"]
         lines += ["!", "end"]
         return "\n".join(lines)
@@ -1929,7 +1984,11 @@ class GuidedSetupWizard(QDialog):
     def _render_router_on_stick_block(self) -> str:
         if not self.router_interface or not self.routing_entries:
             return ""
-        lines = ["configure terminal", f"interface {self.router_interface}", " no shutdown", "exit"]
+        lines = ["configure terminal", f"interface {self.router_interface}"]
+        if self.router_interface.lower().startswith("fastethernet") or self.router_interface.lower().startswith("ethernet"):
+            lines.append(" speed 100")
+            lines.append(" duplex full")
+        lines += [" no shutdown", "exit"]
         for e in self.routing_entries:
             vlan, ip, mask = e.get("vlan"), e.get("ip"), e.get("mask", "255.255.255.0")
             if vlan and ip:
