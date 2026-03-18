@@ -66,9 +66,10 @@ except Exception:
 
 GLASS_PANEL = """
     QFrame[glassPanel="true"] {
-        background-color: rgba(8, 18, 34, 168);
-        border-radius: 16px;
-        border: 1px solid rgba(86, 146, 228, 72);
+        background-color: rgba(10, 20, 35, 0.65);
+        border-radius: 8px;
+        border: 1px solid rgba(60, 100, 170, 0.5);
+        padding: 10px;
     }
 """
 
@@ -84,9 +85,10 @@ GLASS_STYLE = """
     }
 
     QFrame[glassPanel="true"] {
-        background-color: rgba(8, 18, 34, 168);
-        border-radius: 16px;
-        border: 1px solid rgba(86, 146, 228, 72);
+        background-color: rgba(10, 20, 35, 0.65);
+        border-radius: 8px;
+        border: 1px solid rgba(60, 100, 170, 0.5);
+        padding: 10px;
     }
 
     QFrame[topBar="true"] {
@@ -344,8 +346,8 @@ GLASS_STYLE = """
     }
 
     QListWidget {
-        background-color: rgba(10, 22, 40, 180);
-        border: 1px solid rgba(72, 124, 196, 72);
+        background-color: rgba(6, 14, 28, 230);
+        border: 1px solid rgba(72, 124, 196, 130);
         border-radius: 8px;
         padding: 6px;
         font-size: 15px;
@@ -575,13 +577,17 @@ class App(QMainWindow):
         bg_path = _gui_path("bg.png")
         self._bg_pixmap = QPixmap(bg_path) if os.path.exists(bg_path) else QPixmap()
 
-        # Load logo
+        # Load logo — use logo.png
         self._logo_pixmap = QPixmap()
-        for name in ("ancs_logo.png", "logo.png", "ANCS_Logo.png"):
-            lp = _gui_path(name)
-            if os.path.exists(lp):
-                self._logo_pixmap = QPixmap(lp)
-                break
+        _logo_path = _gui_path("logo.png")
+        if os.path.exists(_logo_path):
+            self._logo_pixmap = QPixmap(_logo_path)
+
+        # Load Montserrat fonts so 'Montserrat' is available as a QFont family
+        for _font_file in ("Montserrat-ExtraBold.ttf", "Montserrat-Regular.ttf"):
+            _fp = _gui_path(_font_file)
+            if os.path.exists(_fp):
+                QFontDatabase.addApplicationFont(_fp)
 
         self._icon_cache: dict[str, QIcon] = {}
 
@@ -829,8 +835,8 @@ class App(QMainWindow):
 
     def _apply_main_window_min_size(self):
         """Enforce a practical minimum size so the three-panel layout remains usable."""
-        # Keep this aligned with _build_ui fixed widths and spacing values.
-        layout_min_width = 340 + 560 + 350 + (18 * 2) + (20 * 2)
+        # Keep this aligned with _build_ui min widths and spacing values.
+        layout_min_width = 220 + 560 + 350 + (18 * 2) + (20 * 2)
         layout_min_height = 700
         self.setMinimumSize(layout_min_width, layout_min_height)
 
@@ -1022,10 +1028,14 @@ class App(QMainWindow):
         glow_color = f"rgba({brightness}, {min(brightness + 30, 255)}, 255, {alpha})"
         for btn in self.findChildren(QPushButton):
             if btn.property("accent") is True:
-                btn.setStyleSheet(
-                    f"border: 1px solid {glow_color}; "
-                    f"border-radius: 8px;"
-                )
+                # Only override the border — preserve background from global stylesheet
+                btn.setStyleSheet(f"border: 1px solid {glow_color};")
+            elif btn.property("teal") is True:
+                # Teal buttons get a green-tinted glow
+                g_alpha = int(60 + t * 100)
+                g_brightness = int(80 + t * 75)
+                teal_glow = f"rgba({g_brightness}, {min(g_brightness + 80, 255)}, {min(g_brightness + 60, 200)}, {g_alpha})"
+                btn.setStyleSheet(f"border: 1px solid {teal_glow};")
 
     def _validate_send_inputs(self) -> tuple[bool, str]:
         method = self.send_method.currentText().lower()
@@ -1150,37 +1160,63 @@ class App(QMainWindow):
         # ── TOP BAR ─────────────────────────────────────────────────────
         top = QFrame()
         top.setProperty("topBar", True)
-        top.setFixedHeight(72)
+        top.setFixedHeight(88)
         top_layout = QHBoxLayout(top)
-        top_layout.setContentsMargins(14, 10, 14, 10)
+        top_layout.setContentsMargins(14, 0, 14, 0)
 
-        # Logo
-        logo_frame = QHBoxLayout()
-        logo_frame.setSpacing(10)
+        # ── Header: logo + title/subtitle ──────────────────────────────
+        header_widget = QWidget()
+        header_widget.setAttribute(Qt.WA_TranslucentBackground)
+        header_widget.setStyleSheet("background: transparent;")
+        header_row = QHBoxLayout(header_widget)
+        header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.setSpacing(14)
+        header_row.setAlignment(Qt.AlignVCenter)
+
+        # Logo — logo.png scaled to 60px height, aspect-ratio preserved
+        logo_lbl = QLabel()
+        logo_lbl.setAttribute(Qt.WA_TranslucentBackground)
+        logo_lbl.setStyleSheet("background: transparent;")
+        logo_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        _LOGO_H = 60
         if not self._logo_pixmap.isNull():
-            logo_lbl = QLabel()
-            logo_lbl.setPixmap(self._logo_pixmap.scaled(
-                50, 50, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            logo_frame.addWidget(logo_lbl)
+            logo_lbl.setPixmap(self._logo_pixmap.scaledToHeight(
+                _LOGO_H, Qt.SmoothTransformation))
         else:
-            badge = QLabel("AI")
-            badge.setFixedSize(40, 40)
-            badge.setAlignment(Qt.AlignCenter)
-            badge.setStyleSheet(
-                "background-color: #1A3A6B; color: white; border-radius: 20px; "
-                "font-weight: bold; font-size: 14px;")
-            logo_frame.addWidget(badge)
+            logo_lbl.setText("A")
+            logo_lbl.setFixedSize(60, 60)
+            logo_lbl.setAlignment(Qt.AlignCenter)
+            logo_lbl.setStyleSheet(
+                "background-color: #1A3A6B; color: white; border-radius: 30px; "
+                "font-weight: bold; font-size: 24px;")
+        header_row.addWidget(logo_lbl)
 
-        title_col = QVBoxLayout()
-        title_col.setSpacing(0)
+        # Text container: ANCS title + subtitle stacked vertically
+        text_col = QVBoxLayout()
+        text_col.setSpacing(0)
+        text_col.setContentsMargins(0, 0, 0, 0)
+        text_col.setAlignment(Qt.AlignVCenter)
+
         lbl_title = QLabel("ANCS")
-        lbl_title.setStyleSheet("color: #4A9EFF; font-size: 21px; font-weight: 700;")
-        title_col.addWidget(lbl_title)
+        lbl_title.setAttribute(Qt.WA_TranslucentBackground)
+        lbl_title.setStyleSheet("background: transparent; color: #FFFFFF;")
+        title_font = QFont("Montserrat", 26)
+        title_font.setWeight(QFont.Weight.ExtraBold)
+        title_font.setLetterSpacing(QFont.AbsoluteSpacing, 2)
+        lbl_title.setFont(title_font)
+        text_col.addWidget(lbl_title)
+
         lbl_sub = QLabel("Auto Network Configuration System")
-        lbl_sub.setStyleSheet("color: #8B9AB0; font-size: 12px;")
-        title_col.addWidget(lbl_sub)
-        logo_frame.addLayout(title_col)
-        top_layout.addLayout(logo_frame)
+        lbl_sub.setAttribute(Qt.WA_TranslucentBackground)
+        lbl_sub.setStyleSheet("background: transparent; color: #9AAABB;")
+        sub_font = QFont("Montserrat", 10)
+        sub_font.setWeight(QFont.Weight.Normal)
+        sub_font.setLetterSpacing(QFont.AbsoluteSpacing, 0.5)
+        lbl_sub.setFont(sub_font)
+        text_col.addWidget(lbl_sub)
+
+        header_row.addLayout(text_col)
+        top_layout.addWidget(header_widget)
 
         top_layout.addStretch()
 
@@ -1211,13 +1247,33 @@ class App(QMainWindow):
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(18)
 
-        # LEFT PANEL (~1/5 width, fixed)
+        # LEFT PANEL (responsive width, scrollable)
         left_panel = QFrame()
         left_panel.setProperty("glassPanel", True)
-        left_panel.setFixedWidth(340)
+        left_panel.setObjectName("leftPanel")
+        left_panel.setAutoFillBackground(True)
+        left_panel.setStyleSheet("""
+            QFrame#leftPanel {
+                background-color: rgba(11, 29, 50, 100);
+                border-radius: 8px;
+                border: 1px solid rgba(50, 85, 160, 80);
+            }
+        """)
+        left_panel.setMinimumWidth(220)
+        left_panel.setMaximumWidth(340)
+        left_scroll = QScrollArea()
+        left_scroll.setWidget(left_panel)
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QFrame.NoFrame)
+        left_scroll.setStyleSheet("background: transparent;")
+        left_scroll.setMinimumWidth(220)
+        left_scroll.setMaximumWidth(340)
+        left_scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(18, 18, 18, 18)
-        left_layout.setSpacing(10)
+        left_layout.setContentsMargins(14, 14, 14, 14)
+        left_layout.setSpacing(8)
 
         lbl_devices = QLabel("Devices")
         lbl_devices.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: 700;")
@@ -1226,16 +1282,60 @@ class App(QMainWindow):
         self.device_list = QListWidget()
         self.device_list.setIconSize(QSize(16, 16))
         self.device_list.setMinimumHeight(120)
+        self.device_list.setAutoFillBackground(True)
+        self.device_list.setStyleSheet("""
+            QListWidget {
+                background-color: rgba(10, 28, 48, 185);
+                border: 1px solid rgba(55, 100, 180, 100);
+                border-radius: 8px;
+                padding: 6px;
+                font-size: 15px;
+            }
+            QListWidget::item {
+                padding: 9px 10px;
+                border-radius: 4px;
+                color: #C9D1D9;
+            }
+            QListWidget::item:selected {
+                background-color: rgba(88, 166, 255, 80);
+                color: #FFFFFF;
+            }
+            QListWidget::item:hover {
+                background-color: rgba(88, 166, 255, 40);
+            }
+        """)
         self.device_list.currentRowChanged.connect(self._on_device_row_changed)
         left_layout.addWidget(self.device_list)
 
         dev_btns = QHBoxLayout()
         btn_add = QPushButton("+ Add")
-        btn_add.setProperty("outlined", True)
+        btn_add.setStyleSheet("""
+            QPushButton {
+                background-color: #2C4563;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #38567A;
+            }
+        """)
         btn_add.setFixedHeight(34)
         btn_add.clicked.connect(self.add_device_prompt)
         btn_remove = QPushButton("Remove")
-        btn_remove.setProperty("outlined", True)
+        btn_remove.setStyleSheet("""
+            QPushButton {
+                background-color: #2C4563;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #38567A;
+            }
+        """)
         btn_remove.setFixedHeight(34)
         btn_remove.clicked.connect(self.remove_selected_device)
         dev_btns.addWidget(btn_add)
@@ -1247,18 +1347,62 @@ class App(QMainWindow):
         left_layout.addWidget(lbl_templates)
 
         self.template_list = QListWidget()
+        self.template_list.setAutoFillBackground(True)
+        self.template_list.setStyleSheet("""
+            QListWidget {
+                background-color: rgba(10, 28, 48, 185);
+                border: 1px solid rgba(55, 100, 180, 100);
+                border-radius: 8px;
+                padding: 6px;
+                font-size: 15px;
+            }
+            QListWidget::item {
+                padding: 9px 10px;
+                border-radius: 4px;
+                color: #C9D1D9;
+            }
+            QListWidget::item:selected {
+                background-color: rgba(88, 166, 255, 80);
+                color: #FFFFFF;
+            }
+            QListWidget::item:hover {
+                background-color: rgba(88, 166, 255, 40);
+            }
+        """)
         self.template_list.currentRowChanged.connect(self._on_template_row_changed)
         left_layout.addWidget(self.template_list)
 
         tpl_btns = QHBoxLayout()
         btn_tpl_add = QPushButton("+ Add")
         self._apply_icon(btn_tpl_add, "doc.svg")
-        btn_tpl_add.setProperty("outlined", True)
+        btn_tpl_add.setStyleSheet("""
+            QPushButton {
+                background-color: #2C4563;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #38567A;
+            }
+        """)
         btn_tpl_add.setFixedHeight(34)
         btn_tpl_add.clicked.connect(self.add_template_dialog)
         btn_tpl_edit = QPushButton("Edit")
         self._apply_icon(btn_tpl_edit, "doc.svg")
-        btn_tpl_edit.setProperty("outlined", True)
+        btn_tpl_edit.setStyleSheet("""
+            QPushButton {
+                background-color: #2C4563;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background-color: #38567A;
+            }
+        """)
         btn_tpl_edit.setFixedHeight(34)
         btn_tpl_edit.clicked.connect(self.edit_template_dialog)
         tpl_btns.addWidget(btn_tpl_add)
@@ -1272,13 +1416,34 @@ class App(QMainWindow):
 
         # Action buttons
         btn_guided = QPushButton("Guided Setup")
-        btn_guided.setProperty("teal", True)
+        btn_guided.setStyleSheet("""
+            QPushButton {
+                background-color: #238636;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #2EA043; }
+        """)
+        btn_guided.setFixedHeight(36)
         btn_guided.clicked.connect(self.guided_setup)
         left_layout.addWidget(btn_guided)
 
         btn_deploy = QPushButton("Deploy All (Ordered)")
-        btn_deploy.setProperty("accent", True)
-        btn_deploy.setProperty("pill", True)
+        btn_deploy.setStyleSheet("""
+            QPushButton {
+                background-color: #2563EB;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #3B82F6; }
+        """)
+        btn_deploy.setFixedHeight(36)
         btn_deploy.clicked.connect(self.deploy_all_ordered)
         left_layout.addWidget(btn_deploy)
 
@@ -1333,7 +1498,17 @@ class App(QMainWindow):
         center_header.addWidget(btn_export)
 
         btn_import = QPushButton("Import Project")
-        btn_import.setProperty("outlined", True)
+        btn_import.setStyleSheet("""
+            QPushButton {
+                background-color: #408CDB;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #58A6FF; }
+        """)
         btn_import.setFixedHeight(36)
         btn_import.clicked.connect(self.import_project)
         center_header.addWidget(btn_import)
@@ -1372,8 +1547,17 @@ class App(QMainWindow):
 
         center_bottom = QHBoxLayout()
         btn_generate = QPushButton("Generate")
-        btn_generate.setProperty("accent", True)
-        btn_generate.setProperty("pill", True)
+        btn_generate.setStyleSheet("""
+            QPushButton {
+                background-color: #408CDB;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 20px;
+                color: #FFFFFF;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #58A6FF; }
+        """)
         btn_generate.setFixedHeight(42)
         btn_generate.clicked.connect(self.generate_full)
         center_bottom.addWidget(btn_generate)
@@ -1389,6 +1573,15 @@ class App(QMainWindow):
         # RIGHT PANEL (~1/5 width, fixed)
         self.right_panel = QFrame()
         self.right_panel.setProperty("glassPanel", True)
+        self.right_panel.setObjectName("rightPanel")
+        self.right_panel.setAutoFillBackground(True)
+        self.right_panel.setStyleSheet("""
+            QFrame#rightPanel {
+                background-color: rgba(11, 29, 50, 100);
+                border-radius: 8px;
+                border: 1px solid rgba(50, 85, 160, 80);
+            }
+        """)
         self.right_panel.setMinimumWidth(340)
         right_scroll = QScrollArea()
         right_scroll.setWidget(self.right_panel)
@@ -1422,9 +1615,32 @@ class App(QMainWindow):
 
         gns3_btns = QHBoxLayout()
         btn_gns3_import = QPushButton("Import")
-        btn_gns3_import.setProperty("accent", True)
+        btn_gns3_import.setStyleSheet("""
+            QPushButton {
+                background-color: #408CDB;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #58A6FF; }
+        """)
+        btn_gns3_import.setFixedHeight(32)
         btn_gns3_import.clicked.connect(self.gns3_list_projects)
+        
         btn_gns3_refresh = QPushButton("Refresh")
+        btn_gns3_refresh.setStyleSheet("""
+            QPushButton {
+                background-color: #445263;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+            }
+            QPushButton:hover { background-color: #55667A; }
+        """)
+        btn_gns3_refresh.setFixedHeight(32)
         btn_gns3_refresh.clicked.connect(self.refresh_gns3_connection)
         gns3_btns.addWidget(btn_gns3_import)
         gns3_btns.addWidget(btn_gns3_refresh)
@@ -1500,21 +1716,48 @@ class App(QMainWindow):
         right_layout.addLayout(enable_row)
 
         self.btn_send = QPushButton("Send")
-        self.btn_send.setProperty("accent", True)
-        self.btn_send.setProperty("pill", True)
+        self.btn_send.setStyleSheet("""
+            QPushButton {
+                background-color: #1F6FEB;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 20px;
+                color: #FFFFFF;
+                font-size: 16px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #388BFD; }
+        """)
         self.btn_send.setFixedHeight(42)
         self._apply_icon(self.btn_send, "router.svg")
         self.btn_send.clicked.connect(self.send_now)
         right_layout.addWidget(self.btn_send)
 
         btn_save_creds = QPushButton("Save Credentials")
-        btn_save_creds.setProperty("outlined", True)
+        btn_save_creds.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: 1px solid rgba(88, 166, 255, 120);
+                border-radius: 6px;
+                color: #58A6FF;
+                font-size: 14px;
+            }
+            QPushButton:hover { background-color: rgba(88, 166, 255, 30); }
+        """)
         btn_save_creds.setFixedHeight(34)
         btn_save_creds.clicked.connect(self.save_credentials)
         right_layout.addWidget(btn_save_creds)
 
         btn_terminal = QPushButton("Open Terminal")
-        btn_terminal.setProperty("outlined", True)
+        btn_terminal.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: 1px solid rgba(88, 166, 255, 120);
+                border-radius: 6px;
+                color: #58A6FF;
+                font-size: 14px;
+            }
+            QPushButton:hover { background-color: rgba(88, 166, 255, 30); }
+        """)
         btn_terminal.setFixedHeight(34)
         btn_terminal.clicked.connect(self.open_terminal)
         right_layout.addWidget(btn_terminal)
@@ -1530,7 +1773,7 @@ class App(QMainWindow):
 
         # Layout: left | gap | center (preview) | gap | right — gaps between panels, center widest
         main_layout.addStretch(1)
-        main_layout.addWidget(left_panel)
+        main_layout.addWidget(left_scroll)
         main_layout.addSpacing(18)
         main_layout.addWidget(center_column, 2, Qt.AlignTop)
         main_layout.addSpacing(18)
@@ -2416,6 +2659,131 @@ class App(QMainWindow):
                         ctx["enable_pw"] = em.group(1)
         return ctx
 
+    # ── GNS3 link resolution ─────────────────────────────────────────────
+
+    def _resolve_device_links(self, node_id: str, meta: dict) -> list:
+        """
+        Fetch GNS3 links for the current project and return the connections
+        involving *node_id* as a list of dicts::
+
+            [{"local_interface": "Fa0/0",
+              "remote_device":   "CSW1",
+              "remote_interface": "Fa1/0",
+              "remote_role":     "core"}, ...]
+        """
+        if not self.gns3 or not node_id:
+            return []
+        project_id = meta.get("project_id") or getattr(self, "gns3_project_id", "")
+        if not project_id:
+            return []
+        try:
+            raw_links = self.gns3.get_links(project_id)
+        except Exception:
+            return []
+
+        # Build port maps  {node_id: {(adapter, port): "FastEthernet0/0", ...}}
+        needed_nids = {node_id}
+        for link in raw_links:
+            eps = link.get("nodes", [])
+            if len(eps) < 2:
+                continue
+            nids = [eps[0].get("node_id", ""), eps[1].get("node_id", "")]
+            if node_id in nids:
+                needed_nids.update(nids)
+
+        port_maps: dict[str, dict] = {}
+        for nid in needed_nids:
+            try:
+                ports = self.gns3.get_node_ports(project_id, nid)
+                mapping = {}
+                for p in ports:
+                    a, pt, nm = p.get("adapter_number"), p.get("port_number"), p.get("name", "")
+                    if a is not None and pt is not None and nm:
+                        mapping[(int(a), int(pt))] = nm
+                port_maps[nid] = mapping
+            except Exception:
+                pass
+
+        # Map node_id -> (device_name, device_role, known_interfaces) from ANCS devices list
+        nid_info: dict[str, tuple[str, str, list[str]]] = {}
+        for dname, dmodel, dmeta in self.devices:
+            dnid = dmeta.get("node_id", "")
+            if dnid:
+                if isinstance(dmodel, RouterModel):
+                    role = "router"
+                elif isinstance(dmodel, CoreSwitchModel):
+                    role = "core"
+                else:
+                    role = "access"
+                nid_info[dnid] = (dname, role, dmeta.get("interfaces", []))
+
+        def _expand_iface(short_name: str) -> str:
+            low = short_name.lower().strip()
+            if low.startswith("fa"): return "FastEthernet" + short_name[2:]
+            if low.startswith("f") and len(low) > 1 and low[1].isdigit(): return "FastEthernet" + short_name[1:]
+            if low.startswith("gi"): return "GigabitEthernet" + short_name[2:]
+            if low.startswith("g") and len(low) > 1 and low[1].isdigit(): return "GigabitEthernet" + short_name[1:]
+            if low.startswith("te"): return "TenGigabitEthernet" + short_name[2:]
+            if low.startswith("t") and len(low) > 1 and low[1].isdigit(): return "TenGigabitEthernet" + short_name[1:]
+            if low.startswith("et"): return "Ethernet" + short_name[2:]
+            if low.startswith("e") and len(low) > 1 and low[1].isdigit(): return "Ethernet" + short_name[1:]
+            if low.startswith("se"): return "Serial" + short_name[2:]
+            if low.startswith("s") and len(low) > 1 and low[1].isdigit(): return "Serial" + short_name[1:]
+            return short_name
+
+        def _iface_name(nid: str, adapter: int, port: int, endpoint: dict) -> str:
+            lbl = (endpoint.get("label") or {}).get("text", "").strip()
+            pm = port_maps.get(nid, {})
+            name = pm.get((adapter, port), "")
+            if not name and lbl:
+                name = _expand_iface(lbl)
+            
+            # Use known_interfaces to find an exact case-sensitive match
+            _, _, known = nid_info.get(nid, ("", "", []))
+            if name:
+                for kn in known:
+                    if kn.lower() == name.lower() or kn.lower() == lbl.lower() or kn.lower() == _expand_iface(lbl).lower():
+                        return kn
+            elif known:
+                gen = f"{adapter}/{port}"
+                for kn in known:
+                    if kn.endswith(gen):
+                        return kn
+
+            return name or (lbl if lbl else f"e{adapter}/{port}")
+
+        result = []
+        for link in raw_links:
+            eps = link.get("nodes", [])
+            if len(eps) < 2:
+                continue
+            a, b = eps[0], eps[1]
+            a_nid, b_nid = a.get("node_id", ""), b.get("node_id", "")
+            if a_nid == node_id:
+                local_ep, remote_ep, remote_nid = a, b, b_nid
+            elif b_nid == node_id:
+                local_ep, remote_ep, remote_nid = b, a, a_nid
+            else:
+                continue
+            local_iface = _iface_name(
+                node_id,
+                int(local_ep.get("adapter_number", 0)),
+                int(local_ep.get("port_number", 0)),
+                local_ep)
+            remote_iface = _iface_name(
+                remote_nid,
+                int(remote_ep.get("adapter_number", 0)),
+                int(remote_ep.get("port_number", 0)),
+                remote_ep)
+            rname, rrole, _ = nid_info.get(remote_nid, ("unknown", "unknown", []))
+            result.append({
+                "local_interface":  local_iface,
+                "remote_device":    rname,
+                "remote_interface": remote_iface,
+                "remote_role":      rrole,
+            })
+        return result
+
     # ── Guided Setup ────────────────────────────────────────────────────
 
     def guided_setup(self):
@@ -2441,10 +2809,12 @@ class App(QMainWindow):
             if ret != QMessageBox.Yes:
                 return
         project_context = self._build_project_context(exclude_name=name)
+        connected_links = self._resolve_device_links(meta.get("node_id", ""), meta)
         from .wizards import GuidedSetupWizard
         win = GuidedSetupWizard(self, name, model, device_role=device_role,
                                  known_interfaces=meta.get("interfaces", []),
-                                 project_context=project_context)
+                                 project_context=project_context,
+                                 connected_links=connected_links)
         accepted = False
         if hasattr(win, "exec"):
             accepted = bool(win.exec())

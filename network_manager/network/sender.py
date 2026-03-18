@@ -44,14 +44,16 @@ class Sender:
 
             # Start of a new block, e.g.:
             #   ! BLOCK 1: Identity & Security
-            if stripped.startswith("! BLOCK ") and ":" in stripped:
+            #   ! BLOCK 1 — Identity & Security
+            if stripped.startswith("! BLOCK "):
                 # Flush previous block
                 if current_block and current_title is not None:
                     blocks.append((current_title, "\n".join(current_block)))
                     current_block = []
 
-                m = re.search(r"BLOCK\s+\d+:\s*(.+)", stripped)
-                current_title = m.group(1) if m else "Configuration Block"
+                # Match colon, dash, or em-dash
+                m = re.search(r"BLOCK\s+\d+[:\-—]\s*(.+)", stripped)
+                current_title = m.group(1).strip() if m else "Configuration Block"
                 continue
 
             # Skip instruction / decoration lines
@@ -123,7 +125,7 @@ class Sender:
                     pass
 
     @staticmethod
-    async def _send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0):
+    async def _send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=4.0):
         """Async implementation of telnet send using telnetlib3"""
         reader, writer = await asyncio.wait_for(
             telnetlib3.open_connection(host, port),
@@ -211,7 +213,7 @@ class Sender:
                     if line.strip():
                         await write_line(line)
                         log_fn(f"[telnet] sent: {line}")
-                        await asyncio.sleep(0.2)
+                        await asyncio.sleep(0.4)
                 
                 # Wait between blocks
                 if idx < len(blocks):

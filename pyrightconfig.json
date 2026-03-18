@@ -1,0 +1,8 @@
+{
+    "venvPath": ".",
+    "venv": ".venv",
+    "pythonVersion": "3.11",
+    "include": ["network_manager"],
+    "exclude": ["build", "dist", ".venv"],
+    "typeCheckingMode": "off"
+}

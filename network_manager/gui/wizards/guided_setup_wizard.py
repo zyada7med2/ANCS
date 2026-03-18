@@ -130,6 +130,7 @@ class GuidedSetupWizard(QDialog):
         known_interfaces: list = None,
         headless: bool = False,
         project_context: dict = None,
+        connected_links: list = None,
     ):
         super().__init__(parent)
 
@@ -170,10 +171,14 @@ class GuidedSetupWizard(QDialog):
         self.acl_rules:     List[Dict]      = []
         self.uplinks:       List[Dict]      = []
         self.router_interface: str          = ""
+        self.wan_interface: str              = ""
+        self.wan_ip: str                    = ""
+        self.wan_mask: str                  = "255.255.255.252"
         self.static_routes: List[Dict]      = []
         self.rip_networks:  List[Dict]      = []
         self.enable_rip:    bool            = False
         self.summary_box:   Optional[QTextEdit] = None
+        self.connected_links: List[Dict] = connected_links or []
 
         # ── per-step UI state (reset on each render) ──
         self.vlan_row_entries:    List = []
@@ -190,6 +195,25 @@ class GuidedSetupWizard(QDialog):
             self._build_steps()
             self._build_layout()
         self._render_step()
+
+    def _find_link_to(self, *roles: str) -> Optional[Dict]:
+        """Return the first connected_links entry whose remote_role is one of *roles*."""
+        for link in self.connected_links:
+            if link.get("remote_role") in roles:
+                return link
+        return None
+
+    def _show_suggestion_banner(self, parent, text: str) -> QLabel:
+        """Create a themed suggestion banner with a green left-border."""
+        t = self.THEME
+        lbl = QLabel(f"\U0001f517 {text}", parent)
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(
+            f"background-color: {t['card']}; color: #3FB950; "
+            f"border-left: 3px solid #3FB950; "
+            f"padding: 6px 10px; border-radius: 4px; font-size: 11px;"
+        )
+        return lbl
 
     def _apply_dark_theme(self):
         t = self.THEME
@@ -402,12 +426,19 @@ class GuidedSetupWizard(QDialog):
             if self.device_role in ("core", "access"):
                 self.vlans = [
                     {"id": "10", "name": "Staff",
-                     "ports": "Ethernet0/0-2" if self.device_role == "access" else "FastEthernet1/1-5"},
+                     "ports": "Ethernet0/0-2" if self.device_role == "access" else ""},
                     {"id": "20", "name": "Guest",
-                     "ports": "Ethernet1/0-1" if self.device_role == "access" else "FastEthernet1/6-10"},
+                     "ports": "Ethernet1/0-1" if self.device_role == "access" else ""},
                 ]
             if self.device_role == "router":
-                self.router_interface = self.known_interfaces[0] if self.known_interfaces else "FastEthernet0/0"
+                _link = self._find_link_to("core", "access")
+                self.router_interface = _link["local_interface"] if _link else (
+                    self.known_interfaces[0] if self.known_interfaces else "FastEthernet0/0")
+                # WAN interface — pick the second known interface or use a default
+                wan_candidates = [i for i in self.known_interfaces if i != self.router_interface]
+                self.wan_interface = wan_candidates[0] if wan_candidates else "FastEthernet0/1"
+                self.wan_ip = "10.0.0.2"
+                self.wan_mask = "255.255.255.252"
                 self.routing_entries = [
                     {"vlan": "10", "name": "Staff", "ip": "192.168.10.1", "mask": "255.255.255.0"},
                     {"vlan": "20", "name": "Guest", "ip": "192.168.20.1", "mask": "255.255.255.0"},
@@ -416,10 +447,10 @@ class GuidedSetupWizard(QDialog):
                 self.static_routes = [{"network": "0.0.0.0", "mask": "0.0.0.0",
                                         "next-hop": "10.0.0.1", "description": "Default route to ISP"}]
                 self.acl_rules = [
-                    {"acl #": "101", "action": "permit", "source": "192.168.10.0",
-                     "wildcard": "0.0.0.255", "remark": "Allow Staff"},
                     {"acl #": "101", "action": "deny",   "source": "192.168.20.0",
-                     "wildcard": "0.0.0.255", "remark": "Block Guest from reaching Staff"},
+                     "wildcard": "0.0.0.255", "destination": "192.168.10.0",
+                     "destination_wildcard": "0.0.0.255",
+                     "remark": "Block Guest from reaching Staff"},
                     {"acl #": "101", "action": "permit", "source": "any",
                      "wildcard": "",           "remark": "Permit all other"},
                 ]
@@ -429,22 +460,38 @@ class GuidedSetupWizard(QDialog):
                     {"acl #": "10", "action": "permit", "source": "192.168.10.0",
                      "wildcard": "0.0.0.255", "remark": "Allow Staff"},
                 ]
+            if self.device_role == "core":
+                # Core switch needs trunk uplinks to router and access switches
+                trunk_ports = []
+                for link in (self.connected_links or []):
+                    trunk_ports.append(link["local_interface"])
+                if not trunk_ports:
+                    trunk_ports = ["FastEthernet1/0", "FastEthernet1/1"]
+                self.uplinks = [{"ports": ", ".join(trunk_ports), "mode": "trunk", "allowed vlans": "all"}]
             if self.device_role == "access":
-                self.uplinks = [{"ports": a_uplink, "mode": "trunk", "allowed vlans": "all"}]
+                _link = self._find_link_to("core", "router")
+                a_uplink_port = _link["local_interface"] if _link else a_uplink
+                self.uplinks = [{"ports": a_uplink_port, "mode": "trunk", "allowed vlans": "all"}]
 
         elif key == "school_lab":
             self.identity_data = {"hostname": dn, "domain": "school.edu", "enable": "EduPass456!"}
             if self.device_role in ("core", "access"):
                 self.vlans = [
                     {"id": "10", "name": "Students",
-                     "ports": "Ethernet0/0-2" if self.device_role == "access" else "FastEthernet1/1-5"},
+                     "ports": "Ethernet0/0-2" if self.device_role == "access" else ""},
                     {"id": "20", "name": "Teachers",
-                     "ports": "Ethernet1/0-1" if self.device_role == "access" else "FastEthernet1/6-8"},
+                     "ports": "Ethernet1/0-1" if self.device_role == "access" else ""},
                     {"id": "30", "name": "Servers",
-                     "ports": "Ethernet2/0"   if self.device_role == "access" else "FastEthernet1/9-10"},
+                     "ports": "Ethernet2/0"   if self.device_role == "access" else ""},
                 ]
             if self.device_role == "router":
-                self.router_interface = self.known_interfaces[0] if self.known_interfaces else "FastEthernet0/0"
+                _link = self._find_link_to("core", "access")
+                self.router_interface = _link["local_interface"] if _link else (
+                    self.known_interfaces[0] if self.known_interfaces else "FastEthernet0/0")
+                wan_candidates = [i for i in self.known_interfaces if i != self.router_interface]
+                self.wan_interface = wan_candidates[0] if wan_candidates else "FastEthernet0/1"
+                self.wan_ip = "10.0.0.2"
+                self.wan_mask = "255.255.255.252"
                 self.routing_entries = [
                     {"vlan": "10", "name": "Students", "ip": "192.168.10.1", "mask": "255.255.255.0"},
                     {"vlan": "20", "name": "Teachers", "ip": "192.168.20.1", "mask": "255.255.255.0"},
@@ -454,10 +501,10 @@ class GuidedSetupWizard(QDialog):
                 self.static_routes = [{"network": "0.0.0.0", "mask": "0.0.0.0",
                                         "next-hop": "10.0.0.1", "description": "Default route to ISP"}]
                 self.acl_rules = [
-                    {"acl #": "101", "action": "permit", "source": "192.168.20.0",
-                     "wildcard": "0.0.0.255", "remark": "Allow Teachers full access"},
                     {"acl #": "101", "action": "deny",   "source": "192.168.10.0",
-                     "wildcard": "0.0.0.255", "remark": "Block Students from Servers"},
+                     "wildcard": "0.0.0.255", "destination": "192.168.30.0",
+                     "destination_wildcard": "0.0.0.255",
+                     "remark": "Block Students from Servers"},
                     {"acl #": "101", "action": "permit", "source": "any",
                      "wildcard": "",           "remark": "Permit all other"},
                 ]
@@ -467,22 +514,47 @@ class GuidedSetupWizard(QDialog):
                     {"acl #": "10", "action": "permit", "source": "192.168.20.0",
                      "wildcard": "0.0.0.255", "remark": "Allow Teachers"},
                 ]
+            if self.device_role == "core":
+                trunk_ports = []
+                for link in (self.connected_links or []):
+                    trunk_ports.append(link["local_interface"])
+                if not trunk_ports:
+                    trunk_ports = ["FastEthernet1/0", "FastEthernet1/1"]
+                self.uplinks = [{"ports": ", ".join(trunk_ports), "mode": "trunk", "allowed vlans": "all"}]
             if self.device_role == "access":
-                self.uplinks = [{"ports": a_uplink, "mode": "trunk", "allowed vlans": "all"}]
+                _link = self._find_link_to("core", "router")
+                a_uplink_port = _link["local_interface"] if _link else a_uplink
+                self.uplinks = [{"ports": a_uplink_port, "mode": "trunk", "allowed vlans": "all"}]
 
         else:  # minimal
             self.identity_data = {"hostname": dn, "domain": "", "enable": "ChangeMe123!"}
             if self.device_role in ("core", "access"):
-                self.vlans = [{"id": "10", "name": "Default", "ports": a_ports}]
+                self.vlans = [{"id": "10", "name": "Default",
+                               "ports": a_ports if self.device_role == "access" else ""}]
             if self.device_role == "router":
-                self.router_interface = self.known_interfaces[0] if self.known_interfaces else "FastEthernet0/0"
+                _link = self._find_link_to("core", "access")
+                self.router_interface = _link["local_interface"] if _link else (
+                    self.known_interfaces[0] if self.known_interfaces else "FastEthernet0/0")
+                wan_candidates = [i for i in self.known_interfaces if i != self.router_interface]
+                self.wan_interface = wan_candidates[0] if wan_candidates else "FastEthernet0/1"
+                self.wan_ip = "10.0.0.2"
+                self.wan_mask = "255.255.255.252"
                 self.routing_entries  = [{"vlan": "10", "name": "Default",
                                            "ip": "192.168.10.1", "mask": "255.255.255.0"}]
                 self.dhcp_pools = self._auto_dhcp_from_routing()
             elif self.device_role == "core" and self.routing_mode == "device":
                 self.routing_entries = self._auto_routing_from_vlans()
+            if self.device_role == "core":
+                trunk_ports = []
+                for link in (self.connected_links or []):
+                    trunk_ports.append(link["local_interface"])
+                if not trunk_ports:
+                    trunk_ports = ["FastEthernet1/0", "FastEthernet1/1"]
+                self.uplinks = [{"ports": ", ".join(trunk_ports), "mode": "trunk", "allowed vlans": "all"}]
             if self.device_role == "access":
-                self.uplinks = [{"ports": a_uplink, "mode": "trunk", "allowed vlans": "all"}]
+                _link = self._find_link_to("core", "router")
+                a_uplink_port = _link["local_interface"] if _link else a_uplink
+                self.uplinks = [{"ports": a_uplink_port, "mode": "trunk", "allowed vlans": "all"}]
 
     def _quick_generate(self, key: str):
         self._apply_preset(key)
@@ -1237,13 +1309,24 @@ class GuidedSetupWizard(QDialog):
         ifl.addWidget(QLabel("Interface connected to the switch:"))
         _fallback = ["FastEthernet0/0", "GigabitEthernet1/0", "GigabitEthernet2/0", "Serial6/0"]
         ifaces = self.known_interfaces if self.known_interfaces else _fallback
-        default = self.router_interface or (ifaces[0] if ifaces else "FastEthernet0/0")
+        # Auto-detect the connected interface from GNS3 cables
+        _link = self._find_link_to("core", "access")
+        if _link:
+            default = _link["local_interface"]
+        else:
+            default = self.router_interface or (ifaces[0] if ifaces else "FastEthernet0/0")
         self.router_interface_combo = QComboBox()
         self.router_interface_combo.addItems(ifaces)
         self.router_interface_combo.setCurrentText(default)
         self.router_interface_combo.setEditable(True)
         ifl.addWidget(self.router_interface_combo)
         layout.addWidget(iface_f)
+        if _link:
+            layout.addWidget(self._show_suggestion_banner(
+                body,
+                f"Detected cable: {_link['local_interface']} ↔ {_link['remote_device']} ({_link['remote_interface']}). "
+                "Auto-selected as the trunk interface.",
+            ))
         source_vlans = self.vlans
         if not source_vlans:
             cnt_row = QWidget()
@@ -1372,7 +1455,44 @@ class GuidedSetupWizard(QDialog):
         t = self.THEME
         ctx = self.project_context
         layout = body.layout() or QVBoxLayout(body)
-        layout.addWidget(self._lbl(body, "A default route sends internet-bound traffic to your ISP or upstream router.", muted=True))
+
+        # ── WAN Interface card ────────────────────────────────────────────
+        layout.addWidget(self._lbl(body, "Configure the interface that connects to the ISP / internet.", muted=True))
+        wan_card = self._card(body)
+        wan_card_layout = QVBoxLayout(wan_card)
+        wan_card_layout.addWidget(self._lbl(body, "WAN / Internet Interface", bold=True))
+
+        # Interface selector
+        wan_iface_f = QWidget()
+        wil = QHBoxLayout(wan_iface_f)
+        wil.setContentsMargins(0, 0, 0, 0)
+        wil.addWidget(QLabel("WAN interface:"))
+        _fallback_wan = ["FastEthernet0/1", "GigabitEthernet1/0", "GigabitEthernet0/1"]
+        wan_ifaces = [i for i in self.known_interfaces if i != self.router_interface] if self.known_interfaces else _fallback_wan
+        if not wan_ifaces:
+            wan_ifaces = _fallback_wan
+        default_wan = self.wan_interface or (wan_ifaces[0] if wan_ifaces else "FastEthernet0/1")
+        self.wan_iface_combo = QComboBox()
+        self.wan_iface_combo.addItems(wan_ifaces)
+        self.wan_iface_combo.setCurrentText(default_wan)
+        self.wan_iface_combo.setEditable(True)
+        wil.addWidget(self.wan_iface_combo)
+        wan_card_layout.addWidget(wan_iface_f)
+
+        # IP / Mask row
+        wan_ip_f = QWidget()
+        wipl = QHBoxLayout(wan_ip_f)
+        wipl.setContentsMargins(0, 0, 0, 0)
+        wipl.addWidget(QLabel("IP address:"))
+        self.wan_ip_var = self._entry(body, self.wan_ip or "10.0.0.2", 16)
+        wipl.addWidget(self.wan_ip_var)
+        wipl.addWidget(QLabel("Mask:"))
+        self.wan_mask_var = self._entry(body, self.wan_mask or "255.255.255.252", 16)
+        wipl.addWidget(self.wan_mask_var)
+        wan_card_layout.addWidget(wan_ip_f)
+        layout.addWidget(wan_card)
+
+        # ── Default Route card ────────────────────────────────────────────
         def_card = self._card(body)
         def_card_layout = QVBoxLayout(def_card)
         self.default_route_cb = QCheckBox("Add a default route to the internet / upstream router")
@@ -1392,6 +1512,8 @@ class GuidedSetupWizard(QDialog):
         ispl.addWidget(self.isp_gw_var)
         def_card_layout.addWidget(isp_f)
         layout.addWidget(def_card)
+
+        # ── Extra routes ─────────────────────────────────────────────────
         layout.addWidget(self._lbl(body, "Additional static routes:", bold=True))
         self.extra_routes_cb = QCheckBox("I need more static routes (advanced)")
         self.extra_routes_cb.setChecked(len(self.static_routes) > 1)
@@ -1435,6 +1557,18 @@ class GuidedSetupWizard(QDialog):
         toggle_extra()
 
     def _validate_static_routes(self) -> bool:
+        # Save WAN interface fields
+        wan_combo = getattr(self, "wan_iface_combo", None)
+        if wan_combo:
+            self.wan_interface = wan_combo.currentText().strip()
+        wan_ip = getattr(self, "wan_ip_var", None)
+        if wan_ip:
+            self.wan_ip = wan_ip.text().strip()
+        wan_mask = getattr(self, "wan_mask_var", None)
+        if wan_mask:
+            self.wan_mask = wan_mask.text().strip()
+
+        # Save static routes
         self.static_routes = []
         if getattr(self, "default_route_cb", None) and self.default_route_cb.isChecked():
             isp = getattr(self, "isp_gw_var", None)
@@ -1446,6 +1580,20 @@ class GuidedSetupWizard(QDialog):
             if net and nh:
                 self.static_routes.append({"network": net, "mask": mask_v.text().strip() or "255.255.255.0", "next-hop": nh, "description": desc_v.text().strip()})
         return True
+
+    def _render_wan_block(self) -> str:
+        if not self.wan_interface or not self.wan_ip:
+            return ""
+        lines = [
+            "configure terminal",
+            f"interface {self.wan_interface}",
+            f" ip address {self.wan_ip} {self.wan_mask or '255.255.255.252'}",
+            " no shutdown",
+            "exit",
+            "!",
+            "end",
+        ]
+        return "\n".join(lines)
 
     def _build_step_rip(self, body):
         layout = body.layout() or QVBoxLayout(body)
@@ -1471,12 +1619,23 @@ class GuidedSetupWizard(QDialog):
         layout.addWidget(self._lbl(body, "The uplink port connects this switch to the router or core switch.", muted=True))
         ex0 = self.uplinks[0] if self.uplinks else {}
         ctx_vlan_ids = ",".join(v["id"] for v in ctx["vlans"]) if ctx.get("vlans") else ""
-        default_port = "Ethernet3/3" if self.device_role == "access" else "FastEthernet1/0"
+        # Auto-detect the uplink from GNS3 cables
+        _link = self._find_link_to("core", "router")
+        if _link:
+            default_port = _link["local_interface"]
+        else:
+            default_port = "Ethernet3/3" if self.device_role == "access" else "FastEthernet1/0"
         primary = self._card(body)
         pl = QVBoxLayout(primary)
         pl.addWidget(QLabel("Uplink to core switch or router (trunk port):"))
         self.uplink_port_var = self._entry(body, ex0.get("ports", default_port), 22)
         pl.addWidget(self.uplink_port_var)
+        if _link:
+            pl.addWidget(self._show_suggestion_banner(
+                body,
+                f"Detected cable: {_link['local_interface']} \u2194 {_link['remote_device']} ({_link['remote_interface']}). "
+                "Auto-filled as the uplink port.",
+            ))
         layout.addWidget(primary)
         allowed_f = QWidget()
         afl = QHBoxLayout(allowed_f)
@@ -1607,10 +1766,11 @@ class GuidedSetupWizard(QDialog):
             ("BLOCK 2 — VLANs & Port Assignment",  self._render_vlan_block()),
             ("BLOCK 3 — Uplinks & Trunks",          self._render_uplink_block()),
             ("BLOCK 4 — Routing / Subinterfaces",   self._render_routing_block()),
-            ("BLOCK 5 — Static Routes",             self._render_static_routes_block()),
-            ("BLOCK 6 — RIPv2",                     self._render_rip_block()),
-            ("BLOCK 7 — DHCP Pools",                self._render_dhcp_block()),
-            ("BLOCK 8 — Access Control Lists",      self._render_acl_block()),
+            ("BLOCK 5 — WAN Interface",             self._render_wan_block()),
+            ("BLOCK 6 — Static Routes",             self._render_static_routes_block()),
+            ("BLOCK 7 — RIPv2",                     self._render_rip_block()),
+            ("BLOCK 8 — DHCP Pools",                self._render_dhcp_block()),
+            ("BLOCK 9 — Access Control Lists",      self._render_acl_block()),
         ]
         inserted = False
         for title, block in blocks:
@@ -1639,6 +1799,7 @@ class GuidedSetupWizard(QDialog):
             "guided_vlans":         self._render_vlan_block(),
             "guided_uplinks":       self._render_uplink_block(),
             "guided_routing":       self._render_routing_block(),
+            "guided_wan":           self._render_wan_block(),
             "guided_static_routes": self._render_static_routes_block(),
             "guided_rip":           self._render_rip_block(),
             "guided_dhcp":          self._render_dhcp_block(),
