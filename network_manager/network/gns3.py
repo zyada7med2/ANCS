@@ -53,7 +53,8 @@ class GNS3Connector:
         Each dict contains at minimum: 'name', 'adapter_number', 'port_number'.
         Example names: 'Ethernet0/0', 'FastEthernet1/0', 'GigabitEthernet0/0'.
         """
-        return self._get(f"/v2/projects/{project_id}/nodes/{node_id}/ports")
+        node_data = self._get(f"/v2/projects/{project_id}/nodes/{node_id}")
+        return node_data.get("ports", [])
 
     def get_links(self, project_id: str):
         """

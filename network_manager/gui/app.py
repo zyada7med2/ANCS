@@ -25,6 +25,65 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QGraphicsOpacityEffect
 
+# ── Custom Dialogs ────────────────────────────────────────────────────────
+class ActionConfirmDialog(QDialog):
+    """Premium custom confirmation dialog replacing native OS warning boxes."""
+    def __init__(self, parent, title, message, action_text, action_color="#1F6FEB", hover_color="#388BFD"):
+        super().__init__(parent)
+        self.setWindowTitle(title)
+        self.setModal(True)
+        self.setFixedSize(450, 220)
+        if hasattr(parent, "_dialog_style"):
+            self.setStyleSheet(parent._dialog_style())
+        
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(30, 30, 30, 24)
+        
+        lbl_msg = QLabel(message)
+        lbl_msg.setWordWrap(True)
+        lbl_msg.setStyleSheet("font-size: 15px; color: #C9D1D9; line-height: 1.4;")
+        layout.addWidget(lbl_msg)
+        
+        layout.addStretch()
+        
+        btn_layout = QHBoxLayout()
+        btn_layout.addStretch()
+        
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.setFixedWidth(100)
+        btn_cancel.setFixedHeight(36)
+        btn_cancel.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                border: 1px solid #484F58;
+                border-radius: 6px;
+                color: #C9D1D9;
+            }
+            QPushButton:hover { background-color: #21262D; }
+        """)
+        btn_cancel.clicked.connect(self.reject)
+        
+        btn_action = QPushButton(action_text)
+        btn_action.setFixedWidth(160)
+        btn_action.setFixedHeight(36)
+        btn_action.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {action_color};
+                border: 1px solid rgba(255, 255, 255, 30);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{ background-color: {hover_color}; }}
+        """)
+        btn_action.clicked.connect(self.accept)
+        
+        btn_layout.addWidget(btn_cancel)
+        btn_layout.addSpacing(12)
+        btn_layout.addWidget(btn_action)
+        layout.addLayout(btn_layout)
+
+
 # ── helper functions (kept from original) ───────────────────────────────
 
 def _obfuscate(plaintext: str) -> str:
@@ -55,7 +114,7 @@ def _gui_path(*parts: str) -> str:
 from ..config import DB_PATH, GNS3_DEFAULT_URL, CONFIG_FILE, conn, cur, db_lock, _db_error
 from ..models import DeviceModel, RouterModel, SwitchModel, CoreSwitchModel
 from ..network import Sender, GNS3Connector
-from .utils import apply_responsive_geometry
+from .utils import apply_responsive_geometry, enable_global_dark_dialogs
 
 try:
     import requests
@@ -598,6 +657,9 @@ class App(QMainWindow):
 
         # State
         self.device_types = {"router": RouterModel, "switch": SwitchModel, "core switch": CoreSwitchModel}
+        
+        # Apply dark title bars globally to all QDialog/QMessageBox popups
+        enable_global_dark_dialogs(app)
         self.devices: list[tuple[str, DeviceModel, dict]] = []
         self.current_device: Optional[tuple[str, DeviceModel, dict]] = None
         self.selected_device_name = None
@@ -1457,10 +1519,7 @@ class App(QMainWindow):
         btn_subnet.clicked.connect(lambda: self._open_subnet_calculator())
         left_layout.addWidget(btn_subnet)
 
-        btn_history = QPushButton("Send History")
-        btn_history.setProperty("outlined", True)
-        btn_history.clicked.connect(self.open_audit_log)
-        left_layout.addWidget(btn_history)
+        # Send History button removed — now natively in Logs page
 
         self.btn_rollback = QPushButton("Rollback Config")
         self.btn_rollback.setProperty("danger", True)
@@ -1816,11 +1875,12 @@ class App(QMainWindow):
         lbl_hist.setStyleSheet("color: #9ca3af; font-size: 15px; font-weight: bold;")
         logs_inner.addWidget(lbl_hist)
 
-        self.logs_history_table = QTableWidget(0, 4)
-        self.logs_history_table.setHorizontalHeaderLabels(["ID", "Device", "Action", "Time"])
+        self.logs_history_table = QTableWidget(0, 5)
+        self.logs_history_table.setHorizontalHeaderLabels(["ID", "Device", "Action", "Details", "Time"])
         self.logs_history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.logs_history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.logs_history_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.logs_history_table.itemDoubleClicked.connect(self._view_log_snapshot)
         logs_inner.addWidget(self.logs_history_table)
 
         lbl_live = QLabel("Live output")
@@ -2177,10 +2237,10 @@ class App(QMainWindow):
             device_filter = self.logs_device_var.currentText()
             if device_filter == "All":
                 cur.execute(
-                    "SELECT id, device_name, action, timestamp FROM logs ORDER BY id DESC LIMIT 200")
+                    "SELECT id, device_name, action, details, timestamp FROM logs ORDER BY id DESC LIMIT 200")
             else:
                 cur.execute(
-                    "SELECT id, device_name, action, timestamp FROM logs "
+                    "SELECT id, device_name, action, details, timestamp FROM logs "
                     "WHERE device_name=? ORDER BY id DESC LIMIT 200",
                     (device_filter,))
             rows = cur.fetchall()
@@ -2223,6 +2283,45 @@ class App(QMainWindow):
         except Exception:
             pass
 
+    def _view_log_snapshot(self, item):
+        row = item.row()
+        log_id = self.logs_history_table.item(row, 0).text()
+        try:
+            with db_lock:
+                cur.execute("SELECT config_snapshot FROM logs WHERE id=?", (log_id,))
+                row_data = cur.fetchone()
+            if row_data and row_data[0]:
+                snap = row_data[0]
+                dlg = QDialog(self)
+                dlg.setWindowTitle("Sent Configuration Snapshot")
+                dlg.resize(800, 600)
+                dlg.setStyleSheet(self._dialog_style())
+                layout = QVBoxLayout(dlg)
+                
+                title = QLabel(f"Configuration Payload (Log ID: {log_id})")
+                title.setStyleSheet("font-size: 16px; font-weight: bold; color: #E6EDF3;")
+                layout.addWidget(title)
+                
+                txt = QPlainTextEdit(snap)
+                txt.setReadOnly(True)
+                layout.addWidget(txt)
+                
+                btn = QPushButton("Close")
+                btn.setFixedHeight(36)
+                btn.setFixedWidth(120)
+                btn.setStyleSheet("""
+                    QPushButton { background-color: #21262D; border: 1px solid #30363D; border-radius: 6px; color: #C9D1D9; }
+                    QPushButton:hover { background-color: #30363D; border-color: #8B949E; }
+                """)
+                btn.clicked.connect(dlg.accept)
+                layout.addWidget(btn, alignment=Qt.AlignRight)
+                
+                dlg.exec()
+            else:
+                QMessageBox.information(self, "No Snapshot", "No configuration payload was stored for this log entry.")
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to load snapshot: {e}")
+
     # ── Send / Deploy ───────────────────────────────────────────────────
 
     def _set_send_busy(self, busy: bool):
@@ -2238,6 +2337,12 @@ class App(QMainWindow):
             pass
 
     def send_now(self):
+        dlg = ActionConfirmDialog(self, "Send Configuration",
+                                  "Are you sure you want to push this configuration to the device?\n\nThis will apply changes instantly.",
+                                  "Send Config")
+        if dlg.exec() != QDialog.Accepted:
+            return
+            
         content = self.preview.toPlainText().strip()
         ok, reason = self._validate_send_inputs()
         if not ok:
@@ -2688,8 +2793,11 @@ class App(QMainWindow):
             return []
         try:
             raw_links = self.gns3.get_links(project_id)
+            raw_nodes = self.gns3.get_nodes(project_id)
         except Exception:
             return []
+
+        gns3_nodes = {n.get("node_id"): n for n in raw_nodes if "node_id" in n}
 
         # Build port maps  {node_id: {(adapter, port): "FastEthernet0/0", ...}}
         needed_nids = {node_id}
@@ -2785,7 +2893,14 @@ class App(QMainWindow):
                 int(remote_ep.get("adapter_number", 0)),
                 int(remote_ep.get("port_number", 0)),
                 remote_ep)
-            rname, rrole, _ = nid_info.get(remote_nid, ("unknown", "unknown", []))
+            
+            rname, rrole, _ = nid_info.get(remote_nid, (None, None, []))
+            if rname is None:
+                # Fallback to GNS3 native raw node if unconnected to ANCS logic
+                g_node = gns3_nodes.get(remote_nid, {})
+                rname = g_node.get("name", "unknown")
+                rrole = g_node.get("node_type", "unknown")
+            
             result.append({
                 "local_interface":  local_iface,
                 "remote_device":    rname,
@@ -2820,9 +2935,22 @@ class App(QMainWindow):
                 return
         project_context = self._build_project_context(exclude_name=name)
         connected_links = self._resolve_device_links(meta.get("node_id", ""), meta)
+
+        # Ensure we have interface list — fetch from GNS3 if missing
+        interfaces = meta.get("interfaces", [])
+        if not interfaces and self.gns3 and meta.get("node_id"):
+            project_id = meta.get("project_id") or getattr(self, "gns3_project_id", "")
+            if project_id:
+                try:
+                    ports_data = self.gns3.get_node_ports(project_id, meta["node_id"])
+                    interfaces = [p["name"] for p in ports_data if p.get("name")]
+                    meta["interfaces"] = interfaces  # cache for next time
+                except Exception:
+                    pass
+
         from .wizards import GuidedSetupWizard
         win = GuidedSetupWizard(self, name, model, device_role=device_role,
-                                 known_interfaces=meta.get("interfaces", []),
+                                 known_interfaces=interfaces,
                                  project_context=project_context,
                                  connected_links=connected_links)
         accepted = False
@@ -3039,6 +3167,14 @@ class App(QMainWindow):
             QMessageBox.information(self, "Deploy All", "No devices in workspace.")
             return
 
+        dlg = ActionConfirmDialog(self, "Deploy All Configurations",
+                                  "Are you sure you want to deploy the generated configurations "
+                                  "to ALL devices in the workspace?\n\nThis will apply changes instantly.",
+                                  "Deploy All")
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+
         def _priority(item):
             _, model, __ = item
             if isinstance(model, RouterModel): return 0
@@ -3135,36 +3271,7 @@ class App(QMainWindow):
 
         threading.Thread(target=worker, daemon=True).start()
 
-    # ── Audit log ───────────────────────────────────────────────────────
-
-    def open_audit_log(self):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Send History")
-        dlg.resize(980, 640)
-        dlg.setStyleSheet(self._dialog_style())
-        layout = QVBoxLayout(dlg)
-
-        title = QLabel("Send History")
-        title.setStyleSheet("font-size: 18px; font-weight: 700; color: #E6EDF3;")
-        layout.addWidget(title)
-
-        table = QTableWidget(0, 5)
-        table.setHorizontalHeaderLabels(["ID", "Device", "Action", "Details", "Time"])
-        self._style_table_widget(table)
-        try:
-            cur.execute("SELECT id, device_name, action, details, timestamp FROM logs ORDER BY id DESC LIMIT 200")
-            for row in cur.fetchall():
-                r = table.rowCount()
-                table.insertRow(r)
-                for c, val in enumerate(row):
-                    table.setItem(r, c, QTableWidgetItem(str(val or "")))
-        except Exception:
-            pass
-        layout.addWidget(table)
-        btn_close = QPushButton("Close")
-        btn_close.clicked.connect(dlg.accept)
-        layout.addWidget(btn_close, alignment=Qt.AlignRight)
-        dlg.exec()
+    # ── Audit log (Natively integrated in Logs Page) ────────────────────
 
     # ── GNS3 ────────────────────────────────────────────────────────────
 

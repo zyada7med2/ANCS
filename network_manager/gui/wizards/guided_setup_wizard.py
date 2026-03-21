@@ -163,6 +163,7 @@ class GuidedSetupWizard(QDialog):
         self.routing_mode      = "device"      # "device" | "external"
         self.known_interfaces: list = known_interfaces or []
         self.project_context:  dict = project_context or {}
+        self.connected_links:  list = connected_links or []
 
         # ── data buckets (populated step-by-step or by preset) ──
         self.identity_data: Dict[str, str]  = {}
@@ -1068,6 +1069,16 @@ class GuidedSetupWizard(QDialog):
         }
         return True
 
+    def _get_uplink_ports(self) -> set:
+        """Collect all ports already designated as trunk/uplink in the Uplinks step."""
+        uplink_set = set()
+        for uplink in self.uplinks:
+            for p in uplink.get("ports", "").replace(",", " ").split():
+                p = p.strip()
+                if p:
+                    uplink_set.add(p)
+        return uplink_set
+
     def _build_step_vlans(self, body):
         t = self.THEME
         ctx = self.project_context
@@ -1097,55 +1108,156 @@ class GuidedSetupWizard(QDialog):
         self.vlan_count_spin.setRange(0, 12)
         self.vlan_count_spin.setValue(max(2, len(self.vlans)))
         cnt_layout.addWidget(self.vlan_count_spin)
-        cnt_layout.addWidget(self._lbl(body, "(ports are auto-assigned)", muted=True))
+        cnt_layout.addWidget(self._lbl(body, "(select ports per VLAN below)", muted=True))
         layout.addWidget(cnt_f)
         has_picker = bool(self.known_interfaces) and self.device_role in ("access", "core")
         cols = [("VLAN ID", 9), ("Name", 22)]
-        cols.append(("Assign Ports (optional)", 32) if has_picker else ("Ports (e.g. Et0/0-3) (optional)", 28))
+        cols.append(("Assign Ports", 32) if has_picker else ("Ports (e.g. Et0/0-3) (optional)", 28))
         cols.append(("", 4))
         layout.addWidget(self._section_hdr(body, cols))
         self.vlan_rows_widget = QWidget()
         self.vlan_rows_layout = QVBoxLayout(self.vlan_rows_widget)
         layout.addWidget(self.vlan_rows_widget, 1)
 
+        uplink_ports = self._get_uplink_ports()
+
         def _btn_label(val: str) -> str:
             if not val or val == "auto":
-                return "Auto-assign"
-            parts = val.split(",")
-            return f"{parts[0]}, +{len(parts)-1} more" if len(parts) > 2 else f"{val}"
+                return "Select Ports…"
+            parts = [p.strip() for p in val.split(",") if p.strip()]
+            if not parts:
+                return "Select Ports…"
+            if len(parts) <= 2:
+                return ", ".join(parts)
+            return f"{parts[0]}, +{len(parts)-1} more"
 
         def _open_port_picker(ports_edit, btn, row_idx):
-            popup = QDialog(self)
-            popup.setWindowTitle("Select ports")
-            popup.setStyleSheet(f"background-color: {t['sidebar']};")
-            popup.setFixedSize(320, 280)
-            pl = QVBoxLayout(popup)
-            pl.addWidget(QLabel("Tick the ports for this VLAN:"))
+            # Close any existing picker dropdown
+            for child in self.findChildren(QFrame, "portPickerDropdown"):
+                child.deleteLater()
+
+            # Build the dropdown anchored below the button
+            dropdown = QFrame(self)
+            dropdown.setObjectName("portPickerDropdown")
+            dropdown.setStyleSheet(
+                f"QFrame#portPickerDropdown {{"
+                f"  background-color: {t['sidebar']};"
+                f"  border: 1px solid {t['accent']};"
+                f"  border-radius: 8px;"
+                f"  padding: 8px;"
+                f"}}"
+                f"QCheckBox {{ color: {t['text']}; padding: 3px 0; }}"
+                f"QCheckBox::indicator {{ width: 16px; height: 16px; }}"
+                f"QCheckBox:disabled {{ color: {t['muted']}; }}"
+            )
+            dropdown.setWindowFlags(Qt.Popup | Qt.FramelessWindowHint)
+            dropdown.setAttribute(Qt.WA_DeleteOnClose)
+
+            dl = QVBoxLayout(dropdown)
+            dl.setContentsMargins(10, 8, 10, 8)
+            dl.setSpacing(2)
+
+            hdr = QLabel("Select ports for this VLAN:")
+            hdr.setStyleSheet(f"color: {t['accent']}; font-weight: 600; font-size: 11px; padding-bottom: 4px;")
+            dl.addWidget(hdr)
+
+            # Gather ports used by other VLAN rows
             already_used = set()
             for j, (_, _, pe) in enumerate(self.vlan_row_entries):
                 if j != row_idx:
                     for p in pe.text().replace(",", " ").split():
-                        already_used.add(p.strip())
-            current = set(pe.text().replace(",", " ").split()) if row_idx < len(self.vlan_row_entries) else set()
+                        if p.strip():
+                            already_used.add(p.strip())
+
+            current = set()
+            if row_idx < len(self.vlan_row_entries):
+                for p in ports_edit.text().replace(",", " ").split():
+                    if p.strip():
+                        current.add(p.strip())
+
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setStyleSheet("background: transparent; border: none;")
+            scroll_widget = QWidget()
+            scroll_layout = QVBoxLayout(scroll_widget)
+            scroll_layout.setContentsMargins(0, 0, 0, 0)
+            scroll_layout.setSpacing(1)
+
             check_vars = {}
+            pc_tags = {}
+            for link in self.connected_links:
+                rrole = link.get("remote_role", "").lower()
+                rname = link.get("remote_device", "")
+                if "pc" in rrole or "vpcs" in rrole or "pc" in rname.lower():
+                    pc_tags[link.get("local_interface", "")] = rname
+
             for iface in self.known_interfaces:
                 cb = QCheckBox(iface)
                 cb.setChecked(iface in current)
-                if iface in already_used and iface not in current:
+
+                tag = pc_tags.get(iface)
+
+                if iface in uplink_ports:
                     cb.setEnabled(False)
-                    cb.setText(iface + "  (used)")
+                    cb.setChecked(False)
+                    cb.setText(f"{iface}  (uplink)")
+                elif iface in already_used and iface not in current:
+                    cb.setEnabled(False)
+                    cb.setText(f"{iface}  (used)")
+                elif tag:
+                    cb.setText(f"{iface}  (PC: {tag})")
+
                 check_vars[iface] = cb
-                pl.addWidget(cb)
+                scroll_layout.addWidget(cb)
+
+            scroll_layout.addStretch()
+            scroll.setWidget(scroll_widget)
+            scroll.setMinimumHeight(min(len(self.known_interfaces) * 28, 220))
+            scroll.setMaximumHeight(280)
+            dl.addWidget(scroll, 1)
+
+            # Bottom bar with Apply button
+            bar = QWidget()
+            bar_layout = QHBoxLayout(bar)
+            bar_layout.setContentsMargins(0, 6, 0, 0)
+            bar_layout.setSpacing(8)
+
+            count_lbl = QLabel("0 selected")
+            count_lbl.setStyleSheet(f"color: {t['muted']}; font-size: 10px;")
+            bar_layout.addWidget(count_lbl)
+            bar_layout.addStretch()
+
+            def _update_count():
+                n = sum(1 for v in check_vars.values() if v.isChecked())
+                count_lbl.setText(f"{n} selected")
+
+            for cb in check_vars.values():
+                cb.toggled.connect(lambda _: _update_count())
+            _update_count()
+
+            apply_btn = QPushButton("Apply")
+            apply_btn.setFixedWidth(80)
+            apply_btn.setStyleSheet(
+                f"background-color: {t['accent']}; color: white; border-radius: 6px; padding: 5px 10px;"
+            )
 
             def _apply():
                 selected = [iface for iface, v in check_vars.items() if v.isChecked()]
-                ports_edit.setText(",".join(selected) if selected else "auto")
+                ports_edit.setText(",".join(selected) if selected else "")
                 btn.setText(_btn_label(ports_edit.text()))
-                popup.accept()
-            apply_btn = QPushButton("Apply")
+                dropdown.close()
+
             apply_btn.clicked.connect(_apply)
-            pl.addWidget(apply_btn)
-            popup.exec()
+            bar_layout.addWidget(apply_btn)
+            dl.addWidget(bar)
+
+            # Position the dropdown below the button
+            dropdown.setMinimumWidth(max(280, btn.width()))
+            dropdown.adjustSize()
+            global_pos = btn.mapToGlobal(btn.rect().bottomLeft())
+            dropdown.move(global_pos)
+            dropdown.show()
 
         def rebuild():
             while self.vlan_rows_layout.count():
@@ -1168,10 +1280,16 @@ class GuidedSetupWizard(QDialog):
                 rfl.addWidget(id_edit)
                 rfl.addWidget(name_edit)
                 if has_picker:
+                    ports_edit.setVisible(False)
                     btn = QPushButton(_btn_label(vport))
-                    btn.setStyleSheet(f"background-color: {t['sidebar']}; color: {t['text']};")
+                    btn.setStyleSheet(
+                        f"background-color: {t['sidebar']}; color: {t['text']}; "
+                        f"border: 1px solid {t['border']}; border-radius: 6px; "
+                        f"padding: 6px 12px; text-align: left;"
+                    )
+                    btn.setCursor(Qt.PointingHandCursor)
                     btn.clicked.connect(lambda c, pe=ports_edit, b=btn, idx=i: _open_port_picker(pe, b, idx))
-                    rfl.addWidget(btn)
+                    rfl.addWidget(btn, 1)
                 else:
                     rfl.addWidget(ports_edit)
                 
