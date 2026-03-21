@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QMessageBox, QInputDialog, QFileDialog, QDialog, QDialogButtonBox,
     QTableWidget, QTableWidgetItem, QHeaderView, QMenu, QMenuBar,
     QSizePolicy, QAbstractItemView, QStackedWidget, QToolTip,
+    QGraphicsDropShadowEffect,
 )
 from PySide6.QtCore import (
     Qt, QTimer, QSize, Signal, QMetaObject, Q_ARG, QThread, QEvent, QPoint,
@@ -115,6 +116,7 @@ from ..config import DB_PATH, GNS3_DEFAULT_URL, CONFIG_FILE, conn, cur, db_lock,
 from ..models import DeviceModel, RouterModel, SwitchModel, CoreSwitchModel
 from ..network import Sender, GNS3Connector
 from .utils import apply_responsive_geometry, enable_global_dark_dialogs
+from .outlined_label import OutlinedLabel
 
 try:
     import requests
@@ -642,8 +644,8 @@ class App(QMainWindow):
         if os.path.exists(_logo_path):
             self._logo_pixmap = QPixmap(_logo_path)
 
-        # Load Montserrat fonts so 'Montserrat' is available as a QFont family
-        for _font_file in ("Montserrat-ExtraBold.ttf", "Montserrat-Regular.ttf"):
+        # Load Montserrat/Orbitron/Michroma fonts so they are available as QFont families
+        for _font_file in ("Michroma-Regular.ttf", "Orbitron-Bold.ttf", "Montserrat-ExtraBold.ttf", "Montserrat-Regular.ttf"):
             _fp = _gui_path(_font_file)
             if os.path.exists(_fp):
                 QFontDatabase.addApplicationFont(_fp)
@@ -1235,12 +1237,12 @@ class App(QMainWindow):
         header_row.setSpacing(14)
         header_row.setAlignment(Qt.AlignVCenter)
 
-        # Logo — logo.png scaled to 60px height, aspect-ratio preserved
+        # Logo — logo_cropped.png scaled to 76px height, aspect-ratio preserved
         logo_lbl = QLabel()
         logo_lbl.setAttribute(Qt.WA_TranslucentBackground)
         logo_lbl.setStyleSheet("background: transparent;")
         logo_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
-        _LOGO_H = 60
+        _LOGO_H = 58
         if not self._logo_pixmap.isNull():
             logo_lbl.setPixmap(self._logo_pixmap.scaledToHeight(
                 _LOGO_H, Qt.SmoothTransformation))
@@ -1259,24 +1261,18 @@ class App(QMainWindow):
         text_col.setContentsMargins(0, 0, 0, 0)
         text_col.setAlignment(Qt.AlignVCenter)
 
-        lbl_title = QLabel("ANCS")
+        lbl_title = OutlinedLabel("ANCS", stroke_width=2)
         lbl_title.setAttribute(Qt.WA_TranslucentBackground)
-        lbl_title.setStyleSheet("background: transparent; color: #FFFFFF;")
-        title_font = QFont("Montserrat", 26)
-        title_font.setWeight(QFont.Weight.ExtraBold)
-        title_font.setLetterSpacing(QFont.AbsoluteSpacing, 2)
-        lbl_title.setFont(title_font)
+        # Using 28pt Michroma with 3px letter spacing tightly equalizes to 8pt subtitle 
+        lbl_title.setStyleSheet("background: transparent; color: #FFFFFF; font-family: 'Michroma'; font-size: 28pt; letter-spacing: 3px;")
         text_col.addWidget(lbl_title)
 
         lbl_sub = QLabel("Auto Network Configuration System")
         lbl_sub.setAttribute(Qt.WA_TranslucentBackground)
-        lbl_sub.setStyleSheet("background: transparent; color: #9AAABB;")
-        sub_font = QFont("Montserrat", 10)
-        sub_font.setWeight(QFont.Weight.Normal)
-        sub_font.setLetterSpacing(QFont.AbsoluteSpacing, 0.5)
-        lbl_sub.setFont(sub_font)
+        lbl_sub.setStyleSheet("background: transparent; color: #9AAABB; font-family: 'Montserrat'; font-size: 8pt; letter-spacing: 0px;")
         text_col.addWidget(lbl_sub)
 
+        header_row.addLayout(text_col)
         top_layout.addWidget(header_widget, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
 
         # Nav tabs container
