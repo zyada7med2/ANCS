@@ -7,7 +7,7 @@ from ctypes import wintypes
 from typing import Optional
 
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
     QLabel, QPushButton, QFrame, QLineEdit, QPlainTextEdit, QComboBox,
     QCheckBox, QListWidget, QListWidgetItem, QScrollArea, QSplitter,
     QMessageBox, QInputDialog, QFileDialog, QDialog, QDialogButtonBox,
@@ -1223,7 +1223,7 @@ class App(QMainWindow):
         top = QFrame()
         top.setProperty("topBar", True)
         top.setFixedHeight(88)
-        top_layout = QHBoxLayout(top)
+        top_layout = QGridLayout(top)
         top_layout.setContentsMargins(14, 0, 14, 0)
 
         # ── Header: logo + title/subtitle ──────────────────────────────
@@ -1277,12 +1277,14 @@ class App(QMainWindow):
         lbl_sub.setFont(sub_font)
         text_col.addWidget(lbl_sub)
 
-        header_row.addLayout(text_col)
-        top_layout.addWidget(header_widget)
+        top_layout.addWidget(header_widget, 0, 0, Qt.AlignLeft | Qt.AlignVCenter)
 
-        top_layout.addStretch()
-
-        # Nav tabs
+        # Nav tabs container
+        nav_container = QWidget()
+        nav_layout = QHBoxLayout(nav_container)
+        nav_layout.setContentsMargins(0, 0, 0, 0)
+        nav_layout.setSpacing(10)
+        
         self.btn_main_nav = QPushButton("Main")
         self.btn_main_nav.setProperty("navTab", "active")
         self.btn_main_nav.clicked.connect(lambda: self._switch_tab("main"))
@@ -1291,9 +1293,15 @@ class App(QMainWindow):
         self.btn_logs_nav.setProperty("navTab", "inactive")
         self.btn_logs_nav.clicked.connect(lambda: self._switch_tab("logs"))
 
-        top_layout.addWidget(self.btn_main_nav)
-        top_layout.addWidget(self.btn_logs_nav)
-        top_layout.addStretch()
+        nav_layout.addWidget(self.btn_main_nav)
+        nav_layout.addWidget(self.btn_logs_nav)
+        
+        top_layout.addWidget(nav_container, 0, 1, Qt.AlignCenter)
+        
+        # Balance the grid forces so column 1 is exactly geometric center
+        top_layout.setColumnStretch(0, 1)
+        top_layout.setColumnStretch(1, 0)
+        top_layout.setColumnStretch(2, 1)
 
         root_layout.addWidget(top)
 
