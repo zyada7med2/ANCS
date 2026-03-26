@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont, QTextCharFormat, QColor
 from .utils import apply_responsive_geometry
+from ..network.sender import Sender
 
 try:
     import telnetlib3
@@ -220,6 +221,13 @@ class TerminalPanel(QDialog):
 
         await asyncio.sleep(0.5)
         banner = await read_burst(2.0)
+
+        async def read_avail(timeout_sec=1.5):
+            return await read_burst(timeout_sec)
+
+        banner = await Sender._telnet_wake_gns3_console(
+            writer, read_avail, lambda m: self._resp_queue.put(("output", f"{m}\n")), banner
+        )
         if banner.strip():
             self._resp_queue.put(("output", banner))
         writer.write("terminal length 0\r\n")

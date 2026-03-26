@@ -78,7 +78,11 @@ class ActionConfirmDialog(QDialog):
             QPushButton:hover {{ background-color: {hover_color}; }}
         """)
         btn_action.clicked.connect(self.accept)
-        
+        btn_cancel.setAutoDefault(False)
+        btn_cancel.setDefault(False)
+        btn_action.setDefault(True)
+        btn_action.setAutoDefault(True)
+
         btn_layout.addWidget(btn_cancel)
         btn_layout.addSpacing(12)
         btn_layout.addWidget(btn_action)
@@ -944,6 +948,13 @@ class App(QMainWindow):
         btns = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
+        _ok = btns.button(QDialogButtonBox.StandardButton.Ok)
+        if _ok:
+            _ok.setDefault(True)
+            _ok.setAutoDefault(True)
+        _cancel = btns.button(QDialogButtonBox.StandardButton.Cancel)
+        if _cancel:
+            _cancel.setAutoDefault(False)
         layout.addWidget(btns)
         if dlg.exec() == QDialog.DialogCode.Accepted:
             return lst.currentRow(), True
@@ -1203,16 +1214,25 @@ class App(QMainWindow):
             btn_min = QPushButton("—")
             btn_min.setProperty("titleControl", True)
             btn_min.clicked.connect(self._animated_minimize)
+            btn_min.setAutoDefault(False)
+            btn_min.setDefault(False)
+            btn_min.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             tb_layout.addWidget(btn_min)
 
             self._btn_title_max = QPushButton("□")
             self._btn_title_max.setProperty("titleControl", True)
             self._btn_title_max.clicked.connect(self._toggle_max_restore)
+            self._btn_title_max.setAutoDefault(False)
+            self._btn_title_max.setDefault(False)
+            self._btn_title_max.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             tb_layout.addWidget(self._btn_title_max)
 
             btn_close = QPushButton("✕")
             btn_close.setProperty("titleControlClose", True)
             btn_close.clicked.connect(self._animated_close)
+            btn_close.setAutoDefault(False)
+            btn_close.setDefault(False)
+            btn_close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             tb_layout.addWidget(btn_close)
 
             self._title_drag_widgets = (title_bar, title_lbl)
@@ -1778,6 +1798,17 @@ class App(QMainWindow):
         enable_row.addWidget(self.enable_checkbox)
         right_layout.addLayout(enable_row)
 
+        for _le in (
+            self.ent_serial_port,
+            self.ent_serial_baud,
+            self.ent_host,
+            self.ent_port,
+            self.ent_user,
+            self.ent_pass,
+            self.ent_enable,
+        ):
+            _le.returnPressed.connect(self._on_connection_field_return)
+
         self.btn_send = QPushButton("Send")
         self.btn_send.setStyleSheet("""
             QPushButton {
@@ -1793,7 +1824,34 @@ class App(QMainWindow):
         self.btn_send.setFixedHeight(42)
         self._apply_icon(self.btn_send, "router.svg")
         self.btn_send.clicked.connect(self.send_now)
-        right_layout.addWidget(self.btn_send)
+        
+        # New Premium AI Sparkle Button 
+        send_row = QHBoxLayout()
+        send_row.setSpacing(10)
+        self.btn_ai = QPushButton("")
+        self._apply_icon(self.btn_ai, "ai_sparkle.svg")
+        self.btn_ai.setToolTip("AI Troubleshoot")
+        self.btn_ai.setFixedSize(42, 42)
+        self.btn_ai.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 #18112C, stop: 1 #2E1668);
+                border: 1px solid #5a3a91;
+                border-radius: 21px;
+            }
+            QPushButton:hover { 
+                background: qlineargradient(x1: 0, y1: 0, x2: 1, y2: 1, stop: 0 #2a145e, stop: 1 #4A24A6); 
+                border: 1px solid #a371f7;
+            }
+            QPushButton:pressed {
+                background: #18112C;
+                border: 1px solid #4A24A6;
+            }
+        """)
+        self.btn_ai.clicked.connect(self.invoke_ai_agent)
+        
+        send_row.addWidget(self.btn_send, 1)
+        send_row.addWidget(self.btn_ai, 0)
+        right_layout.addLayout(send_row)
 
         btn_save_creds = QPushButton("Save Credentials")
         btn_save_creds.setStyleSheet("""
@@ -2328,6 +2386,548 @@ class App(QMainWindow):
 
     # ── Send / Deploy ───────────────────────────────────────────────────
 
+    def _resolve_copilot_connection(self, preferred_name: Optional[str] = None) -> dict:
+        """
+        Resolve console host/port/credentials for Copilot from DB + device metadata.
+        Returns: device_name, host, port, user, password, enable_password, protocol
+        """
+        out = {
+            "device_name": None,
+            "host": "",
+            "port": 23,
+            "user": "",
+            "password": "",
+            "enable_password": "",
+            "protocol": "telnet",
+        }
+        cfg = {}
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+
+        candidates: list[str] = []
+        if preferred_name and str(preferred_name).strip():
+            candidates.append(str(preferred_name).strip())
+        last = cfg.get("last_copilot_device")
+        if last and last not in candidates:
+            candidates.append(last)
+        if self.current_device and self.current_device[0] not in candidates:
+            candidates.append(self.current_device[0])
+        for n, _, _ in self.devices:
+            if n not in candidates:
+                candidates.append(n)
+        if not candidates:
+            try:
+                with db_lock:
+                    cur.execute("SELECT name FROM devices ORDER BY name")
+                    for (n,) in cur.fetchall():
+                        if n and n not in candidates:
+                            candidates.append(n)
+            except Exception:
+                pass
+
+        def _meta_for(name: str) -> dict:
+            for n, _, meta in self.devices:
+                if n == name:
+                    return meta or {}
+            return {}
+
+        for name in candidates:
+            meta = _meta_for(name)
+            dip, dport = "", ""
+            crow = None
+            try:
+                with db_lock:
+                    cur.execute(
+                        "SELECT ip, port FROM devices WHERE name=?",
+                        (name,),
+                    )
+                    row = cur.fetchone()
+                    if row:
+                        dip = (row[0] or "").strip()
+                        dport = str(row[1] or "").strip()
+                    cur.execute(
+                        "SELECT host, port, username, password, enable_password, protocol "
+                        "FROM credentials WHERE device_name=?",
+                        (name,),
+                    )
+                    crow = cur.fetchone()
+            except Exception:
+                crow = None
+
+            host = ""
+            port_str = ""
+            user = ""
+            pw = ""
+            enable = ""
+            protocol = "telnet"
+
+            if crow:
+                ch, cp, cu, cpw, ce, cprot = crow
+                host = (ch or "").strip()
+                port_str = str(cp or "").strip()
+                user = (cu or "").strip()
+                pw = _deobfuscate(cpw or "")
+                enable = _deobfuscate(ce or "")
+                if cprot and str(cprot).lower() in ("telnet", "ssh", "serial"):
+                    protocol = str(cprot).lower()
+
+            if meta.get("gns3_node"):
+                if not host:
+                    host = (meta.get("console_host") or "").strip()
+                if not port_str:
+                    port_str = str(meta.get("console_port") or "").strip()
+
+            if not host and dip:
+                host = dip
+            if not port_str and dport:
+                port_str = dport
+
+            if not host:
+                continue
+
+            try:
+                port_int = int(port_str) if str(port_str).isdigit() else 23
+            except Exception:
+                port_int = 23
+
+            out["device_name"] = name
+            out["host"] = host
+            out["port"] = port_int
+            out["user"] = user
+            out["password"] = pw
+            out["enable_password"] = enable
+            out["protocol"] = protocol
+            return out
+
+        return out
+
+    def _copilot_workspace_resolved(self) -> list[dict]:
+        """Resolved connection dicts for every workspace device that has a host."""
+        found: list[dict] = []
+        seen = set()
+        for n, _, _ in self.devices:
+            if n in seen:
+                continue
+            seen.add(n)
+            r = self._resolve_copilot_connection(n)
+            if r.get("host"):
+                found.append(dict(r))
+        return found
+
+    def invoke_ai_agent(self):
+        """Triggered by the AI ✨ button — opens the Copilot interactive chat dialog."""
+        import json, markdown
+        from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+                                        QLineEdit, QPushButton, QTextBrowser, QMessageBox,
+                                        QTabWidget, QWidget, QScrollArea, QFrame)
+        from PySide6.QtCore import Qt, QTimer
+        from network_manager.ai_agent import CopilotWorker
+        from network_manager.config import CONFIG_FILE, GNS3_DEFAULT_URL
+
+        # ── Load API key ─────────────────────────────────────────────────
+        cfg = {}
+        try:
+            with open(CONFIG_FILE, "r") as f:
+                cfg = json.load(f)
+        except Exception:
+            pass
+        saved_key = cfg.get("gemini_api_key", "")
+
+        # ── Build Copilot Chat Dialog ────────────────────────────────────
+        dlg = QDialog(self)
+        dlg.setWindowTitle("ANCS Copilot — AI Agent")
+        dlg.resize(920, 700)
+        dlg.setStyleSheet(self._dialog_style())
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(8)
+        layout.setContentsMargins(14, 14, 14, 14)
+
+        # ── Header row ───────────────────────────────────────────────────
+        header_row = QHBoxLayout()
+        title = QLabel("✨ ANCS Copilot")
+        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #a371f7;")
+        header_row.addWidget(title)
+
+        status_lbl = QLabel("● Offline")
+        status_lbl.setStyleSheet("color: #8b949e; font-size: 12px;")
+        header_row.addWidget(status_lbl)
+        header_row.addStretch()
+
+        btn_config = QPushButton("⚙️")
+        btn_config.setToolTip("Configure API Key")
+        btn_config.setFixedSize(36, 36)
+        btn_config.setStyleSheet("""
+            QPushButton { background: transparent; border: 1px solid #30363D;
+                border-radius: 18px; font-size: 18px; }
+            QPushButton:hover { background: #21262D; border-color: #a371f7; }
+        """)
+        btn_config.setAutoDefault(False)
+        btn_config.setDefault(False)
+        btn_config.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        header_row.addWidget(btn_config)
+        layout.addLayout(header_row)
+
+        # ── Device scope (resolved from DB / GNS3 — no manual host required) ──
+        scope_row = QHBoxLayout()
+        scope_row.addWidget(QLabel("Console focus:"))
+        combo_devices = QComboBox()
+        combo_devices.setMinimumWidth(220)
+        combo_devices.setStyleSheet("""
+            QComboBox { background-color: #161B22; color: #e6edf3; border: 1px solid #30363D;
+                border-radius: 6px; padding: 6px 10px; font-size: 13px; }
+            QComboBox:focus { border-color: #a371f7; }
+        """)
+        lbl_console = QLabel("")
+        lbl_console.setStyleSheet("color: #8b949e; font-size: 12px;")
+        lbl_console.setWordWrap(True)
+        chk_raw_deploy = QCheckBox("Allow raw config deploy (not from ANCS generator/saved config)")
+        chk_raw_deploy.setStyleSheet("color: #8b949e; font-size: 12px;")
+        chk_raw_deploy.setChecked(bool(cfg.get("agent_allow_raw_deploy", False)))
+        scope_row.addWidget(combo_devices)
+        scope_row.addWidget(lbl_console, 1)
+        layout.addLayout(scope_row)
+        layout.addWidget(chk_raw_deploy)
+
+        if self.devices:
+            for n, _, _ in self.devices:
+                combo_devices.addItem(n)
+            pick = None
+            if self.current_device:
+                pick = self.current_device[0]
+            elif cfg.get("last_copilot_device"):
+                pick = cfg.get("last_copilot_device")
+            if pick:
+                idx = combo_devices.findText(pick)
+                if idx >= 0:
+                    combo_devices.setCurrentIndex(idx)
+        else:
+            combo_devices.addItem("(no devices in workspace)")
+
+        def _refresh_console_label():
+            txt = combo_devices.currentText()
+            if not txt or txt.startswith("("):
+                r = self._resolve_copilot_connection(None)
+            else:
+                r = self._resolve_copilot_connection(txt)
+            if r.get("host"):
+                lbl_console.setText(
+                    f"Console: {r['host']}:{r['port']} · {r.get('protocol', 'telnet')}"
+                )
+            else:
+                lbl_console.setText("Console: — (no host; GNS3 and database tools still work)")
+
+        def _persist_copilot_device_pref():
+            t = combo_devices.currentText()
+            if t and not t.startswith("("):
+                cfg["last_copilot_device"] = t
+                try:
+                    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                        json.dump(cfg, f, indent=2)
+                except Exception:
+                    pass
+
+        def _on_combo_changed(_idx=None):
+            _refresh_console_label()
+            _persist_copilot_device_pref()
+
+        combo_devices.currentIndexChanged.connect(_on_combo_changed)
+        _refresh_console_label()
+
+        # Hidden API key row
+        key_widget = QWidget()
+        key_layout = QHBoxLayout(key_widget)
+        key_layout.setContentsMargins(0, 0, 0, 0)
+        key_label = QLabel("API Key:")
+        key_label.setStyleSheet("color: #8b949e; font-size: 12px;")
+        key_input = QLineEdit(saved_key)
+        key_input.setEchoMode(QLineEdit.Password)
+        key_input.setPlaceholderText("Paste your Google AI Studio API key")
+        key_input.setStyleSheet("""
+            QLineEdit { background-color: #161B22; border: 1px solid #30363D;
+                border-radius: 6px; color: #C9D1D9; padding: 5px 8px; font-size: 12px; }
+            QLineEdit:focus { border-color: #a371f7; }
+        """)
+        key_layout.addWidget(key_label)
+        key_layout.addWidget(key_input, 1)
+        key_widget.setVisible(not bool(saved_key))
+        layout.addWidget(key_widget)
+        btn_config.clicked.connect(lambda: key_widget.setVisible(not key_widget.isVisible()))
+
+        # ── Tab Widget: Chat | Execution Logs ────────────────────────────
+        tabs = QTabWidget()
+        tabs.setStyleSheet("""
+            QTabWidget::pane { border: 1px solid #21262D; border-radius: 8px; background: #0D1117; }
+            QTabBar::tab { background: #161B22; color: #8b949e; padding: 8px 20px;
+                border: 1px solid #21262D; border-bottom: none; border-top-left-radius: 8px;
+                border-top-right-radius: 8px; font-size: 13px; margin-right: 2px; }
+            QTabBar::tab:selected { background: #0D1117; color: #e6edf3; font-weight: bold;
+                border-bottom: 2px solid #a371f7; }
+            QTabBar::tab:hover { color: #C9D1D9; }
+        """)
+
+        # Tab 1: Chat conversation (Markdown rendered)
+        chat_browser = QTextBrowser()
+        chat_browser.setOpenExternalLinks(False)
+        chat_browser.setStyleSheet("""
+            QTextBrowser { background-color: #0D1117; border: none; color: #e6edf3;
+                font-family: 'Segoe UI', 'Inter', sans-serif; font-size: 13px; padding: 14px; }
+        """)
+        chat_browser.setHtml("<p style='color:#8b949e'>Connecting to AI agent...</p>")
+        tabs.addTab(chat_browser, "💬  Chat")
+
+        # Tab 2: Execution Logs
+        logs_browser = QTextBrowser()
+        logs_browser.setOpenExternalLinks(False)
+        logs_browser.setStyleSheet("""
+            QTextBrowser { background-color: #0D1117; border: none; color: #C9D1D9;
+                font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 12px; padding: 10px; }
+        """)
+        logs_browser.setHtml("<span style='color:#8b949e'>Tool execution logs will stream here...</span>")
+        tabs.addTab(logs_browser, "🖥️  Execution Logs")
+
+        layout.addWidget(tabs, 1)
+
+        # ── Thinking indicator ───────────────────────────────────────────
+        thinking_row = QHBoxLayout()
+        thinking_label = QLabel("")
+        thinking_label.setStyleSheet("color: #a371f7; font-size: 13px; font-weight: bold;")
+        thinking_row.addWidget(thinking_label)
+        thinking_row.addStretch()
+        layout.addLayout(thinking_row)
+
+        _dots = {"count": 0, "timer": None}
+        def _animate_dots():
+            _dots["count"] = (_dots["count"] % 4) + 1
+            thinking_label.setText(f"⏳ Copilot is thinking{'.' * _dots['count']}")
+
+        def start_thinking():
+            _dots["timer"] = QTimer(dlg)
+            _dots["timer"].timeout.connect(_animate_dots)
+            _dots["timer"].start(400)
+
+        def stop_thinking():
+            if _dots["timer"]:
+                _dots["timer"].stop()
+            thinking_label.setText("")
+
+        # ── Chat input row ───────────────────────────────────────────────
+        input_row = QHBoxLayout()
+        chat_input = QLineEdit()
+        chat_input.setPlaceholderText("Ask the Copilot anything...")
+        chat_input.setFixedHeight(42)
+        chat_input.setStyleSheet("""
+            QLineEdit {
+                background-color: #161B22; border: 1px solid #30363D;
+                border-radius: 8px; color: #e6edf3; padding: 0 14px;
+                font-size: 14px;
+            }
+            QLineEdit:focus { border-color: #a371f7; }
+        """)
+        chat_input.setEnabled(False)  # Disabled until agent is ready
+
+        btn_send = QPushButton("Send")
+        btn_send.setFixedSize(90, 42)
+        btn_send.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #2a145e, stop:1 #4A24A6);
+                border: 1px solid #5a3a91; border-radius: 8px; color: #FFFFFF;
+                font-size: 14px; font-weight: bold;
+            }
+            QPushButton:hover { border-color: #a371f7; }
+            QPushButton:disabled { background: #21262D; color: #484F58; border-color: #30363D; }
+        """)
+
+        btn_close = QPushButton("Close")
+        btn_close.setFixedSize(70, 42)
+        btn_close.setStyleSheet("""
+            QPushButton { background-color: #21262D; border: 1px solid #30363D;
+                border-radius: 8px; color: #C9D1D9; font-size: 14px; }
+            QPushButton:hover { background-color: #30363D; border-color: #8B949E; }
+        """)
+        btn_close.clicked.connect(dlg.accept)
+        btn_close.setAutoDefault(False)
+        btn_close.setDefault(False)
+        btn_close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        def _copilot_set_send_enabled(en: bool):
+            btn_send.setEnabled(en)
+            btn_send.setDefault(en)
+            btn_send.setAutoDefault(en)
+
+        input_row.addWidget(chat_input, 1)
+        input_row.addWidget(btn_send)
+        input_row.addWidget(btn_close)
+        layout.addLayout(input_row)
+        _copilot_set_send_enabled(False)
+
+        # ── Markdown CSS ─────────────────────────────────────────────────
+        md_css = """
+        <style>
+            body { color: #e6edf3; font-family: 'Segoe UI', sans-serif; }
+            h1, h2, h3 { color: #a371f7; margin-top: 12px; }
+            strong, b { color: #58a6ff; }
+            code { background: #161B22; color: #79c0ff; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
+            pre { background: #161B22; padding: 10px; border-radius: 6px; overflow-x: auto; }
+            pre code { background: none; padding: 0; }
+            ul, ol { padding-left: 20px; }
+            li { margin-bottom: 4px; }
+            hr { border: 1px solid #21262D; }
+            p { line-height: 1.6; }
+            table { border-collapse: collapse; width: 100%; margin: 8px 0; }
+            th, td { border: 1px solid #30363D; padding: 6px 12px; text-align: left; }
+            th { background: #161B22; color: #a371f7; }
+            .user-msg { background: #1a1f3a; border-left: 3px solid #58a6ff; padding: 8px 14px; border-radius: 6px; margin: 8px 0; }
+            .ai-msg { padding: 8px 0; margin: 8px 0; }
+        </style>
+        """
+
+        # ── Chat history for rendering ───────────────────────────────────
+        chat_html_parts = [md_css]
+
+        def render_chat():
+            chat_browser.setHtml("".join(chat_html_parts))
+            chat_browser.verticalScrollBar().setValue(chat_browser.verticalScrollBar().maximum())
+
+        def add_user_message(text: str):
+            chat_html_parts.append(
+                f"<div class='user-msg'><b style='color: #58a6ff'>You:</b> "
+                f"<span style='color: #e6edf3'>{text}</span></div>"
+            )
+            render_chat()
+
+        def add_ai_message(text: str):
+            rendered = markdown.markdown(text, extensions=["fenced_code", "tables"])
+            chat_html_parts.append(f"<div class='ai-msg'>{rendered}</div><hr>")
+            render_chat()
+
+        # ── Worker lifecycle ─────────────────────────────────────────────
+        self._copilot_worker = None
+        _waiting_for_reply = {"flag": False}
+
+        def on_terminal_log(html_text: str):
+            logs_browser.append(html_text)
+            logs_browser.verticalScrollBar().setValue(logs_browser.verticalScrollBar().maximum())
+
+        def on_chat_response(text: str):
+            stop_thinking()
+            add_ai_message(text)
+            tabs.setCurrentIndex(0)  # Focus on chat
+            chat_input.setEnabled(True)
+            _copilot_set_send_enabled(True)
+            chat_input.setFocus()
+            _waiting_for_reply["flag"] = False
+
+        def on_finished(summary: str, success: bool):
+            stop_thinking()
+            status_lbl.setText("● Disconnected")
+            status_lbl.setStyleSheet("color: #f85149; font-size: 12px;")
+            if not success:
+                add_ai_message(f"**Error:** {summary}")
+            chat_input.setEnabled(False)
+            _copilot_set_send_enabled(False)
+
+        def on_ready():
+            status_lbl.setText("● Online")
+            status_lbl.setStyleSheet("color: #3fb950; font-size: 12px;")
+            chat_input.setEnabled(True)
+            _copilot_set_send_enabled(True)
+            chat_input.setFocus()
+
+        def send_message():
+            msg = chat_input.text().strip()
+            if not msg or _waiting_for_reply["flag"]:
+                return
+            add_user_message(msg)
+            chat_input.clear()
+            _waiting_for_reply["flag"] = True
+            chat_input.setEnabled(False)
+            _copilot_set_send_enabled(False)
+            start_thinking()
+            if self._copilot_worker:
+                self._copilot_worker.queue_message(msg)
+
+        btn_send.clicked.connect(send_message)
+        chat_input.returnPressed.connect(send_message)
+
+        # ── Start the agent immediately ──────────────────────────────────
+        def launch_agent():
+            api_key = key_input.text().strip()
+            if not api_key:
+                key_widget.setVisible(True)
+                QMessageBox.warning(dlg, "Missing Key", "Please enter your Google AI Studio API key, then reopen Copilot.")
+                return
+
+            # Save key + agent preferences
+            cfg["gemini_api_key"] = api_key
+            cfg["agent_allow_raw_deploy"] = chk_raw_deploy.isChecked()
+            try:
+                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                    json.dump(cfg, f, indent=2)
+            except Exception:
+                pass
+
+            dtxt = combo_devices.currentText().strip()
+            preferred = None if (not dtxt or dtxt.startswith("(")) else dtxt
+            resolved = self._resolve_copilot_connection(preferred)
+            if resolved.get("device_name"):
+                cfg["last_copilot_device"] = resolved["device_name"]
+                try:
+                    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+                        json.dump(cfg, f, indent=2)
+                except Exception:
+                    pass
+
+            host = resolved.get("host") or ""
+            port = int(resolved.get("port") or 23)
+            user = resolved.get("user") or ""
+            pw = resolved.get("password") or ""
+            enable = resolved.get("enable_password") or ""
+
+            # GNS3 URL
+            gns3_url = getattr(self, '_gns3_url', GNS3_DEFAULT_URL) or GNS3_DEFAULT_URL
+            gns3_project_id = getattr(self, "gns3_project_id", None) or ""
+
+            workspace_resolved = self._copilot_workspace_resolved()
+
+            start_thinking()
+            self._copilot_worker = CopilotWorker(
+                api_key=api_key,
+                gns3_url=gns3_url,
+                host=host,
+                port=port,
+                user=user,
+                pw=pw,
+                enable_pw=enable,
+                device_name=resolved.get("device_name") or "",
+                allow_raw_deploy=chk_raw_deploy.isChecked(),
+                workspace_resolved=workspace_resolved,
+                gns3_project_id=str(gns3_project_id) if gns3_project_id else "",
+            )
+            self._copilot_worker.terminal_log_signal.connect(on_terminal_log)
+            self._copilot_worker.chat_response_signal.connect(on_chat_response)
+            self._copilot_worker.finished_signal.connect(on_finished)
+            self._copilot_worker.ready_signal.connect(on_ready)
+            self._copilot_worker.start()
+
+        # Cleanup on close
+        def on_close():
+            if self._copilot_worker:
+                self._copilot_worker.stop()
+                self._copilot_worker.wait(2000)
+                self._copilot_worker = None
+        dlg.finished.connect(lambda _: on_close())
+
+        # Auto-launch if we have an API key
+        if saved_key:
+            QTimer.singleShot(300, launch_agent)
+        else:
+            chat_browser.setHtml("<p style='color:#d29922'>Please configure your API key using the ⚙️ button, then reopen Copilot.</p>")
+
+        dlg.exec()
+
     def _set_send_busy(self, busy: bool):
         self._send_in_progress = busy
         try:
@@ -2339,6 +2939,12 @@ class App(QMainWindow):
             self._set_status_message("Sending configuration..." if busy else "Ready", 0 if busy else 2500)
         except Exception:
             pass
+
+    def _on_connection_field_return(self):
+        if self._send_in_progress:
+            return
+        if self.btn_send.isEnabled():
+            self.send_now()
 
     def send_now(self):
         dlg = ActionConfirmDialog(self, "Send Configuration",

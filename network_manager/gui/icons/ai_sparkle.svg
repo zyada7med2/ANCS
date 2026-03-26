@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#D3B8FF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <!-- Large main star -->
+  <path d="M12 2 c-1 7-4 10-10 10 6 1 9 4 10 10 1-7 4-10 10-10-6-1-9-4-10-10z"/>
+  <!-- Small top right star -->
+  <path d="M19 4 c-.3 2.5-1.5 3.5-4 4 2.5.3 3.5 1.5 4 4 .3-2.5 1.5-3.5 4-4-2.5-.3-3.5-1.5-4-4z"/>
+</svg>

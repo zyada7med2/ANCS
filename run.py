@@ -41,7 +41,7 @@ if __name__ == "__main__":
     _maybe_reexec_in_venv(current_dir)
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
-    
+
     from network_manager.main import main
     main()
 

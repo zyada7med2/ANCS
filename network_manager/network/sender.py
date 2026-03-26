@@ -92,6 +92,9 @@ class Sender:
             log_fn(f"[serial] opening {port} @ {baud}")
             ser = serial.Serial(port=port, baudrate=baud, timeout=1)
             time.sleep(0.5)
+            # Same IOS "Press RETURN to get started" screen as GNS3 telnet consoles
+            ser.write(b"\r\n\r\n")
+            time.sleep(0.35)
 
             blocks = Sender.split_into_blocks(text)
 
@@ -125,6 +128,45 @@ class Sender:
                     pass
 
     @staticmethod
+    async def _telnet_wake_gns3_console(writer, read_available, log_fn, initial: str = "") -> str:
+        """
+        GNS3 IOS consoles often show 'Press RETURN to get started' before login.
+        Send CR/LF until a login line or IOS prompt appears (or attempts exhausted).
+        `read_available(timeout_sec)` must be an async callable returning str/bytes.
+        """
+        buf = initial or ""
+        logged = False
+        for attempt in range(8):
+            low = buf.lower()
+            if "username:" in low or "login:" in low:
+                break
+            if "password:" in low and "username:" not in low and "login:" not in low:
+                break
+            tail = buf.rstrip()
+            if (
+                tail
+                and tail[-1] in ("#", ">")
+                and "press return" not in low
+                and "return to get started" not in low
+            ):
+                break
+            if "press return" in low or "return to get started" in low or "hit return" in low:
+                if not logged:
+                    log_fn("[telnet] GNS3: sending Enter to pass IOS startup screen (Press RETURN)")
+                    logged = True
+                writer.write("\r\n")
+                await asyncio.sleep(0.5)
+                buf += await read_available(1.5)
+                continue
+            if attempt < 2 and len(buf.strip()) < 80 and "username:" not in low and "login:" not in low:
+                writer.write("\r\n")
+                await asyncio.sleep(0.4)
+                buf += await read_available(1.2)
+                continue
+            break
+        return buf
+
+    @staticmethod
     async def _send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=4.0):
         """Async implementation of telnet send using telnetlib3"""
         reader, writer = await asyncio.wait_for(
@@ -147,8 +189,9 @@ class Sender:
         try:
             await asyncio.sleep(0.4)
             
-            # Best-effort login - read initial prompt
+            # Best-effort login - read initial prompt (wake past GNS3 "Press RETURN" if needed)
             initial = await read_available(2.0)
+            initial = await Sender._telnet_wake_gns3_console(writer, read_available, log_fn, initial)
             log_fn(f"[telnet] initial: {initial[:200] if initial else '(empty)'}")
             
             # Check for login prompts
@@ -255,6 +298,132 @@ class Sender:
             log_fn(f"[telnet] error: {e}")
             return False
 
+    @staticmethod
+    async def _run_show_commands_telnet_async(
+        log_fn,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        enable_pw: str,
+        commands: list[str],
+        timeout: int = 10,
+    ) -> dict[str, str]:
+        """
+        One Telnet session: wake/login/enable, terminal length 0, then each show command.
+        Returns {command: output}. Used by the AI agent for device_name-based CLI.
+        """
+        reader, writer = await asyncio.wait_for(
+            telnetlib3.open_connection(host, port),
+            timeout=timeout,
+        )
+
+        async def write_line(line: str):
+            writer.write(line + "\r\n")
+            await asyncio.sleep(0.1)
+
+        async def read_available(timeout_sec: float = 1.0) -> str:
+            try:
+                return await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
+            except asyncio.TimeoutError:
+                return ""
+
+        async def read_until_prompt(timeout_sec: float = 5.0) -> str:
+            buf = ""
+            deadline = asyncio.get_event_loop().time() + timeout_sec
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
+                    if chunk:
+                        buf += chunk
+                        stripped = buf.rstrip()
+                        if stripped and stripped[-1] in (">", "#"):
+                            break
+                except asyncio.TimeoutError:
+                    break
+            return buf
+
+        results: dict[str, str] = {}
+        try:
+            await asyncio.sleep(0.4)
+            initial = await read_available(2.0)
+            initial = await Sender._telnet_wake_gns3_console(
+                writer, read_available, log_fn, initial
+            )
+            log_fn(f"[run_show] initial: {initial[:200] if initial else '(empty)'}")
+
+            initial_lower = initial.lower() if initial else ""
+            if "username:" in initial_lower or "login:" in initial_lower:
+                if username:
+                    await write_line(username)
+                    await asyncio.sleep(0.3)
+                    resp = await read_available(1.0)
+                    if "password:" in resp.lower() and password:
+                        await write_line(password)
+                        await asyncio.sleep(0.3)
+            elif "password:" in initial_lower:
+                if password:
+                    await write_line(password)
+                    await asyncio.sleep(0.3)
+            else:
+                if username:
+                    await write_line(username)
+                    await asyncio.sleep(0.2)
+                if password:
+                    await write_line(password)
+                    await asyncio.sleep(0.2)
+
+            if enable_pw:
+                await write_line("enable")
+                await asyncio.sleep(0.3)
+                await write_line(enable_pw)
+                await asyncio.sleep(0.2)
+
+            await write_line("terminal length 0")
+            await asyncio.sleep(0.25)
+            await read_until_prompt(2.5)
+
+            for cmd in commands:
+                if not (cmd or "").strip():
+                    continue
+                log_fn(f"[run_show] {cmd}")
+                await write_line(cmd.strip())
+                results[cmd] = await read_until_prompt(6.0)
+
+            writer.close()
+        except Exception as exc:
+            log_fn(f"[run_show] error: {exc}")
+            results["_error"] = str(exc)
+            try:
+                writer.close()
+            except Exception:
+                pass
+        return results
+
+    @staticmethod
+    def run_show_commands_telnet(
+        log_fn,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        enable_pw: str,
+        commands: list[str],
+        timeout: int = 10,
+    ) -> dict[str, str]:
+        if telnetlib3 is None:
+            log_fn("[run_show] telnetlib3 not installed")
+            return {"_error": "telnetlib3 not installed"}
+        try:
+            return asyncio.run(
+                Sender._run_show_commands_telnet_async(
+                    log_fn, host, port, username, password, enable_pw, commands, timeout
+                )
+            )
+        except Exception as e:
+            log_fn(f"[run_show] error: {e}")
+            return {"_error": str(e)}
+
     # ─────────────────────────── verification ────────────────────────────────
 
     @staticmethod
@@ -290,10 +459,18 @@ class Sender:
                     break
             return buf
 
+        async def read_available(timeout_sec: float = 1.0) -> str:
+            try:
+                return await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
+            except asyncio.TimeoutError:
+                return ""
+
         results: dict[str, str] = {}
         try:
             # Brief settling pause for GNS3 console banner
             await asyncio.sleep(0.6)
+            banner = await read_available(2.0)
+            await Sender._telnet_wake_gns3_console(writer, read_available, log_fn, banner)
             await read_until_prompt(3.0)  # drain banner / reach prompt
 
             await write_line("terminal length 0")

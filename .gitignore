@@ -39,6 +39,8 @@ Thumbs.db
 # Project specific
 *.log
 .env
+network_manager.db
+ancs_config.json
 
 # Build artifacts
 build/

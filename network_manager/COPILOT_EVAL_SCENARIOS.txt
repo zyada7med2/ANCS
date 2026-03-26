@@ -1,0 +1,7 @@
+Graduation / evaluation checklist — ANCS Copilot (grounded agent)
+================================================================
+1. List GNS3 projects and nodes using tools only; confirm output matches GNS3 UI.
+2. run_cli_on_device on two different device names; Execution Logs show [audit] lines with timings.
+3. deploy_to_device with generate_device_config output succeeds; raw invented IOS is rejected unless "Allow raw config deploy" is checked.
+4. verify_device(device_name) returns CLI output for the named device, not another console.
+5. With no console host, Copilot still answers using GNS3/DB tools without requiring manual host fields.

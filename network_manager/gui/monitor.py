@@ -26,6 +26,7 @@ from PySide6.QtGui import QColor, QFont
 
 from .utils import apply_responsive_geometry
 from ..config import conn, cur, db_lock
+from ..network.sender import Sender
 
 try:
     import telnetlib3
@@ -728,9 +729,17 @@ class DeviceMonitor(QDialog):
                     break
             return buf
 
+        async def _read_avail(timeout=1.5):
+            try:
+                return await asyncio.wait_for(reader.read(4096), timeout=timeout)
+            except asyncio.TimeoutError:
+                return ""
+
         results = {}
         try:
             await asyncio.sleep(0.6)
+            buf = await _read_avail(2.0)
+            await Sender._telnet_wake_gns3_console(writer, _read_avail, lambda _m: None, buf)
             await _read_prompt(3.0)
             writer.write("terminal length 0\r\n")
             await asyncio.sleep(0.3)
