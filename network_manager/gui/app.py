@@ -1390,6 +1390,8 @@ class App(QMainWindow):
                 background-color: rgba(88, 166, 255, 40);
             }
         """)
+        self.device_list.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.device_list.customContextMenuRequested.connect(self._device_list_context_menu)
         self.device_list.currentRowChanged.connect(self._on_device_row_changed)
         left_layout.addWidget(self.device_list)
 
@@ -1725,8 +1727,20 @@ class App(QMainWindow):
         """)
         btn_gns3_refresh.setFixedHeight(32)
         btn_gns3_refresh.clicked.connect(self.refresh_gns3_connection)
+        btn_network_rescan = QPushButton("Rescan Networks")
+        btn_network_rescan.setStyleSheet("""
+            QPushButton {
+                background-color: rgba(30, 60, 45, 180);
+                border: 1px solid rgba(136, 219, 136, 60);
+                color: #A3D8A3; border-radius: 4px; padding: 4px;
+            }
+            QPushButton:hover { background-color: rgba(40, 80, 55, 200); }
+        """)
+        btn_network_rescan.setFixedHeight(32)
+        btn_network_rescan.clicked.connect(self._assign_network_ids)
         gns3_btns.addWidget(btn_gns3_import)
         gns3_btns.addWidget(btn_gns3_refresh)
+        gns3_btns.addWidget(btn_network_rescan)
         right_layout.addLayout(gns3_btns)
 
         right_sep_top = QFrame()
@@ -2099,6 +2113,9 @@ class App(QMainWindow):
             label = f"{n} ({obj.__class__.__name__})"
             if meta.get("gns3_node"):
                 label += " [gns3]"
+            net_id = meta.get("network_id")
+            if net_id and net_id != "default":
+                label += f" [{net_id}]"
             item = QListWidgetItem(label)
             icon = self._icon(icon_name)
             if not icon.isNull():
@@ -2107,6 +2124,45 @@ class App(QMainWindow):
         self.device_list.blockSignals(False)
         if self.device_list.count() > 0:
             self.device_list.setCurrentRow(0)
+
+    def _device_list_context_menu(self, pos):
+        item = self.device_list.itemAt(pos)
+        if not item:
+            return
+        row = self.device_list.row(item)
+        if row < 0 or row >= len(self.devices):
+            return
+        
+        menu = QMenu(self)
+        assign_menu = menu.addMenu("Assign to Network...")
+        
+        existing_nets = set()
+        for _, _, m in self.devices:
+            net = m.get("network_id")
+            if net and net != "default":
+                existing_nets.add(net)
+        
+        for net in sorted(existing_nets):
+            action = QAction(net, self)
+            action.triggered.connect(lambda checked, n=net, r=row: self._assign_user_network(r, n))
+            assign_menu.addAction(action)
+            
+        assign_menu.addSeparator()
+        new_action = QAction("New Network...", self)
+        new_action.triggered.connect(lambda checked, r=row: self._assign_new_network(r))
+        assign_menu.addAction(new_action)
+        
+        menu.exec(self.device_list.mapToGlobal(pos))
+        
+    def _assign_user_network(self, row, net_id):
+        dname, model, meta = self.devices[row]
+        meta["network_id"] = net_id
+        self.refresh_device_list()
+        
+    def _assign_new_network(self, row):
+        name, ok = QInputDialog.getText(self, "New Network", "Enter network name:")
+        if ok and name.strip():
+            self._assign_user_network(row, name.strip())
 
     def add_device_prompt(self):
         dtype, ok = QInputDialog.getText(self, "Add Device",
@@ -3300,16 +3356,25 @@ class App(QMainWindow):
 
     # ── Cross-device context extraction ─────────────────────────────────
 
-    def _build_project_context(self, exclude_name: str) -> dict:
+    def _build_project_context(self, exclude_name: str, network_id: str = "") -> dict:
         ctx = {
             "vlans": [], "routing_entries": [], "dhcp_pools": [], "acl_rules": [],
             "static_routes": [], "isp_gateway": "", "rip_enabled": False,
             "domain": "", "enable_pw": "", "ip_scheme": "192.168",
             "vlan_source": "", "routing_source": "", "dhcp_source_device": "",
             "routing_device": "", "routing_device_type": "",
+            "network_id": network_id,
+            # Multi-protocol support
+            "protocol_map": {},                  # {device_name: "rip"|"ospf"|"eigrp"|"none"}
+            "redistribution_router": "",          # auto-detected redistribution router
+            "redistribution_protocols": [],       # e.g. ["rip", "ospf"]
+            "redistribution_needed": False,       # True if >1 protocol in the network
+            "existing_redistribution_router": "", # loop safeguard
         }
         for dname, model, _meta in self.devices:
             if dname == exclude_name:
+                continue
+            if network_id and _meta.get("network_id", "default") != network_id:
                 continue
             tmpls = model.templates
             if not ctx["vlans"] and "guided_vlans" in tmpls:
@@ -3369,9 +3434,25 @@ class App(QMainWindow):
                 if m:
                     ctx["isp_gateway"] = m.group(1)
                     ctx["static_routes"].append({"network": "0.0.0.0", "mask": "0.0.0.0", "next-hop": m.group(1), "description": "Default route to ISP"})
-            if not ctx["rip_enabled"] and "guided_rip" in tmpls:
-                if re.search(r"router\s+rip", tmpls["guided_rip"], re.IGNORECASE):
+            if not ctx["rip_enabled"] and ("guided_rip" in tmpls or "guided_routing_protocol" in tmpls):
+                rp_text = tmpls.get("guided_routing_protocol", "") or tmpls.get("guided_rip", "")
+                if re.search(r"router\s+rip", rp_text, re.IGNORECASE):
                     ctx["rip_enabled"] = True
+            # ── Multi-protocol detection: per-device ──────────────────────
+            if isinstance(model, RouterModel):
+                detected_proto = "none"
+                rp_text = tmpls.get("guided_routing_protocol", "") or tmpls.get("guided_rip", "")
+                if rp_text:
+                    if re.search(r"router\s+eigrp", rp_text, re.IGNORECASE):
+                        detected_proto = "eigrp"
+                    elif re.search(r"router\s+ospf", rp_text, re.IGNORECASE):
+                        detected_proto = "ospf"
+                    elif re.search(r"router\s+rip", rp_text, re.IGNORECASE):
+                        detected_proto = "rip"
+                ctx["protocol_map"][dname] = detected_proto
+                # Check if this device already has redistribution configured
+                if re.search(r"redistribute\s+", rp_text, re.IGNORECASE):
+                    ctx["existing_redistribution_router"] = dname
             if "guided_identity" in tmpls:
                 text = tmpls["guided_identity"]
                 if not ctx["domain"]:
@@ -3382,7 +3463,97 @@ class App(QMainWindow):
                     em = re.search(r"enable\s+secret\s+(\S+)", text, re.IGNORECASE)
                     if em:
                         ctx["enable_pw"] = em.group(1)
+
+        # ── Post-loop: Redistribution auto-detection (subnet-based) ──────
+        active_protos = {p for p in ctx["protocol_map"].values() if p != "none"}
+        if len(active_protos) > 1:
+            ctx["redistribution_needed"] = True
+            # Only attempt detection if no redistribution router is already configured
+            if not ctx["existing_redistribution_router"]:
+                redist_info = self._detect_redistribution_router(
+                    ctx["protocol_map"], exclude_name, network_id
+                )
+                ctx["redistribution_router"] = redist_info.get("router", "")
+                ctx["redistribution_protocols"] = redist_info.get("protocols", list(active_protos))
+            else:
+                ctx["redistribution_protocols"] = list(active_protos)
+
         return ctx
+
+    def _detect_redistribution_router(self, protocol_map: dict,
+                                       exclude_name: str = "", network_id: str = "") -> dict:
+        """
+        Subnet-based adjacency detection for redistribution.
+
+        Instead of relying on GNS3 cable links (which miss L2 switches),
+        compare IP subnets across routers.  Two routers sharing a subnet
+        are considered adjacent — just like real routing protocols.
+
+        Returns {"router": "R2", "protocols": ["ospf", "rip"]} or empty.
+        """
+        import ipaddress as _ip
+
+        # 1. Build subnet map for each router: {router_name: set(network_str)}
+        router_subnets: dict[str, set] = {}
+        router_has_default: dict[str, bool] = {}
+
+        for dname, model, _meta in self.devices:
+            if network_id and _meta.get("network_id", "default") != network_id:
+                continue
+            if not isinstance(model, RouterModel):
+                continue
+            tmpls = model.templates
+            subnets = set()
+
+            # Parse WAN / routing IPs from guided templates
+            for tkey in ("guided_routing", "guided_wan", "guided_static_routes",
+                         "guided_routing_protocol", "guided_rip"):
+                text = tmpls.get(tkey, "")
+                if not text:
+                    continue
+                for m in re.finditer(r"ip\s+address\s+([\d.]+)\s+([\d.]+)", text, re.IGNORECASE):
+                    try:
+                        iface = _ip.ip_interface(f"{m.group(1)}/{m.group(2)}")
+                        subnets.add(str(iface.network))
+                    except Exception:
+                        pass
+
+            router_subnets[dname] = subnets
+
+            # Check for default route (ISP edge marker)
+            sr_text = tmpls.get("guided_static_routes", "")
+            router_has_default[dname] = bool(
+                re.search(r"ip\s+route\s+0\.0\.0\.0\s+0\.0\.0\.0", sr_text, re.IGNORECASE)
+            )
+
+        # 2. Build adjacency graph via shared subnets
+        adjacency: dict[str, set] = {r: set() for r in router_subnets}
+        router_names = list(router_subnets.keys())
+        for i, r1 in enumerate(router_names):
+            for r2 in router_names[i + 1:]:
+                if router_subnets[r1] & router_subnets[r2]:  # shared subnet
+                    adjacency[r1].add(r2)
+                    adjacency[r2].add(r1)
+
+        # 3. Find redistribution candidate
+        # Prefer the exclude_name router (the one being configured right now)
+        # because the user is actively setting it up.
+        candidates = [exclude_name] + [r for r in adjacency if r != exclude_name]
+        for router in candidates:
+            if router not in adjacency:
+                continue
+            neighbor_protos = set()
+            for neighbor in adjacency[router]:
+                p = protocol_map.get(neighbor, "none")
+                if p != "none":
+                    neighbor_protos.add(p)
+            if len(neighbor_protos) >= 2:
+                # Skip ISP edge routers
+                if router_has_default.get(router, False):
+                    continue
+                return {"router": router, "protocols": sorted(neighbor_protos)}
+
+        return {"router": "", "protocols": []}
 
     # ── GNS3 link resolution ─────────────────────────────────────────────
 
@@ -3539,11 +3710,12 @@ class App(QMainWindow):
             ret = QMessageBox.question(
                 self, "Layer 2 device",
                 f"{name} is a Layer 2 switch. It cannot run routing or DHCP services.\n\n"
-                "The guided wizard will only configure VLANs, uplinks, and limited ACLs here.\n\n"
                 "Continue with this switch?")
             if ret != QMessageBox.Yes:
                 return
-        project_context = self._build_project_context(exclude_name=name)
+        
+        net_id = meta.get("network_id", "default")
+        project_context = self._build_project_context(exclude_name=name, network_id=net_id)
         connected_links = self._resolve_device_links(meta.get("node_id", ""), meta)
 
         # Ensure we have interface list — fetch from GNS3 if missing
@@ -3578,19 +3750,28 @@ class App(QMainWindow):
         self._offer_apply_to_similar(name, model, device_role, win)
 
     def _offer_apply_to_similar(self, configured_name, configured_model, device_role, win):
+        source_net = "default"
+        for n, m, mt in self.devices:
+            if n == configured_name:
+                source_net = mt.get("network_id", "default")
+                break
+                
         if device_role == "access":
             targets = [(n, m, mt) for n, m, mt in self.devices
                        if isinstance(m, SwitchModel) and n != configured_name
+                       and mt.get("network_id", "default") == source_net
                        and not any(k.startswith("guided_") for k in m.templates)]
             apply_what = "VLANs + trunk uplink"
         elif device_role == "core":
             targets = [(n, m, mt) for n, m, mt in self.devices
                        if isinstance(m, (SwitchModel, CoreSwitchModel)) and n != configured_name
+                       and mt.get("network_id", "default") == source_net
                        and not any(k.startswith("guided_") for k in m.templates)]
             apply_what = "VLANs"
         elif device_role == "router":
             targets = [(n, m, mt) for n, m, mt in self.devices
                        if isinstance(m, RouterModel) and n != configured_name
+                       and mt.get("network_id", "default") == source_net
                        and not any(k.startswith("guided_") for k in m.templates)]
             apply_what = "domain name and admin password"
         else:
@@ -3654,7 +3835,13 @@ class App(QMainWindow):
             else:
                 role = "Access Switch (Layer 2)"
                 icon_name = "workgroup-switch.svg"
-            item = QListWidgetItem(f"{name}  \u2014  {role}")
+            
+            label_text = f"{name}  \u2014  {role}"
+            net_id = meta.get("network_id")
+            if net_id and net_id != "default":
+                label_text += f" [{net_id}]"
+                
+            item = QListWidgetItem(label_text)
             icon = self._icon(icon_name)
             if not icon.isNull():
                 item.setIcon(icon)
@@ -3695,9 +3882,11 @@ class App(QMainWindow):
                                     "No GNS3 project loaded.\nConnect to GNS3 and import devices first.")
             return
         try:
-            connector = GNS3Connector()
+            connector = GNS3Connector(server_url=self._last_gns3_url)
             from .topology_viewer import TopologyViewer
-            TopologyViewer(self, connector, project_id, self.devices)
+            ctx = self._build_project_context(exclude_name="")
+            ctx["network_map"] = self._compute_network_segments()
+            TopologyViewer(self, connector, project_id, self.devices, ctx)
         except Exception as exc:
             QMessageBox.critical(self, "Topology Error", str(exc))
 
@@ -3785,13 +3974,16 @@ class App(QMainWindow):
             return
 
 
+        def _network(item):
+            return item[2].get("network_id", "default")
+            
         def _priority(item):
             _, model, __ = item
             if isinstance(model, RouterModel): return 0
             elif isinstance(model, CoreSwitchModel): return 1
             return 2
 
-        ordered = sorted(self.devices, key=_priority)
+        ordered = sorted(self.devices, key=lambda i: (_network(i), _priority(i)))
         deploy_list = []
         for name, model, meta in ordered:
             config = model.build_full_config().strip()
@@ -3979,6 +4171,84 @@ class App(QMainWindow):
             else:
                 self._set_gns3_status(err[:40] + "…" if len(err) > 40 else err, False, "")
 
+    def _compute_network_segments(self) -> dict:
+        """
+        Router-centric BFS: each router anchors a site.
+        BFS from each router through non-router nodes.
+        """
+        if getattr(self, "gns3", None) is None or not getattr(self, "gns3_project_id", None):
+            return {}
+            
+        try:
+            raw_nodes = self.gns3.get_nodes(self.gns3_project_id)
+            raw_links = self.gns3.get_links(self.gns3_project_id)
+        except Exception:
+            return {}
+
+        adjacency = {str(n.get("node_id", "")): set() for n in raw_nodes if n.get("node_id")}
+        for link in raw_links:
+            eps = link.get("nodes", [])
+            if len(eps) >= 2:
+                a, b = str(eps[0].get("node_id", "")), str(eps[1].get("node_id", ""))
+                if a in adjacency and b in adjacency:
+                    adjacency[a].add(b)
+                    adjacency[b].add(a)
+
+        router_nids = set()
+        core_nids = set()
+        for dname, model, meta in self.devices:
+            nid = str(meta.get("node_id", ""))
+            if nid:
+                if isinstance(model, RouterModel):
+                    router_nids.add(nid)
+                elif isinstance(model, CoreSwitchModel):
+                    core_nids.add(nid)
+
+        anchors = list(sorted(router_nids))
+        if not anchors:
+            anchors = list(sorted(core_nids))
+
+        node_to_net = {}
+        for i, anchor in enumerate(anchors):
+            net_id = f"net-{i}"
+            queue = [anchor]
+            visited = set([anchor])
+            node_to_net[anchor] = net_id
+            
+            while queue:
+                curr = queue.pop(0)
+                for neighbor in adjacency.get(curr, []):
+                    if neighbor not in visited:
+                        if neighbor in router_nids or neighbor in core_nids:
+                            continue
+                        visited.add(neighbor)
+                        node_to_net[neighbor] = net_id
+                        queue.append(neighbor)
+                        
+        return node_to_net
+
+    def _assign_network_ids(self):
+        node_to_net = self._compute_network_segments()
+        
+        assigned = 0
+        import string
+        for dname, model, meta in self.devices:
+            nid = str(meta.get("node_id", ""))
+            if nid and nid in node_to_net:
+                net_id = node_to_net[nid]
+                idx = int(net_id.split("-")[1])
+                letter = string.ascii_uppercase[idx % 26]
+                if idx >= 26:
+                    letter += str(idx // 26)
+                meta["network_id"] = f"Net {letter}"
+                assigned += 1
+            elif "network_id" not in meta:
+                meta["network_id"] = "default"
+
+        if assigned > 0:
+            self._run_on_main(self.refresh_device_list)
+
+
     def _apply_gns3_import(self, new_devices, proj_name):
         imported = 0
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -4005,6 +4275,7 @@ class App(QMainWindow):
             except Exception as exc:
                 self.log(f"[db] error saving GNS3 device: {exc}")
         if imported > 0:
+            self._assign_network_ids()
             self.refresh_device_list()
             self.log(f"Auto-imported {imported} GNS3 node(s) from '{proj_name}'")
         self._set_gns3_status("\u2713 Connected", connected=True, project_name=proj_name or "Unknown project")

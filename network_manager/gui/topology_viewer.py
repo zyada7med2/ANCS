@@ -16,7 +16,7 @@ import threading
 
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QWidget,
-    QScrollArea,
+    QScrollArea, QComboBox
 )
 from PySide6.QtCore import Qt, QTimer, QRectF, QPointF, Signal
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush
@@ -27,6 +27,7 @@ _T = {
     "text":    "#C9D1D9", "muted":  "#6E7681", "border":  "#30363D",
     "router":  "#388BFD", "core":   "#E3B341", "access":  "#6E7681",
     "unknown": "#484F58", "configured_border": "#3FB950",
+    "redist":  "#BF4B8A",  # Magenta/Purple for redistribution bridge
     "link":    "#444C56", "link_label": "#8B949E",
 }
 _NODE_W, _NODE_H = 120, 44
@@ -78,8 +79,14 @@ class _TopoCanvas(QWidget):
             role = nd["role"]
             fill = QColor(_T.get(role, _T["unknown"]))
             outline = QColor(_T["configured_border"] if nd["configured"] else _T["border"])
+            outline_width = 3 if nd["configured"] else 1
+            
+            if nd.get("is_redist"):
+                outline = QColor(_T["redist"])
+                outline_width = 4
+                
             p.setBrush(QBrush(fill))
-            p.setPen(QPen(outline, 3 if nd["configured"] else 1))
+            p.setPen(QPen(outline, outline_width))
             p.drawRoundedRect(x - hw, y - hh, _NODE_W, _NODE_H, 6, 6)
 
             short = nd["name"]
@@ -89,11 +96,23 @@ class _TopoCanvas(QWidget):
             p.setFont(QFont("Segoe UI", 9, QFont.Bold))
             p.drawText(x - hw, y - hh, _NODE_W, _NODE_H, Qt.AlignCenter, short)
 
-            role_txt = {"router": "Router", "core": "Core SW", "access": "Access SW"}.get(role, "")
-            if role_txt:
-                p.setPen(QColor(_T["muted"]))
-                p.setFont(QFont("Segoe UI", 7))
-                p.drawText(x - hw, y + hh + 2, _NODE_W, 14, Qt.AlignCenter, role_txt)
+            if nd.get("is_redist"):
+                # Draw redistribution bridge sub-label outside the box
+                p.setPen(QColor(_T["redist"]))
+                p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+                bridge_txt = " \u2194 ".join(p.upper() for p in nd.get("redist_protos", []))
+                p.drawText(x - hw - 20, y + hh + 2, _NODE_W + 40, 14, Qt.AlignCenter, f"[ {bridge_txt} ]")
+                
+                # Add a small icon inside the box
+                p.setPen(QColor("white"))
+                p.setFont(QFont("Segoe UI", 12))
+                p.drawText(x - hw + 8, y - hh, 20, _NODE_H, Qt.AlignVCenter, "\u2b82")
+            else:
+                role_txt = {"router": "Router", "core": "Core SW", "access": "Access SW"}.get(role, "")
+                if role_txt:
+                    p.setPen(QColor(_T["muted"]))
+                    p.setFont(QFont("Segoe UI", 7))
+                    p.drawText(x - hw, y + hh + 2, _NODE_W, 14, Qt.AlignCenter, role_txt)
         p.end()
 
     def mousePressEvent(self, event):
@@ -124,7 +143,7 @@ class TopologyViewer(QDialog):
     _topology_ready = Signal(object, object, object)
     _topology_error = Signal(str)
 
-    def __init__(self, parent, connector, project_id: str, ancs_devices: list):
+    def __init__(self, parent, connector, project_id: str, ancs_devices: list, project_context: dict = None):
         super().__init__(parent)
         self.setWindowTitle("Network Topology")
         self.setStyleSheet(DARK)
@@ -133,6 +152,7 @@ class TopologyViewer(QDialog):
         self._connector = connector
         self._project_id = project_id
         self._ancs_devices = ancs_devices
+        self._project_context = project_context or {}
         self._topology_ready.connect(self._apply_topology)
         self._topology_error.connect(lambda e: self._status.setText(f"Error: {e}"))
 
@@ -144,6 +164,24 @@ class TopologyViewer(QDialog):
         lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
         hdr.addWidget(lbl)
         hdr.addStretch()
+        
+        self._net_filter = QComboBox()
+        self._net_filter.setStyleSheet("""
+            QComboBox { background: #161B22; color: #C9D1D9; border: 1px solid #30363D; border-radius: 4px; padding: 4px; min-width: 120px; }
+            QComboBox::drop-down { border: none; }
+        """)
+        self._net_filter.addItem("All Networks", "All")
+        net_map = self._project_context.get("network_map", {})
+        nets = sorted(set(net_map.values()))
+        friendly_names = {}
+        for _, _, meta in self._ancs_devices:
+            if "network_id" in meta and meta.get("node_id") in net_map:
+                friendly_names[net_map[meta.get("node_id")]] = meta["network_id"]
+        for net in nets:
+            self._net_filter.addItem(friendly_names.get(net, net), net)
+        self._net_filter.currentIndexChanged.connect(lambda: self._apply_topology())
+        hdr.addWidget(self._net_filter)
+
         btn_refresh = QPushButton("\u27F3  Refresh")
         btn_refresh.clicked.connect(self._load_topology)
         hdr.addWidget(btn_refresh)
@@ -151,7 +189,8 @@ class TopologyViewer(QDialog):
 
         legend = QHBoxLayout()
         for label_text, colour in [("Router", _T["router"]), ("Core Switch", _T["core"]),
-                                    ("Access Switch", _T["access"]), ("Configured \u2713", _T["configured_border"])]:
+                                    ("Access Switch", _T["access"]), ("Configured \u2713", _T["configured_border"]),
+                                    ("Bridge", _T["redist"])]:
             dot = QLabel("\u25CF")
             dot.setStyleSheet(f"color: {colour}; font-size: 12px;")
             legend.addWidget(dot)
@@ -205,9 +244,32 @@ class TopologyViewer(QDialog):
 
         self._topology_ready.emit(raw_nodes, raw_links, port_map)
 
-    def _apply_topology(self, raw_nodes, raw_links, port_map=None):
+    def _apply_topology(self, raw_nodes=None, raw_links=None, port_map=None):
+        if raw_nodes is not None:
+            self._last_raw_nodes = raw_nodes
+            self._last_raw_links = raw_links
+            self._last_port_map = port_map
+        else:
+            raw_nodes = getattr(self, "_last_raw_nodes", [])
+            raw_links = getattr(self, "_last_raw_links", [])
+            port_map = getattr(self, "_last_port_map", {})
+            
         if port_map is None:
             port_map = {}
+            
+        net_map = self._project_context.get("network_map", {})
+        filter_net = getattr(self, "_net_filter", None)
+        if filter_net and filter_net.currentData() != "All":
+            f_id = filter_net.currentData()
+            raw_nodes = [n for n in raw_nodes if net_map.get(str(n.get("node_id", ""))) == f_id]
+            allowed = set(str(n.get("node_id", "")) for n in raw_nodes)
+            new_links = []
+            for l in raw_links:
+                eps = l.get("nodes", [])
+                if len(eps) >= 2 and str(eps[0].get("node_id", "")) in allowed and str(eps[1].get("node_id", "")) in allowed:
+                    new_links.append(l)
+            raw_links = new_links
+
         meta_map = {}
         for aname, amodel, ameta in self._ancs_devices:
             nid = ameta.get("node_id")
@@ -239,13 +301,25 @@ class TopologyViewer(QDialog):
                 elif "switch" in sym or "switch" in node_type: role = "access"
 
             configured = False
+            is_redist = False
+            redist_protos = []
+            
             if nid in meta_map:
                 configured = any(k.startswith("guided_") for k in meta_map[nid]["model"].templates)
+                d_name = meta_map[nid]["name"]
+                
+                # Check redistribution details from the project context
+                if (d_name == self._project_context.get("redistribution_router") or 
+                    d_name == self._project_context.get("existing_redistribution_router")):
+                    is_redist = True
+                    # Combine active protocols into a single list
+                    redist_protos = self._project_context.get("redistribution_protocols", [])
 
             angle = 2 * math.pi * i / max(n, 1)
             x = cx + radius * math.cos(angle)
             y = cy + radius * math.sin(angle)
-            nodes[nid] = {"x": x, "y": y, "name": label, "role": role, "configured": configured}
+            nodes[nid] = {"x": x, "y": y, "name": label, "role": role, 
+                          "configured": configured, "is_redist": is_redist, "redist_protos": redist_protos}
 
         for link in raw_links:
             endpoints = link.get("nodes", [])

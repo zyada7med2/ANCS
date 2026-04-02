@@ -68,6 +68,18 @@ HELP_TEXT: Dict[str, str] = {
         "The IP address of the next router on the path to a destination network. "
         "Traffic is forwarded there when no more-specific route exists."
     ),
+    "Routing Protocol": (
+        "A routing protocol lets routers automatically discover and share "
+        "network paths with their neighbours.\n"
+        "RIP is simplest (small networks), OSPF is the industry standard "
+        "(medium-large), and EIGRP is Cisco-specific but very efficient."
+    ),
+    "Redistribution": (
+        "When different parts of your network use different routing protocols "
+        "(e.g. OSPF on one side, RIP on the other), a border router must "
+        "'redistribute' — translate routes from one protocol into the other "
+        "so all routers can reach all networks."
+    ),
 }
 
 # Preset catalogue: key -> (display_name, short_description)
@@ -179,6 +191,9 @@ class GuidedSetupWizard(QDialog):
         self.static_routes: List[Dict]      = []
         self.rip_networks:  List[Dict]      = []
         self.enable_rip:    bool            = False
+        self.routing_protocol: str          = "rip"      # "rip"|"ospf"|"eigrp"|"none"
+        self.is_redistribution_router: bool = False
+        self.redistribution_protocols: List[str] = []
         self.summary_box:   Optional[QTextEdit] = None
         self.connected_links: List[Dict] = connected_links or []
 
@@ -710,10 +725,10 @@ class GuidedSetupWizard(QDialog):
                          "One checkbox to add internet access.",
                          GuidedSetupWizard._build_step_static_routes,
                          GuidedSetupWizard._validate_static_routes),
-                    Step("RIPv2",
-                         "Enable automatic route sharing with neighbouring routers.",
-                         GuidedSetupWizard._build_step_rip,
-                         GuidedSetupWizard._validate_rip),
+                    Step("Routing Protocol",
+                         "Choose how this router shares routes with neighbours.",
+                         GuidedSetupWizard._build_step_routing_protocol,
+                         GuidedSetupWizard._validate_routing_protocol),
                     Step("DHCP",
                          "Auto-IP for each network — just tick which VLANs need it.",
                          GuidedSetupWizard._build_step_dhcp,
@@ -1591,24 +1606,89 @@ class GuidedSetupWizard(QDialog):
         ctx = self.project_context
         layout = body.layout() or QVBoxLayout(body)
 
+        # ── Detect ISP connection from GNS3 topology ──
+        isp_link = None
+        for link in self.connected_links:
+            rname = link.get("remote_device", "").lower()
+            rrole = link.get("remote_role", "").lower()
+            if "isp" in rname or "internet" in rname or rrole in ("cloud", "nat"):
+                isp_link = link
+                break
+
+        # ── Container for Default Route fields (hidden if no ISP) ──
+        self.default_route_container = QWidget()
+        dr_layout = QVBoxLayout(self.default_route_container)
+        dr_layout.setContentsMargins(0, 0, 0, 0)
+        
+        # Determine defaults based on ISP detection
+        _fallback_wan = ["FastEthernet0/1", "GigabitEthernet1/0", "GigabitEthernet0/1"]
+        wan_ifaces = [i for i in self.known_interfaces if i != self.router_interface] if self.known_interfaces else _fallback_wan
+        if not wan_ifaces:
+            wan_ifaces = _fallback_wan
+
+        if isp_link:
+            local_iface = isp_link.get("local_interface", wan_ifaces[0] if wan_ifaces else "FastEthernet0/1")
+            rname = isp_link.get("remote_device", "ISP").upper()
+            
+            # Show a helpful success banner
+            layout.addWidget(self._show_suggestion_banner(
+                body,
+                f"🌐 Auto-detected upstream connection to '{rname}' on port {local_iface}. "
+                f"This port has been assigned as the WAN interface."
+            ))
+            default_wan = local_iface
+            # Cloud/NAT usually hands out DHCP. Normal named ISP router might need static.
+            rrole = isp_link.get("remote_role", "").lower()
+            default_wan_ip = "dhcp" if rrole in ("cloud", "nat") else "10.0.0.2"
+            default_wan_mask = "255.255.255.0" if default_wan_ip == "dhcp" else "255.255.255.252"
+        else:
+            default_wan = self.wan_interface or (wan_ifaces[0] if wan_ifaces else "FastEthernet0/1")
+            default_wan_ip = self.wan_ip or "10.0.0.2"
+            default_wan_mask = self.wan_mask or "255.255.255.252"
+            
+            # Show "No ISP" warning card
+            no_isp_card = self._card(body)
+            ni_layout = QVBoxLayout(no_isp_card)
+            ni_lbl = QLabel("⚠️ No external ISP or Internet node was detected in the GNS3 topology connected to this router.")
+            ni_lbl.setStyleSheet(f"color: {t['accent']}; font-size: 12px;")
+            ni_lbl.setWordWrap(True)
+            ni_layout.addWidget(ni_lbl)
+            
+            override_btn = QPushButton("Configure Default Route anyway (Manual Override)")
+            override_btn.setStyleSheet(f"color: white; background: transparent; text-align: left; padding: 4px; border: 1px solid {t['accent']}; border-radius: 4px;")
+            override_btn.setCursor(Qt.PointingHandCursor)
+            
+            def _show_dr():
+                self.default_route_container.setVisible(True)
+                no_isp_card.setVisible(False)
+            
+            override_btn.clicked.connect(_show_dr)
+            ni_layout.addWidget(override_btn)
+            layout.addWidget(no_isp_card)
+            
+            # Hide the default route container initially
+            self.default_route_container.setVisible(False)
+
+        # Add the container to the main layout
+        layout.addWidget(self.default_route_container)
+
         # ── WAN Interface card ────────────────────────────────────────────
-        layout.addWidget(self._lbl(body, "Configure the interface that connects to the ISP / internet.", muted=True))
-        wan_card = self._card(body)
+        dr_layout.addWidget(self._lbl(self.default_route_container, "Configure the interface that connects to the ISP / internet.", muted=True))
+        wan_card = self._card(self.default_route_container)
         wan_card_layout = QVBoxLayout(wan_card)
-        wan_card_layout.addWidget(self._lbl(body, "WAN / Internet Interface", bold=True))
+        wan_card_layout.addWidget(self._lbl(self.default_route_container, "WAN / Internet Interface", bold=True))
 
         # Interface selector
         wan_iface_f = QWidget()
         wil = QHBoxLayout(wan_iface_f)
         wil.setContentsMargins(0, 0, 0, 0)
         wil.addWidget(QLabel("WAN interface:"))
-        _fallback_wan = ["FastEthernet0/1", "GigabitEthernet1/0", "GigabitEthernet0/1"]
-        wan_ifaces = [i for i in self.known_interfaces if i != self.router_interface] if self.known_interfaces else _fallback_wan
-        if not wan_ifaces:
-            wan_ifaces = _fallback_wan
-        default_wan = self.wan_interface or (wan_ifaces[0] if wan_ifaces else "FastEthernet0/1")
+        
         self.wan_iface_combo = QComboBox()
         self.wan_iface_combo.addItems(wan_ifaces)
+        # Ensure default_wan is added if it's new
+        if default_wan not in wan_ifaces:
+            self.wan_iface_combo.addItem(default_wan)
         self.wan_iface_combo.setCurrentText(default_wan)
         self.wan_iface_combo.setEditable(True)
         wil.addWidget(self.wan_iface_combo)
@@ -1618,17 +1698,25 @@ class GuidedSetupWizard(QDialog):
         wan_ip_f = QWidget()
         wipl = QHBoxLayout(wan_ip_f)
         wipl.setContentsMargins(0, 0, 0, 0)
-        wipl.addWidget(QLabel("IP address:"))
-        self.wan_ip_var = self._entry(body, self.wan_ip or "10.0.0.2", 16)
+        wipl.addWidget(QLabel("IP address (or 'dhcp'):"))
+        self.wan_ip_var = self._entry(self.default_route_container, default_wan_ip, 16)
         wipl.addWidget(self.wan_ip_var)
         wipl.addWidget(QLabel("Mask:"))
-        self.wan_mask_var = self._entry(body, self.wan_mask or "255.255.255.252", 16)
+        self.wan_mask_var = self._entry(self.default_route_container, default_wan_mask, 16)
         wipl.addWidget(self.wan_mask_var)
+        
+        # Visual toggle for dhcp
+        def _toggle_dhcp(txt):
+            is_dhcp = (txt.strip().lower() == "dhcp")
+            self.wan_mask_var.setEnabled(not is_dhcp)
+        self.wan_ip_var.textChanged.connect(_toggle_dhcp)
+        _toggle_dhcp(default_wan_ip)
+        
         wan_card_layout.addWidget(wan_ip_f)
-        layout.addWidget(wan_card)
+        dr_layout.addWidget(wan_card)
 
         # ── Default Route card ────────────────────────────────────────────
-        def_card = self._card(body)
+        def_card = self._card(self.default_route_container)
         def_card_layout = QVBoxLayout(def_card)
         self.default_route_cb = QCheckBox("Add a default route to the internet / upstream router")
         self.default_route_cb.setChecked(True)
@@ -1641,21 +1729,31 @@ class GuidedSetupWizard(QDialog):
             existing = ctx["isp_gateway"]
         elif not existing and self.device_role == "core" and ctx.get("routing_entries"):
             existing = ctx["routing_entries"][0].get("ip", "10.0.0.1")
+        
         if not existing:
-            existing = "10.0.0.1"
-        self.isp_gw_var = self._entry(body, existing, 18)
+            # If NAT/Cloud, the DHCP might provide the route, but user might still want it statically...
+            existing = "dhcp" if default_wan_ip == "dhcp" else "10.0.0.1"
+            
+        self.isp_gw_var = self._entry(self.default_route_container, existing, 18)
         ispl.addWidget(self.isp_gw_var)
         def_card_layout.addWidget(isp_f)
-        layout.addWidget(def_card)
+        dr_layout.addWidget(def_card)
+
+        # Toggle ISP gateway field visibility when checkbox changes
+        def _toggle_isp_field(checked):
+            isp_f.setVisible(checked)
+            self.isp_gw_var.setEnabled(checked)
+        self.default_route_cb.toggled.connect(_toggle_isp_field)
+        _toggle_isp_field(self.default_route_cb.isChecked())
 
         # ── Extra routes ─────────────────────────────────────────────────
-        layout.addWidget(self._lbl(body, "Additional static routes:", bold=True))
+        dr_layout.addWidget(self._lbl(self.default_route_container, "Additional static routes:", bold=True))
         self.extra_routes_cb = QCheckBox("I need more static routes (advanced)")
         self.extra_routes_cb.setChecked(len(self.static_routes) > 1)
-        layout.addWidget(self.extra_routes_cb)
+        dr_layout.addWidget(self.extra_routes_cb)
         self.extra_routes_widget = QWidget()
         self.extra_routes_layout = QVBoxLayout(self.extra_routes_widget)
-        layout.addWidget(self.extra_routes_widget)
+        dr_layout.addWidget(self.extra_routes_widget)
 
         def _add_route_row(ex):
             rf = QWidget()
@@ -1705,11 +1803,13 @@ class GuidedSetupWizard(QDialog):
 
         # Save static routes
         self.static_routes = []
-        if getattr(self, "default_route_cb", None) and self.default_route_cb.isChecked():
+        if getattr(self, "default_route_cb", None) and getattr(self, "default_route_container", None) and self.default_route_container.isVisible() and self.default_route_cb.isChecked():
             isp = getattr(self, "isp_gw_var", None)
             isp = isp.text().strip() if isp else "10.0.0.1"
-            if isp:
+            if isp and isp.lower() != "dhcp":
                 self.static_routes.append({"network": "0.0.0.0", "mask": "0.0.0.0", "next-hop": isp, "description": "Default route to ISP"})
+            elif isp and isp.lower() == "dhcp":
+                self.static_routes.append({"network": "0.0.0.0", "mask": "0.0.0.0", "next-hop": "dhcp", "description": "Default route via DHCP"})
         for net_v, mask_v, nh_v, desc_v in self.extra_route_rows:
             net, nh = net_v.text().strip(), nh_v.text().strip()
             if net and nh:
@@ -1717,12 +1817,25 @@ class GuidedSetupWizard(QDialog):
         return True
 
     def _render_wan_block(self) -> str:
+        # If the container exists and was hidden, it means user bypassed ISP config
+        if hasattr(self, "default_route_container") and not self.default_route_container.isVisible():
+            self.wan_interface = ""
+            self.wan_ip = ""
+            return ""
+            
         if not self.wan_interface or not self.wan_ip:
             return ""
         lines = [
             "configure terminal",
             f"interface {self.wan_interface}",
-            f" ip address {self.wan_ip} {self.wan_mask or '255.255.255.252'}",
+        ]
+        
+        if self.wan_ip.lower() == "dhcp":
+            lines.append(" ip address dhcp")
+        else:
+            lines.append(f" ip address {self.wan_ip} {self.wan_mask or '255.255.255.0'}")
+            
+        lines += [
             " no shutdown",
             "exit",
             "!",
@@ -1730,19 +1843,118 @@ class GuidedSetupWizard(QDialog):
         ]
         return "\n".join(lines)
 
-    def _build_step_rip(self, body):
+    def _build_step_routing_protocol(self, body):
+        t = self.THEME
+        ctx = self.project_context
         layout = body.layout() or QVBoxLayout(body)
-        layout.addWidget(self._lbl(body, "RIPv2 shares routes automatically with neighbouring routers.", muted=True))
-        card = self._card(body)
-        card_layout = QVBoxLayout(card)
-        self.enable_rip_cb = QCheckBox("Enable RIPv2 and advertise all connected networks")
-        self.enable_rip_cb.setChecked(self.enable_rip)
-        card_layout.addWidget(self.enable_rip_cb)
-        layout.addWidget(card)
+        layout.setSpacing(10)
+        layout.addWidget(self._help_link(body, "Routing Protocol"))
 
-    def _validate_rip(self) -> bool:
-        self.enable_rip = getattr(self, "enable_rip_cb", None)
-        self.enable_rip = self.enable_rip.isChecked() if self.enable_rip else False
+        # ── Check for redistribution context & warnings ──────────────────
+        redist_router = ctx.get("redistribution_router", "")
+        redist_needed = ctx.get("redistribution_needed", False)
+        redist_protos = ctx.get("redistribution_protocols", [])
+        protocol_map  = ctx.get("protocol_map", {})
+        existing_redist = ctx.get("existing_redistribution_router", "")
+
+        # Check if THIS router is the detected redistribution router
+        if redist_router == self.device_name:
+            self.is_redistribution_router = True
+            self.redistribution_protocols = redist_protos
+            proto_names = " & ".join(p.upper() for p in redist_protos)
+            layout.addWidget(self._show_suggestion_banner(
+                body,
+                f"\U0001f504 This router connects routers running different protocols "
+                f"({proto_names}). It will be auto-configured as a redistribution "
+                f"router to translate routes between them.",
+            ))
+            layout.addWidget(self._help_link(body, "Redistribution"))
+        elif redist_needed and not redist_router:
+            # Mismatch exists but no redistribution router found
+            proto_info = ", ".join(f"{n} ({p.upper()})" for n, p in protocol_map.items() if p != "none")
+            warn_card = self._card(body)
+            wl = QVBoxLayout(warn_card)
+            warn_lbl = QLabel(
+                f"\u26a0\ufe0f Different routing protocols detected in your network:\n"
+                f"  {proto_info}\n\n"
+                f"Consider adding a router between the protocol boundaries to handle "
+                f"redistribution (route translation). Without it, routers using different "
+                f"protocols cannot exchange routes."
+            )
+            warn_lbl.setWordWrap(True)
+            warn_lbl.setStyleSheet(f"color: #FFA657; font-size: 11px;")
+            wl.addWidget(warn_lbl)
+            layout.addWidget(warn_card)
+        elif existing_redist and existing_redist != self.device_name and redist_needed:
+            # Another router already handles redistribution — loop safeguard
+            layout.addWidget(self._show_suggestion_banner(
+                body,
+                f"\u26a0\ufe0f Router \"{existing_redist}\" is already handling redistribution "
+                f"between {' & '.join(p.upper() for p in redist_protos)}. "
+                f"Do NOT configure redistribution on this router to avoid routing loops.",
+            ))
+
+        # ── Protocol selection ───────────────────────────────────────────
+        layout.addWidget(self._lbl(body, "Select a routing protocol:", bold=True))
+
+        PROTOCOL_OPTIONS = [
+            ("rip",   "RIPv2",
+             "Best for small networks (< 15 routers). Simple to set up, low overhead. "
+             "Uses hop count — not ideal for complex topologies."),
+            ("ospf",  "OSPF",
+             "Industry standard for medium-to-large networks. Scales well, uses "
+             "link-state for optimal paths. Works across all vendors."),
+            ("eigrp", "EIGRP",
+             "Cisco-proprietary, very fast convergence. Great for all-Cisco networks. "
+             "Combines best of distance-vector and link-state."),
+            ("none",  "None (Static routes only)",
+             "No dynamic routing. Use this if you only need static routes or this "
+             "router connects to a single network."),
+        ]
+
+        self._protocol_radio_group = QButtonGroup(body)
+        current = self.routing_protocol or "rip"
+
+        for i, (value, label, tip) in enumerate(PROTOCOL_OPTIONS):
+            card = self._card(body, padx=12, pady=8)
+            cl = QVBoxLayout(card)
+            cl.setSpacing(4)
+            rb = QRadioButton(label)
+            rb.setProperty("proto_value", value)
+            rb.setStyleSheet(f"font-weight: 600; font-size: 11pt; color: {t['text']};")
+            if value == current:
+                rb.setChecked(True)
+            self._protocol_radio_group.addButton(rb, i)
+            cl.addWidget(rb)
+            tip_lbl = QLabel(f"  \U0001f4a1 {tip}")
+            tip_lbl.setWordWrap(True)
+            tip_lbl.setStyleSheet(f"color: {t['muted']}; font-size: 12px; padding-left: 22px;")
+            cl.addWidget(tip_lbl)
+            layout.addWidget(card)
+
+        # ── Redistribution info card (if this router is the redistribution router) ──
+        if self.is_redistribution_router and len(self.redistribution_protocols) >= 2:
+            redist_card = self._card(body, padx=12, pady=10)
+            rcl = QVBoxLayout(redist_card)
+            rcl.addWidget(self._lbl(body, "\U0001f504  Auto-Redistribution", bold=True))
+            proto_a, proto_b = self.redistribution_protocols[0], self.redistribution_protocols[1]
+            rcl.addWidget(self._lbl(
+                body,
+                f"This router will run both {proto_a.upper()} and {proto_b.upper()} and "
+                f"translate routes between them automatically. No extra configuration needed.",
+                muted=True,
+            ))
+            layout.addWidget(redist_card)
+
+    def _validate_routing_protocol(self) -> bool:
+        grp = getattr(self, "_protocol_radio_group", None)
+        if grp:
+            checked = grp.checkedButton()
+            if checked:
+                self.routing_protocol = checked.property("proto_value")
+            else:
+                self.routing_protocol = "rip"
+        self.enable_rip = (self.routing_protocol == "rip")  # backward compat
         self.rip_networks = []
         return True
 
@@ -1928,7 +2140,7 @@ class GuidedSetupWizard(QDialog):
             ("BLOCK 4 — Routing / Subinterfaces",   self._render_routing_block()),
             ("BLOCK 5 — WAN Interface",             self._render_wan_block()),
             ("BLOCK 6 — Static Routes",             self._render_static_routes_block()),
-            ("BLOCK 7 — RIPv2",                     self._render_rip_block()),
+            ("BLOCK 7 — Routing Protocol",           self._render_routing_protocol_block()),
             ("BLOCK 8 — DHCP Pools",                self._render_dhcp_block()),
             ("BLOCK 9 — Access Control Lists",      self._render_acl_block()),
         ]
@@ -1961,7 +2173,7 @@ class GuidedSetupWizard(QDialog):
             "guided_routing":       self._render_routing_block(),
             "guided_wan":           self._render_wan_block(),
             "guided_static_routes": self._render_static_routes_block(),
-            "guided_rip":           self._render_rip_block(),
+            "guided_routing_protocol": self._render_routing_protocol_block(),
             "guided_dhcp":          self._render_dhcp_block(),
             "guided_acl":           self._render_acl_block(),
             "guided_save":          "write memory",
@@ -2127,27 +2339,175 @@ class GuidedSetupWizard(QDialog):
         lines += ["!", "end"]
         return "\n".join(lines)
 
-    def _render_rip_block(self) -> str:
-        if not self.enable_rip:
-            return ""
-        lines = ["configure terminal", "router rip", " version 2", " no auto-summary"]
-        seen = set()
+    # ── Routing protocol helpers ───────────────────────────────────────────
+
+    @staticmethod
+    def _to_wildcard(mask: str) -> str:
+        """Convert subnet mask to wildcard mask (e.g. 255.255.255.0 → 0.0.0.255)."""
+        return ".".join(str(255 - int(o)) for o in mask.split("."))
+
+    @staticmethod
+    def _to_network(ip: str, mask: str) -> str:
+        """Compute network address from IP and subnet mask."""
+        return ".".join(str(int(a) & int(b)) for a, b in zip(ip.split("."), mask.split(".")))
+
+    @staticmethod
+    def _to_classful(ip: str) -> str:
+        """Compute classful network address for RIP."""
+        first = int(ip.split(".")[0])
+        parts = ip.split(".")
+        if first <= 127:
+            return f"{parts[0]}.0.0.0"
+        elif first <= 191:
+            return f"{parts[0]}.{parts[1]}.0.0"
+        else:
+            return f"{parts[0]}.{parts[1]}.{parts[2]}.0"
+
+    def _collect_protocol_networks(self) -> list:
+        """Gather (ip, mask) pairs from routing_entries ONLY.
+
+        The WAN interface is intentionally excluded — you do NOT want
+        OSPF/RIP/EIGRP forming adjacencies towards the ISP.
+        """
+        networks = []
         for e in self.routing_entries:
             ip = e.get("ip", "")
-            try:
-                import ipaddress as _ip
-                addr = _ip.ip_address(ip)
-                first_octet = int(str(addr).split(".")[0])
-                classful_net = f"{str(addr).split('.')[0]}.0.0.0" if first_octet <= 127 else (
-                    f"{str(addr).split('.')[0]}.{str(addr).split('.')[1]}.0.0" if first_octet <= 191 else
-                    f"{str(addr).split('.')[0]}.{str(addr).split('.')[1]}.{str(addr).split('.')[2]}.0")
-                if classful_net not in seen:
-                    seen.add(classful_net)
-                    lines.append(f" network {classful_net}")
-            except Exception:
-                pass
-        lines += ["exit", "!", "end"]
+            mask = e.get("mask", "255.255.255.0")
+            if ip and mask:
+                networks.append((ip, mask))
+        return networks
+
+    def _has_default_route(self) -> bool:
+        """Check whether a default static route (0.0.0.0/0) is configured."""
+        return any(
+            r.get("network") == "0.0.0.0" and r.get("mask") == "0.0.0.0"
+            for r in self.static_routes
+        )
+
+    def _render_rip_block(self) -> str:
+        """Legacy compat — delegates to the new method."""
+        return self._render_routing_protocol_block()
+
+    def _render_routing_protocol_block(self) -> str:
+        proto = self.routing_protocol
+        if proto == "none" and not self.is_redistribution_router:
+            return ""
+        # Backward compat: if protocol is none but enable_rip was True (legacy)
+        if proto == "none" and self.enable_rip:
+            proto = "rip"
+
+        networks = self._collect_protocol_networks()
+        if not networks and not self.is_redistribution_router:
+            return ""
+
+        lines = ["configure terminal"]
+
+        # ── Redistribution router: generate BOTH protocols ────────────────
+        if self.is_redistribution_router and len(self.redistribution_protocols) >= 2:
+            proto_a = self.redistribution_protocols[0]
+            proto_b = self.redistribution_protocols[1]
+            # Generate protocol A block with redistribution of B
+            lines += self._render_single_protocol_block(proto_a, networks, redistribute_from=proto_b)
+            lines.append("!")
+            # Generate protocol B block with redistribution of A
+            lines += self._render_single_protocol_block(proto_b, networks, redistribute_from=proto_a)
+        else:
+            # ── Single protocol ───────────────────────────────────────────
+            lines += self._render_single_protocol_block(proto, networks)
+
+        lines += ["!", "end"]
         return "\n".join(lines)
+
+    def _render_single_protocol_block(self, proto: str, networks: list,
+                                       redistribute_from: str = "") -> list:
+        """Generate IOS commands for a single routing protocol.
+
+        Args:
+            proto: "rip", "ospf", or "eigrp"
+            networks: list of (ip, mask) tuples from routing_entries (no WAN)
+            redistribute_from: if set, add a redistribute command for this protocol
+
+        Returns:
+            List of IOS command strings (no 'configure terminal' / 'end').
+        """
+        lines = []
+        has_default = self._has_default_route()
+
+        if proto == "rip":
+            lines += ["router rip", " version 2", " no auto-summary"]
+            seen = set()
+            for ip, mask in networks:
+                try:
+                    cn = self._to_classful(ip)
+                    if cn not in seen:
+                        seen.add(cn)
+                        lines.append(f" network {cn}")
+                except Exception:
+                    pass
+            if redistribute_from:
+                lines.append(self._redist_into_rip(redistribute_from))
+            # Advertise the default route to RIP neighbours
+            if has_default:
+                lines.append(" default-information originate")
+            lines.append("exit")
+
+        elif proto == "ospf":
+            lines.append("router ospf 1")
+            for ip, mask in networks:
+                try:
+                    net = self._to_network(ip, mask)
+                    wc = self._to_wildcard(mask)
+                    lines.append(f" network {net} {wc} area 0")
+                except Exception:
+                    pass
+            if redistribute_from:
+                lines.append(self._redist_into_ospf(redistribute_from))
+            # Advertise the default route to OSPF neighbours
+            if has_default:
+                lines.append(" default-information originate")
+            lines.append("exit")
+
+        elif proto == "eigrp":
+            lines += ["router eigrp 10", " no auto-summary"]
+            for ip, mask in networks:
+                try:
+                    net = self._to_network(ip, mask)
+                    wc = self._to_wildcard(mask)
+                    lines.append(f" network {net} {wc}")
+                except Exception:
+                    pass
+            if redistribute_from:
+                lines.append(self._redist_into_eigrp(redistribute_from))
+            # EIGRP uses redistribute static to share the default route
+            if has_default:
+                lines.append(" redistribute static")
+            lines.append("exit")
+
+        return lines
+
+    @staticmethod
+    def _redist_into_rip(source_proto: str) -> str:
+        if source_proto == "ospf":
+            return " redistribute ospf 1 metric 3"
+        elif source_proto == "eigrp":
+            return " redistribute eigrp 10 metric 3"
+        return ""
+
+    @staticmethod
+    def _redist_into_ospf(source_proto: str) -> str:
+        if source_proto == "rip":
+            return " redistribute rip subnets"
+        elif source_proto == "eigrp":
+            return " redistribute eigrp 10 subnets"
+        return ""
+
+    @staticmethod
+    def _redist_into_eigrp(source_proto: str) -> str:
+        if source_proto == "ospf":
+            return " redistribute ospf 1 metric 1000 100 255 1 1500"
+        elif source_proto == "rip":
+            return " redistribute rip metric 1000 100 255 1 1500"
+        return ""
 
     def _render_dhcp_block(self) -> str:
         if self.device_role == "access" or not self.dhcp_pools:
