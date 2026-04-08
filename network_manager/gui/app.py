@@ -4219,7 +4219,7 @@ class App(QMainWindow):
                 curr = queue.pop(0)
                 for neighbor in adjacency.get(curr, []):
                     if neighbor not in visited:
-                        if neighbor in router_nids or neighbor in core_nids:
+                        if neighbor in router_nids:
                             continue
                         visited.add(neighbor)
                         node_to_net[neighbor] = net_id

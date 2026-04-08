@@ -560,8 +560,11 @@ def deploy_config_telnet(host: str, port: int, username: str, password: str, ena
             log_lines.append(msg)
             ctx.log(f"<span style='color:#C9D1D9'>{msg}</span>\n")
 
-        Sender.send_telnet(log_fn, host, port, username, password, enable_pw, config_text)
-        return "Deployment successful.\n" + "\n".join(log_lines[-5:])
+        ok = Sender.send_telnet(log_fn, host, port, username, password, enable_pw, config_text)
+        tail = "\n".join(log_lines[-5:])
+        if ok is False:
+            return f"Deployment failed (Telnet error).\n{tail}"
+        return f"Deployment successful.\n{tail}"
     except Exception as e:
         return f"Deployment failed: {e}"
 
@@ -576,8 +579,11 @@ def deploy_config_ssh(host: str, port: int, username: str, password: str, enable
             log_lines.append(msg)
             ctx.log(f"<span style='color:#C9D1D9'>{msg}</span>\n")
 
-        Sender.send_ssh(log_fn, host, port, username, password, enable_pw, config_text)
-        return "Deployment successful.\n" + "\n".join(log_lines[-5:])
+        ok = Sender.send_ssh(log_fn, host, port, username, password, enable_pw, config_text)
+        tail = "\n".join(log_lines[-5:])
+        if ok is False:
+            return f"Deployment failed (SSH error).\n{tail}"
+        return f"Deployment successful.\n{tail}"
     except Exception as e:
         return f"Deployment failed: {e}"
 
@@ -602,16 +608,19 @@ def deploy_to_device(device_name: str, config_text: str) -> str:
             ctx.log(f"<span style='color:#C9D1D9'>{msg}</span>\n")
 
         if info.get("protocol") == "ssh":
-            Sender.send_ssh(
+            ok = Sender.send_ssh(
                 log_fn, info["host"], info["port"],
                 info["username"], info["password"], info["enable_password"], config_text,
             )
         else:
-            Sender.send_telnet(
+            ok = Sender.send_telnet(
                 log_fn, info["host"], info["port"],
                 info["username"], info["password"], info["enable_password"], config_text,
             )
-        return "Deployment successful.\n" + "\n".join(log_lines[-8:])
+        tail = "\n".join(log_lines[-8:])
+        if ok is False:
+            return f"Deployment failed.\n{tail}"
+        return f"Deployment successful.\n{tail}"
     except Exception as e:
         return f"Deployment failed: {e}"
 

@@ -224,18 +224,6 @@ class GuidedSetupWizard(QDialog):
         """Return ALL connected_links entries whose remote_role is one of *roles*."""
         return [link for link in self.connected_links if link.get("remote_role") in roles]
 
-    def _show_suggestion_banner(self, parent, text: str) -> QLabel:
-        """Create a themed suggestion banner with a green left-border."""
-        t = self.THEME
-        lbl = QLabel(f"\U0001f517 {text}", parent)
-        lbl.setWordWrap(True)
-        lbl.setStyleSheet(
-            f"background-color: {t['card']}; color: #3FB950; "
-            f"border-left: 3px solid #3FB950; "
-            f"padding: 6px 10px; border-radius: 4px; font-size: 11px;"
-        )
-        return lbl
-
     def _apply_dark_theme(self):
         t = self.THEME
         self.setStyleSheet(f"""
