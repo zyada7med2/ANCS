@@ -9,6 +9,7 @@ class DeviceModel:
         self.name = name
         self.templates: dict[str, str] = {}
         self.snapshots: list[dict[str, str]] = []
+        self.state: dict = {}  # Structured network state from live sync (VLANs, IPs, etc.)
 
     def get_template_names(self):
         return list(self.templates.keys())

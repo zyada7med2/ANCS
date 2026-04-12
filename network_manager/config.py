@@ -230,6 +230,18 @@ try:
     )
     """)
 
+    # Dedicated table for global configuration backups / snapshots
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS snapshots (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_name TEXT NOT NULL,
+        config_text TEXT NOT NULL,
+        project_id TEXT,
+        is_blank INTEGER DEFAULT 0,
+        timestamp TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
     # Indexes for performance on common lookups / filters
     cur.execute("CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip)")

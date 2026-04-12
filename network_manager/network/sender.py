@@ -51,8 +51,8 @@ class Sender:
                     blocks.append((current_title, "\n".join(current_block)))
                     current_block = []
 
-                # Match colon, dash, or em-dash
-                m = re.search(r"BLOCK\s+\d+[:\-—]\s*(.+)", stripped)
+                # Match colon, dash, or em-dash (with optional surrounding whitespace)
+                m = re.search(r"BLOCK\s+\d+\s*[:\-\u2014]\s*(.+)", stripped)
                 current_title = m.group(1).strip() if m else "Configuration Block"
                 continue
 

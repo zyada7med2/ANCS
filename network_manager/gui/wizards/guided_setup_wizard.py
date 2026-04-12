@@ -213,12 +213,102 @@ class GuidedSetupWizard(QDialog):
         # ── Detect boundary/redistribution router from topology ──
         self._detect_boundary_router()
 
+        # ── Load Pre-populated state from Live Sync if available ──
+        self._load_prepopulated_state()
+
         if not headless:
             if not self.is_boundary_router:
                 self._prompt_routing_mode()
             self._build_steps()
             self._build_layout()
         self._render_step()
+
+    def _load_prepopulated_state(self):
+        """Inject state from the DeviceModel if it was populated by a Live Sync."""
+        state = getattr(self.device_model, "state", {})
+        if not state:
+            return
+
+        # Keep a preserved reference for drift detection and Tips
+        self.live_state_snapshot = state
+        self.is_synched = True
+
+        # 1. Identity
+        if "identity" in state:
+            self.identity_data.update(state["identity"])
+
+        # 2. VLANs
+        if "vlans" in state and state["vlans"]:
+            self.vlans = state["vlans"]
+
+        # 3. DHCP Pools
+        if "dhcp_pools" in state and state["dhcp_pools"]:
+            self.dhcp_pools = state["dhcp_pools"]
+
+        # 4. Routing
+        if "routing" in state:
+            r = state["routing"]
+            self.routing_protocol = r.get("protocol", "none")
+            
+            # If multiple networks were found, we might be a redistribution router
+            for nw in r.get("networks", []):
+                # Avoid duplicates
+                if not any(rn.get("network") == nw for rn in self.rip_networks):
+                    self.rip_networks.append({"network": nw})
+            
+            if self.routing_protocol != "none":
+                self.enable_rip = True
+            
+            # Detect multi-protocol redistribution
+            pulled_protos = r.get("protocols", [])
+            if len(pulled_protos) > 1:
+                 self.is_redistribution_router = True
+                 self.redistribution_protocols = pulled_protos
+            elif len(r.get("networks", [])) > 2:
+                 # Heuristic for complex single-protocol routing
+                 self.is_redistribution_router = True
+
+        # 5. Static Routes
+        if "static_routes" in state:
+            self.static_routes = state["static_routes"]
+
+        # 6. WAN
+        if "wan" in state:
+            w = state["wan"]
+            if w.get("interface"):
+                self.wan_interface = w["interface"]
+                self.wan_ip = w["ip"]
+                self.wan_mask = w["mask"]
+
+    def _get_sync_drift_tips(self, step_name: str) -> str:
+        """Returns a string tip if current wizard state differs from live config."""
+        if not getattr(self, "live_state_snapshot", None):
+            return ""
+        
+        snap = self.live_state_snapshot
+        
+        if step_name == "identity":
+            live_hn = snap.get("identity", {}).get("hostname", "")
+            if live_hn and live_hn != self.identity_data.get("hostname"):
+                return f"Note: The physical device is currently named '{live_hn}'. Changing it here will overwrite its identity."
+        
+        elif step_name == "vlans" or step_name == "svi":
+            live_vlans = snap.get("vlans", [])
+            if live_vlans:
+                return f"Intelligence: {len(live_vlans)} active VLANs were detected on this device. We've pre-filled them below; modifying them will update the live network logic."
+        
+        elif step_name == "routing":
+            live_proto = snap.get("routing", {}).get("protocol", "none")
+            if live_proto != "none" and self.routing_protocol != live_proto:
+                return f"Caution: Live configuration uses {live_proto.upper()}. Switching to {self.routing_protocol.upper()} will disrupt communication with existing neighbor routers."
+            elif live_proto != "none":
+                return f"Sync Info: This device is already running {live_proto.upper()} in your live environment."
+
+        elif step_name == "redistribute":
+            if self.is_redistribution_router:
+                return "Smart Tip: Parallel routing entries were found in the live config. This Redistribution step will ensure they can talk to each other."
+
+        return ""
 
     def _find_link_to(self, *roles: str) -> Optional[Dict]:
         """Return the first connected_links entry whose remote_role is one of *roles*."""
@@ -1130,6 +1220,11 @@ class GuidedSetupWizard(QDialog):
                 on_accept=_use_pw,
             ))
 
+        # Drift Detection Tips for Identity
+        drift_tip = self._get_sync_drift_tips("identity")
+        if drift_tip:
+            layout.addWidget(self._show_suggestion_banner(body, drift_tip))
+
         card = self._card(body, padx=12, pady=10)
         cl = QVBoxLayout(card)
         cl.setContentsMargins(8, 8, 8, 8)
@@ -1171,6 +1266,10 @@ class GuidedSetupWizard(QDialog):
         ctx = self.project_context
         layout = body.layout() or QVBoxLayout(body)
         layout.setSpacing(10)
+
+        drift_tip = self._get_sync_drift_tips("vlans")
+        if drift_tip:
+            layout.addWidget(self._show_suggestion_banner(body, drift_tip))
         if ctx.get("vlans") and not self.vlans:
             def _use_ctx_vlans():
                 self.vlans = [{"id": v["id"], "name": v["name"], "ports": ""} for v in ctx["vlans"]]
@@ -2039,6 +2138,10 @@ class GuidedSetupWizard(QDialog):
         ctx = self.project_context
         layout = body.layout() or QVBoxLayout(body)
         layout.setSpacing(10)
+
+        drift_tip = self._get_sync_drift_tips("routing")
+        if drift_tip:
+            layout.addWidget(self._show_suggestion_banner(body, drift_tip))
         layout.addWidget(self._help_link(body, "Routing Protocol"))
 
         # ── Check for redistribution context & warnings ──────────────────

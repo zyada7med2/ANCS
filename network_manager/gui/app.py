@@ -1028,47 +1028,60 @@ class App(QMainWindow):
             if self._status_overlay is None:
                 self._status_overlay = QLabel(self)
                 self._status_overlay.setStyleSheet("""
-                    background-color: rgba(37, 99, 235, 200);
+                    background-color: rgba(13, 17, 23, 180);
                     color: #FFFFFF;
-                    border-radius: 8px;
-                    padding: 8px 18px;
-                    font-size: 13px;
-                    font-weight: 600;
+                    border: 1px solid rgba(255, 255, 255, 0.1);
+                    border-radius: 20px;
+                    padding: 10px 24px;
+                    font-size: 14px;
+                    font-weight: 500;
                 """)
                 self._status_overlay.setAlignment(Qt.AlignCenter)
                 self._status_overlay_effect = QGraphicsOpacityEffect(self._status_overlay)
                 self._status_overlay.setGraphicsEffect(self._status_overlay_effect)
 
             overlay = self._status_overlay
-            overlay.setText(text)
+            # Add a context icon to the text
+            icon_emoji = "☁️ " if "backup" in text.lower() else ("✅ " if "success" in text.lower() or "complete" in text.lower() else "ℹ️ ")
+            overlay.setText(icon_emoji + text)
             overlay.adjustSize()
+            
             # Position at bottom-center
             x = (self.width() - overlay.width()) // 2
-            y = self.height() - overlay.height() - 50
-            overlay.move(x, y)
+            start_y = self.height() - 20
+            end_y = self.height() - overlay.height() - 60
+            overlay.move(x, end_y)
             overlay.show()
             overlay.raise_()
 
-            # Fade in
+            # Slide + Fade Animation
+            slide = QPropertyAnimation(overlay, b"pos")
+            slide.setDuration(400)
+            slide.setStartValue(QPoint(x, start_y))
+            slide.setEndValue(QPoint(x, end_y))
+            slide.setEasingCurve(QEasingCurve.OutCubic)
+
             fade_in = QPropertyAnimation(self._status_overlay_effect, b"opacity")
-            fade_in.setDuration(250)
+            fade_in.setDuration(400)
             fade_in.setStartValue(0.0)
             fade_in.setEndValue(1.0)
-            fade_in.setEasingCurve(QEasingCurve.OutCubic)
-
+            
             if timeout_ms <= 0:
-                timeout_ms = 3000
+                timeout_ms = 3500
 
-            # Fade out after timeout
             fade_out = QPropertyAnimation(self._status_overlay_effect, b"opacity")
-            fade_out.setDuration(400)
+            fade_out.setDuration(600)
             fade_out.setStartValue(1.0)
             fade_out.setEndValue(0.0)
             fade_out.setEasingCurve(QEasingCurve.InCubic)
 
             self._toast_seq = QSequentialAnimationGroup()
-            self._toast_seq.addAnimation(fade_in)
-            self._toast_seq.addPause(max(timeout_ms - 650, 500))
+            self._toast_para = QParallelAnimationGroup()
+            self._toast_para.addAnimation(slide)
+            self._toast_para.addAnimation(fade_in)
+            
+            self._toast_seq.addAnimation(self._toast_para)
+            self._toast_seq.addPause(max(timeout_ms - 1000, 1000))
             self._toast_seq.addAnimation(fade_out)
             self._toast_seq.finished.connect(lambda: overlay.hide())
             self._toast_seq.start()
@@ -1503,6 +1516,38 @@ class App(QMainWindow):
         left_layout.addWidget(left_sep_top)
 
         # Action buttons
+        btn_sync = QPushButton("Project Setup")
+        btn_sync.setStyleSheet("""
+            QPushButton {
+                background-color: #6E40C9;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #8957E5; }
+        """)
+        btn_sync.setFixedHeight(36)
+        btn_sync.clicked.connect(self.run_project_sync)
+        left_layout.addWidget(btn_sync)
+
+        btn_backup = QPushButton("Backup Fleet")
+        btn_backup.setStyleSheet("""
+            QPushButton {
+                background-color: #D29922;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #E3B341; }
+        """)
+        btn_backup.setFixedHeight(36)
+        btn_backup.clicked.connect(self.run_global_backup)
+        left_layout.addWidget(btn_backup)
+
         btn_guided = QPushButton("Guided Setup")
         btn_guided.setStyleSheet("""
             QPushButton {
@@ -3893,7 +3938,87 @@ class App(QMainWindow):
         dlg.exec()
         return choice["value"]
 
-    # ── Topology / Rollback / Monitor / Terminal ────────────────────────
+    # ── Project Setup / Fleet Backup / Topology ────────────────────────
+
+    def run_project_sync(self):
+        try:
+            from network_manager.gui.sync_workflows import ProjectSyncDialog
+            dlg = ProjectSyncDialog(self, self.devices)
+            
+            # Connect the dialog's log signal to our main log method
+            def _log_relay(msg):
+                self.log(f"[Sync] {msg}")
+            dlg.signals.log.connect(_log_relay)
+            
+            dlg.exec()
+            # If the user successfully pulled live config, result_chosen = 'pull'
+            if dlg.result_chosen == 'pull':
+                extracted_str = ", ".join(getattr(dlg, "discovered_hostnames", []))
+                if extracted_str:
+                    msg = f"Live configurations pulled and populated into devices:\n\n{extracted_str}\n\nYou can now use Guided Setup or Bulk Deploy effectively."
+                else:
+                    msg = "No configured devices were found (all returned blank factory states)."
+                self.refresh_devices_tree()
+                QMessageBox.information(self, "Project Setup Complete", msg)
+            elif dlg.result_chosen == 'fresh':
+                self.guided_setup()
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open Project Setup: {e}")
+
+    def run_global_backup(self):
+        try:
+            from network_manager.ui_toast import BackupToast
+            # We will use a separate Toast overlay, but for now we'll create a top-level overlay
+            from network_manager.gui.sync_workflows import _run_threaded, BackupWorkerSignals
+            from network_manager.network.puller import ConfigPuller
+            import concurrent.futures
+
+            nodes = [d for d in self.devices if d[2].get('console_host')]
+            if not nodes:
+                self._show_status_toast("No devices found for backup.", error=True)
+                return
+
+            self._show_status_toast(f"Starting background backup of {len(nodes)} devices...")
+
+            signals = BackupWorkerSignals()
+            
+            def backup_task():
+                results = {}
+                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                    futures = {}
+                    for n, model, meta in nodes:
+                        h = meta.get('console_host', 'localhost')
+                        p = int(meta.get('console_port', 23))
+                        futures[executor.submit(ConfigPuller.pull_sync, h, p, "", "", "")] = n
+                    for f in concurrent.futures.as_completed(futures):
+                        name = futures[f]
+                        try:
+                            res = f.result()
+                            if res and not res.get("is_blank"):
+                                results[name] = res["config"]
+                        except Exception:
+                            pass
+                
+                # Save to DB
+                if results:
+                    with db_lock:
+                        for device_name, cfg in results.items():
+                            cur.execute(
+                                "INSERT INTO snapshots (device_name, config_text, project_id, timestamp) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
+                                (device_name, cfg, getattr(self, "gns3_project_id", "default"))
+                            )
+                        conn.commit()
+                
+                signals.finished.emit()
+
+            def done():
+                self._show_status_toast("Backup Fleet completed successfully!")
+
+            signals.finished.connect(done)
+            _run_threaded(backup_task)
+            
+        except Exception as e:
+            self._show_status_toast(f"Backup failed: {e}", error=True)
 
     def open_topology(self):
         project_id = getattr(self, "gns3_project_id", None)
