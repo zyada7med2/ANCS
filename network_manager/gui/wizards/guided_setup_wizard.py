@@ -194,12 +194,15 @@ class GuidedSetupWizard(QDialog):
         self.routing_protocol: str          = "rip"      # "rip"|"ospf"|"eigrp"|"none"
         self.is_redistribution_router: bool = False
         self.redistribution_protocols: List[str] = []
+        self.is_boundary_router: bool = False
+        self.transit_links: List[Dict] = []
         self.summary_box:   Optional[QTextEdit] = None
         self.connected_links: List[Dict] = connected_links or []
 
         # ── per-step UI state (reset on each render) ──
         self.vlan_row_entries:    List = []
         self.routing_row_entries: List = []
+        self.transit_row_entries: List = []
         self.dhcp_check_vars:     List = []
         self.acl_scenario_vars:   List = []
         self.extra_route_rows:    List = []
@@ -207,8 +210,12 @@ class GuidedSetupWizard(QDialog):
         self.current_step = 0
         self.steps: List[Step] = []
 
+        # ── Detect boundary/redistribution router from topology ──
+        self._detect_boundary_router()
+
         if not headless:
-            self._prompt_routing_mode()
+            if not self.is_boundary_router:
+                self._prompt_routing_mode()
             self._build_steps()
             self._build_layout()
         self._render_step()
@@ -223,6 +230,19 @@ class GuidedSetupWizard(QDialog):
     def _find_all_links_to(self, *roles: str) -> List[Dict]:
         """Return ALL connected_links entries whose remote_role is one of *roles*."""
         return [link for link in self.connected_links if link.get("remote_role") in roles]
+
+    def _detect_boundary_router(self):
+        """Check if this router is a boundary/redistribution point with no switches."""
+        ctx = self.project_context
+        if (self.device_role == "router"
+                and ctx.get("redistribution_router") == self.device_name
+                and self.connected_links
+                and all(l.get("remote_role") == "router"
+                        for l in self.connected_links)):
+            self.is_boundary_router = True
+            self.is_redistribution_router = True
+            self.redistribution_protocols = ctx.get("redistribution_protocols", [])
+            self.routing_mode = "device"
 
     def _apply_dark_theme(self):
         t = self.THEME
@@ -409,16 +429,56 @@ class GuidedSetupWizard(QDialog):
             })
         return pools
 
-    def _auto_routing_from_vlans(self, scheme: str = "192.168") -> List[Dict]:
+    def _auto_routing_from_vlans(self) -> List[Dict]:
+        scheme = self._pick_scheme()
         return [
             {
                 "vlan": v.get("id", "10"),
                 "name": v.get("name", f"VLAN{v.get('id','10')}"),
-                "ip":   f"{scheme}.{v.get('id','10')}.1",
+                "ip":   self._next_free_gateway(scheme, self._pick_vlan_base(v.get("id", "10"))),
                 "mask": "255.255.255.0",
             }
             for v in self.vlans
         ]
+
+    def _pick_scheme(self) -> str:
+        """Return the same first-two-octet scheme used by other devices (or 192.168 default)."""
+        ctx = self.project_context
+        existing = ctx.get("ip_scheme", "")
+        return existing if existing else "192.168"
+
+    def _pick_vlan_base(self, vid_hint: str = "10") -> str:
+        """Pick a third octet that doesn't collide with any existing subnet.
+
+        Same scheme (e.g. 192.168), but offset the third octet so each
+        routing domain gets its own address block:
+          Domain 1: 192.168.10.x, 192.168.20.x
+          Domain 2: 192.168.110.x, 192.168.120.x
+          Domain 3: 192.168.210.x, 192.168.220.x  (etc.)
+        """
+        used_ips = self.project_context.get("all_used_ips", set())
+        used_third_octets: set[int] = set()
+        scheme = self._pick_scheme()
+        for ip in used_ips:
+            parts = ip.split(".")
+            if len(parts) == 4 and f"{parts[0]}.{parts[1]}" == scheme:
+                try:
+                    used_third_octets.add(int(parts[2]))
+                except ValueError:
+                    pass
+        base = int(vid_hint)
+        while base in used_third_octets:
+            base += 1
+            if base > 254:
+                break
+        return str(base)
+
+    def _next_free_gateway(self, scheme: str, third_octet: str, host: int = 1) -> str:
+        """Build a gateway IP, bumping host if somehow still taken."""
+        used = self.project_context.get("all_used_ips", set())
+        while f"{scheme}.{third_octet}.{host}" in used:
+            host += 1
+        return f"{scheme}.{third_octet}.{host}"
 
     def _apply_preset(self, key: str):
         dn = self.device_name
@@ -429,6 +489,8 @@ class GuidedSetupWizard(QDialog):
         else:
             a_ports  = "FastEthernet1/1-10"
             a_uplink = "FastEthernet1/0"
+
+        scheme = self._pick_scheme()
 
         if key == "small_office":
             self.identity_data = {"hostname": dn, "domain": "office.local", "enable": "Secret123!"}
@@ -443,21 +505,22 @@ class GuidedSetupWizard(QDialog):
                 _link = self._find_link_to("core", "access")
                 self.router_interface = _link["local_interface"] if _link else (
                     self.known_interfaces[0] if self.known_interfaces else "FastEthernet0/0")
-                # WAN interface — pick the second known interface or use a default
                 wan_candidates = [i for i in self.known_interfaces if i != self.router_interface]
                 self.wan_interface = wan_candidates[0] if wan_candidates else "FastEthernet0/1"
                 self.wan_ip = "10.0.0.2"
                 self.wan_mask = "255.255.255.252"
+                v10 = self._pick_vlan_base("10")
+                v20 = self._pick_vlan_base("20")
                 self.routing_entries = [
-                    {"vlan": "10", "name": "Staff", "ip": "192.168.10.1", "mask": "255.255.255.0"},
-                    {"vlan": "20", "name": "Guest", "ip": "192.168.20.1", "mask": "255.255.255.0"},
+                    {"vlan": v10, "name": "Staff", "ip": self._next_free_gateway(scheme, v10), "mask": "255.255.255.0"},
+                    {"vlan": v20, "name": "Guest", "ip": self._next_free_gateway(scheme, v20), "mask": "255.255.255.0"},
                 ]
                 self.dhcp_pools   = self._auto_dhcp_from_routing()
                 self.static_routes = [{"network": "0.0.0.0", "mask": "0.0.0.0",
                                         "next-hop": "10.0.0.1", "description": "Default route to ISP"}]
                 self.acl_rules = [
-                    {"acl #": "101", "action": "deny",   "source": "192.168.20.0",
-                     "wildcard": "0.0.0.255", "destination": "192.168.10.0",
+                    {"acl #": "101", "action": "deny",   "source": f"{scheme}.{v20}.0",
+                     "wildcard": "0.0.0.255", "destination": f"{scheme}.{v10}.0",
                      "destination_wildcard": "0.0.0.255",
                      "remark": "Block Guest from reaching Staff"},
                     {"acl #": "101", "action": "permit", "source": "any",
@@ -465,8 +528,9 @@ class GuidedSetupWizard(QDialog):
                 ]
             elif self.device_role == "core" and self.routing_mode == "device":
                 self.routing_entries = self._auto_routing_from_vlans()
+                v10 = self.routing_entries[0]["vlan"] if self.routing_entries else "10"
                 self.acl_rules = [
-                    {"acl #": "10", "action": "permit", "source": "192.168.10.0",
+                    {"acl #": "10", "action": "permit", "source": f"{scheme}.{v10}.0",
                      "wildcard": "0.0.0.255", "remark": "Allow Staff"},
                 ]
             if self.device_role == "core":
@@ -501,17 +565,20 @@ class GuidedSetupWizard(QDialog):
                 self.wan_interface = wan_candidates[0] if wan_candidates else "FastEthernet0/1"
                 self.wan_ip = "10.0.0.2"
                 self.wan_mask = "255.255.255.252"
+                v10 = self._pick_vlan_base("10")
+                v20 = self._pick_vlan_base("20")
+                v30 = self._pick_vlan_base("30")
                 self.routing_entries = [
-                    {"vlan": "10", "name": "Students", "ip": "192.168.10.1", "mask": "255.255.255.0"},
-                    {"vlan": "20", "name": "Teachers", "ip": "192.168.20.1", "mask": "255.255.255.0"},
-                    {"vlan": "30", "name": "Servers",  "ip": "192.168.30.1", "mask": "255.255.255.0"},
+                    {"vlan": v10, "name": "Students", "ip": self._next_free_gateway(scheme, v10), "mask": "255.255.255.0"},
+                    {"vlan": v20, "name": "Teachers", "ip": self._next_free_gateway(scheme, v20), "mask": "255.255.255.0"},
+                    {"vlan": v30, "name": "Servers",  "ip": self._next_free_gateway(scheme, v30), "mask": "255.255.255.0"},
                 ]
                 self.dhcp_pools   = self._auto_dhcp_from_routing()
                 self.static_routes = [{"network": "0.0.0.0", "mask": "0.0.0.0",
                                         "next-hop": "10.0.0.1", "description": "Default route to ISP"}]
                 self.acl_rules = [
-                    {"acl #": "101", "action": "deny",   "source": "192.168.10.0",
-                     "wildcard": "0.0.0.255", "destination": "192.168.30.0",
+                    {"acl #": "101", "action": "deny",   "source": f"{scheme}.{v10}.0",
+                     "wildcard": "0.0.0.255", "destination": f"{scheme}.{v30}.0",
                      "destination_wildcard": "0.0.0.255",
                      "remark": "Block Students from Servers"},
                     {"acl #": "101", "action": "permit", "source": "any",
@@ -519,8 +586,9 @@ class GuidedSetupWizard(QDialog):
                 ]
             elif self.device_role == "core" and self.routing_mode == "device":
                 self.routing_entries = self._auto_routing_from_vlans()
+                v20 = self.routing_entries[1]["vlan"] if len(self.routing_entries) > 1 else "20"
                 self.acl_rules = [
-                    {"acl #": "10", "action": "permit", "source": "192.168.20.0",
+                    {"acl #": "10", "action": "permit", "source": f"{scheme}.{v20}.0",
                      "wildcard": "0.0.0.255", "remark": "Allow Teachers"},
                 ]
             if self.device_role == "core":
@@ -548,8 +616,9 @@ class GuidedSetupWizard(QDialog):
                 self.wan_interface = wan_candidates[0] if wan_candidates else "FastEthernet0/1"
                 self.wan_ip = "10.0.0.2"
                 self.wan_mask = "255.255.255.252"
-                self.routing_entries  = [{"vlan": "10", "name": "Default",
-                                           "ip": "192.168.10.1", "mask": "255.255.255.0"}]
+                v10 = self._pick_vlan_base("10")
+                self.routing_entries  = [{"vlan": v10, "name": "Default",
+                                           "ip": self._next_free_gateway(scheme, v10), "mask": "255.255.255.0"}]
                 self.dhcp_pools = self._auto_dhcp_from_routing()
             elif self.device_role == "core" and self.routing_mode == "device":
                 self.routing_entries = self._auto_routing_from_vlans()
@@ -703,7 +772,22 @@ class GuidedSetupWizard(QDialog):
             ))
 
         if self.device_role == "router":
-            if self.routing_mode == "device":
+            if self.is_boundary_router:
+                self.steps += [
+                    Step("Transit Links",
+                         "Point-to-point links to neighbouring routers.",
+                         GuidedSetupWizard._build_step_transit_links,
+                         GuidedSetupWizard._validate_transit_links),
+                    Step("Default Route",
+                         "One checkbox to add internet access.",
+                         GuidedSetupWizard._build_step_static_routes,
+                         GuidedSetupWizard._validate_static_routes),
+                    Step("Routing Protocol",
+                         "Choose how this router shares routes with neighbours.",
+                         GuidedSetupWizard._build_step_routing_protocol,
+                         GuidedSetupWizard._validate_routing_protocol),
+                ]
+            elif self.routing_mode == "device":
                 self.steps += [
                     Step("Subinterfaces",
                          "Choose the interface and IP scheme — gateways auto-fill.",
@@ -1436,8 +1520,9 @@ class GuidedSetupWizard(QDialog):
         layout.setSpacing(10)
         layout.addWidget(self._help_link(body, "Subinterface"))
         if ctx.get("routing_entries") and not self.routing_entries:
-            self.routing_entries = list(ctx["routing_entries"])
-            self.vlans = [{"id": r["vlan"], "name": r["name"], "ports": ""} for r in self.routing_entries]
+            if ctx.get("routing_device_type") != "router":
+                self.routing_entries = list(ctx["routing_entries"])
+            self.vlans = [{"id": r["vlan"], "name": r["name"], "ports": ""} for r in ctx["routing_entries"]]
         elif ctx.get("vlans") and not self.routing_entries and not self.vlans:
             self.vlans = [{"id": v["id"], "name": v["name"], "ports": ""} for v in ctx["vlans"]]
         iface_f = QWidget()
@@ -1482,7 +1567,8 @@ class GuidedSetupWizard(QDialog):
         sfl.setContentsMargins(0, 0, 0, 0)
         sfl.setSpacing(10)
         sfl.addWidget(QLabel("IP scheme (first two octets):"))
-        self.ip_scheme_var = self._entry(body, ctx.get("ip_scheme", "192.168"), 12)
+        default_scheme = ctx.get("ip_scheme", "192.168") if ctx.get("routing_entries") else self._pick_scheme()
+        self.ip_scheme_var = self._entry(body, default_scheme, 12)
         sfl.addWidget(self.ip_scheme_var)
         layout.addWidget(scheme_f)
         layout.addWidget(self._section_hdr(body, [("VLAN ID", 10), ("Name", 18), ("Gateway IP", 18), ("Mask", 16)]))
@@ -1506,7 +1592,11 @@ class GuidedSetupWizard(QDialog):
                 vid = vlan.get("id", "10")
                 vname = vlan.get("name", f"VLAN{vid}")
                 ex_ip = next((r.get("ip", "") for r in self.routing_entries if str(r.get("vlan", "")) == str(vid)), "")
-                auto_ip = ex_ip or f"{scheme}.{vid}.1"
+                if not ex_ip:
+                    third = self._pick_vlan_base(vid)
+                    auto_ip = self._next_free_gateway(scheme, third)
+                else:
+                    auto_ip = ex_ip
                 rf = self._row_box(self.routing_rows_widget, alt=bool(i % 2), padding=6)
                 rfl = QHBoxLayout(rf)
                 rfl.setContentsMargins(8, 6, 8, 6)
@@ -1535,6 +1625,119 @@ class GuidedSetupWizard(QDialog):
                 self.routing_entries.append({"vlan": vid, "name": name_v.text().strip(), "ip": ip, "mask": mask_v.text().strip() or "255.255.255.0"})
         if not self.routing_entries:
             QMessageBox.critical(self, "Required", "Add at least one VLAN / gateway row.")
+            return False
+        return True
+
+    # ════════════════════════ boundary router: transit links ═══════════════════
+    def _build_step_transit_links(self, body):
+        t = self.THEME
+        ctx = self.project_context
+        protocol_map = ctx.get("protocol_map", {})
+        layout = body.layout() or QVBoxLayout(body)
+        layout.setSpacing(10)
+
+        banner = self._card(body, padx=14, pady=12)
+        bl = QVBoxLayout(banner)
+        blbl = QLabel(
+            "This router was detected as a boundary redistribution point — "
+            "it connects only to other routers. Configuring point-to-point "
+            "transit links instead of VLANs/subinterfaces."
+        )
+        blbl.setWordWrap(True)
+        blbl.setStyleSheet(f"color: {t['accent']}; font-weight: bold; font-size: 12px;")
+        bl.addWidget(blbl)
+        layout.addWidget(banner)
+
+        layout.addWidget(self._lbl(
+            body,
+            "Each link below corresponds to a physical cable detected in the "
+            "GNS3 topology.  /30 addresses are auto-generated for point-to-point use.",
+            muted=True,
+        ))
+
+        layout.addWidget(self._section_hdr(body, [
+            ("Interface", 16), ("Peer Router", 14), ("Protocol", 10),
+            ("Local IP", 16), ("Mask", 14),
+        ]))
+
+        self.transit_row_entries = []
+        router_links = self._find_all_links_to("router")
+
+        scheme = "10.0"
+        used_ips = ctx.get("all_used_ips", set())
+        used_third = set()
+        for ip in used_ips:
+            parts = ip.split(".")
+            if len(parts) == 4 and f"{parts[0]}.{parts[1]}" == scheme:
+                try:
+                    used_third.add(int(parts[2]))
+                except ValueError:
+                    pass
+
+        for i, link in enumerate(router_links):
+            local_if = link.get("local_interface", "")
+            remote_dev = link.get("remote_device", "?")
+            proto = protocol_map.get(remote_dev, "none")
+
+            third = i * 4
+            while third in used_third:
+                third += 4
+            used_third.add(third)
+            auto_ip = f"{scheme}.{third}.1"
+            auto_mask = "255.255.255.252"
+
+            rf = self._row_box(body, alt=bool(i % 2), padding=8)
+            rfl = QHBoxLayout(rf)
+            rfl.setContentsMargins(8, 6, 8, 6)
+            rfl.setSpacing(8)
+
+            iface_v = self._entry(rf, local_if, 16)
+            iface_v.setReadOnly(True)
+            iface_v.setStyleSheet(
+                iface_v.styleSheet() + f"color: {t['muted']}; font-style: italic;"
+            )
+
+            peer_lbl = QLabel(remote_dev)
+            peer_lbl.setFixedWidth(120)
+            peer_lbl.setStyleSheet(f"color: {t['text']}; font-weight: 600;")
+
+            proto_lbl = QLabel(proto.upper() if proto != "none" else "—")
+            proto_lbl.setFixedWidth(80)
+            color = {"ospf": "#3FB950", "eigrp": "#58A6FF", "rip": "#FFA657"}.get(proto, t["muted"])
+            proto_lbl.setStyleSheet(f"color: {color}; font-weight: bold;")
+
+            ip_v = self._entry(rf, auto_ip, 16)
+            mask_v = self._entry(rf, auto_mask, 14)
+
+            rfl.addWidget(iface_v)
+            rfl.addWidget(peer_lbl)
+            rfl.addWidget(proto_lbl)
+            rfl.addWidget(ip_v)
+            rfl.addWidget(mask_v)
+
+            self.transit_row_entries.append((iface_v, remote_dev, proto, ip_v, mask_v))
+            layout.addWidget(rf)
+
+        if not router_links:
+            layout.addWidget(self._lbl(
+                body, "No router-to-router links detected. Check GNS3 cables.", muted=True))
+
+    def _validate_transit_links(self) -> bool:
+        self.transit_links = []
+        for iface_v, remote_dev, proto, ip_v, mask_v in self.transit_row_entries:
+            ip = ip_v.text().strip()
+            mask = mask_v.text().strip() or "255.255.255.252"
+            iface = iface_v.text().strip()
+            if iface and ip:
+                self.transit_links.append({
+                    "local_interface": iface,
+                    "remote_device": remote_dev,
+                    "protocol": proto,
+                    "ip": ip,
+                    "mask": mask,
+                })
+        if not self.transit_links:
+            QMessageBox.critical(self, "Required", "At least one transit link is needed.")
             return False
         return True
 
@@ -1882,7 +2085,40 @@ class GuidedSetupWizard(QDialog):
                 f"Do NOT configure redistribution on this router to avoid routing loops.",
             ))
 
-        # ── Protocol selection ───────────────────────────────────────────
+        # ── Boundary router: no protocol choice, show per-link summary ─────
+        if self.is_boundary_router and len(self.redistribution_protocols) >= 2:
+            proto_a, proto_b = self.redistribution_protocols[0], self.redistribution_protocols[1]
+
+            summary_card = self._card(body, padx=14, pady=12)
+            scl = QVBoxLayout(summary_card)
+            scl.addWidget(self._lbl(body, "Per-interface protocol assignment:", bold=True))
+
+            for link in self.transit_links:
+                peer = link.get("remote_device", "?")
+                proto = link.get("protocol", "none").upper()
+                iface = link.get("local_interface", "?")
+                ip = link.get("ip", "?")
+                color = {"OSPF": "#3FB950", "EIGRP": "#58A6FF", "RIP": "#FFA657"}.get(proto, t["muted"])
+                row_lbl = QLabel(f"  {iface}  ({ip})  \u2192  {peer}  [{proto}]")
+                row_lbl.setStyleSheet(f"color: {color}; font-size: 12px; font-weight: 600;")
+                scl.addWidget(row_lbl)
+
+            layout.addWidget(summary_card)
+
+            redist_card = self._card(body, padx=12, pady=10)
+            rcl = QVBoxLayout(redist_card)
+            rcl.addWidget(self._lbl(body, "\U0001f504  Auto-Redistribution", bold=True))
+            rcl.addWidget(self._lbl(
+                body,
+                f"{proto_a.upper()} networks will only be advertised on the {proto_a.upper()} side, "
+                f"and {proto_b.upper()} networks only on the {proto_b.upper()} side. "
+                f"Mutual redistribution is configured automatically.",
+                muted=True,
+            ))
+            layout.addWidget(redist_card)
+            return
+
+        # ── Normal protocol selection ─────────────────────────────────────
         layout.addWidget(self._lbl(body, "Select a routing protocol:", bold=True))
 
         PROTOCOL_OPTIONS = [
@@ -1920,7 +2156,7 @@ class GuidedSetupWizard(QDialog):
             cl.addWidget(tip_lbl)
             layout.addWidget(card)
 
-        # ── Redistribution info card (if this router is the redistribution router) ──
+        # ── Redistribution info card (non-boundary redistribution router) ─
         if self.is_redistribution_router and len(self.redistribution_protocols) >= 2:
             redist_card = self._card(body, padx=12, pady=10)
             rcl = QVBoxLayout(redist_card)
@@ -2121,11 +2357,12 @@ class GuidedSetupWizard(QDialog):
             "! Wait for the device prompt before the next block.\n"
             "! =====================================================\n\n"
         )
+        routing_title = "BLOCK 4 — Transit Links" if self.is_boundary_router else "BLOCK 4 — Routing / Subinterfaces"
         blocks = [
             ("BLOCK 1 — Identity & Security",     self._render_identity_block()),
             ("BLOCK 2 — VLANs & Port Assignment",  self._render_vlan_block()),
             ("BLOCK 3 — Uplinks & Trunks",          self._render_uplink_block()),
-            ("BLOCK 4 — Routing / Subinterfaces",   self._render_routing_block()),
+            (routing_title,                          self._render_routing_block()),
             ("BLOCK 5 — WAN Interface",             self._render_wan_block()),
             ("BLOCK 6 — Static Routes",             self._render_static_routes_block()),
             ("BLOCK 7 — Routing Protocol",           self._render_routing_protocol_block()),
@@ -2287,6 +2524,8 @@ class GuidedSetupWizard(QDialog):
         return "\n".join(lines)
 
     def _render_routing_block(self) -> str:
+        if self.is_boundary_router:
+            return self._render_transit_links_block()
         if self.routing_mode != "device" or not self.routing_entries:
             return ""
         if self.device_role == "router":
@@ -2311,6 +2550,21 @@ class GuidedSetupWizard(QDialog):
             vlan, ip, mask = e.get("vlan"), e.get("ip"), e.get("mask", "255.255.255.0")
             if vlan and ip:
                 lines += [f"interface {self.router_interface}.{vlan}", f" encapsulation dot1Q {vlan}", f" ip address {ip} {mask}", " no shutdown", "exit"]
+        lines += ["!", "end"]
+        return "\n".join(lines)
+
+    def _render_transit_links_block(self) -> str:
+        if not self.transit_links:
+            return ""
+        lines = ["configure terminal"]
+        for link in self.transit_links:
+            iface = link["local_interface"]
+            ip, mask = link["ip"], link["mask"]
+            lines.append(f"interface {iface}")
+            if iface.lower().startswith("fastethernet") or iface.lower().startswith("ethernet"):
+                lines.append(" speed 100")
+                lines.append(" duplex full")
+            lines += [f" ip address {ip} {mask}", " no shutdown", "exit"]
         lines += ["!", "end"]
         return "\n".join(lines)
 
@@ -2365,6 +2619,22 @@ class GuidedSetupWizard(QDialog):
                 networks.append((ip, mask))
         return networks
 
+    def _collect_boundary_networks_by_protocol(self) -> dict:
+        """For boundary routers: group transit-link networks by protocol.
+
+        Returns {"ospf": [(ip, mask), ...], "eigrp": [(ip, mask), ...]}
+        so each IGP only advertises the interfaces facing its own domain.
+        """
+        by_proto: dict[str, list] = {}
+        for link in self.transit_links:
+            proto = link.get("protocol", "none")
+            if proto == "none":
+                continue
+            ip, mask = link.get("ip", ""), link.get("mask", "255.255.255.252")
+            if ip and mask:
+                by_proto.setdefault(proto, []).append((ip, mask))
+        return by_proto
+
     def _has_default_route(self) -> bool:
         """Check whether a default static route (0.0.0.0/0) is configured."""
         return any(
@@ -2380,24 +2650,36 @@ class GuidedSetupWizard(QDialog):
         proto = self.routing_protocol
         if proto == "none" and not self.is_redistribution_router:
             return ""
-        # Backward compat: if protocol is none but enable_rip was True (legacy)
         if proto == "none" and self.enable_rip:
             proto = "rip"
 
+        lines = ["configure terminal"]
+
+        # ── Boundary redistribution router: per-interface protocol split ──
+        if self.is_boundary_router and len(self.redistribution_protocols) >= 2:
+            by_proto = self._collect_boundary_networks_by_protocol()
+            if not by_proto:
+                return ""
+            proto_a = self.redistribution_protocols[0]
+            proto_b = self.redistribution_protocols[1]
+            nets_a = by_proto.get(proto_a, [])
+            nets_b = by_proto.get(proto_b, [])
+            lines += self._render_single_protocol_block(proto_a, nets_a, redistribute_from=proto_b)
+            lines.append("!")
+            lines += self._render_single_protocol_block(proto_b, nets_b, redistribute_from=proto_a)
+            lines += ["!", "end"]
+            return "\n".join(lines)
+
+        # ── Normal redistribution router (has switches too) ───────────────
         networks = self._collect_protocol_networks()
         if not networks and not self.is_redistribution_router:
             return ""
 
-        lines = ["configure terminal"]
-
-        # ── Redistribution router: generate BOTH protocols ────────────────
         if self.is_redistribution_router and len(self.redistribution_protocols) >= 2:
             proto_a = self.redistribution_protocols[0]
             proto_b = self.redistribution_protocols[1]
-            # Generate protocol A block with redistribution of B
             lines += self._render_single_protocol_block(proto_a, networks, redistribute_from=proto_b)
             lines.append("!")
-            # Generate protocol B block with redistribution of A
             lines += self._render_single_protocol_block(proto_b, networks, redistribute_from=proto_a)
         else:
             # ── Single protocol ───────────────────────────────────────────
@@ -2498,7 +2780,7 @@ class GuidedSetupWizard(QDialog):
         return ""
 
     def _render_dhcp_block(self) -> str:
-        if self.device_role == "access" or not self.dhcp_pools:
+        if self.is_boundary_router or self.device_role == "access" or not self.dhcp_pools:
             return ""
         lines = ["configure terminal"]
         for pool in self.dhcp_pools:

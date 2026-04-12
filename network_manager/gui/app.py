@@ -3357,6 +3357,20 @@ class App(QMainWindow):
     # ── Cross-device context extraction ─────────────────────────────────
 
     def _build_project_context(self, exclude_name: str, network_id: str = "") -> dict:
+        ip_pat = re.compile(r"ip address\s+((?:\d{1,3}\.){3}\d{1,3})", re.IGNORECASE)
+        all_used_ips: set[str] = set()
+        used_schemes: set[str] = set()
+        for _dn, _mdl, _mt in self.devices:
+            if _dn == exclude_name:
+                continue
+            for tmpl_text in _mdl.templates.values():
+                for ip in ip_pat.findall(tmpl_text):
+                    all_used_ips.add(ip)
+                    parts = ip.split(".")
+                    if len(parts) == 4:
+                        used_schemes.add(f"{parts[0]}.{parts[1]}")
+        all_used_ips.discard("0.0.0.0")
+
         ctx = {
             "vlans": [], "routing_entries": [], "dhcp_pools": [], "acl_rules": [],
             "static_routes": [], "isp_gateway": "", "rip_enabled": False,
@@ -3364,6 +3378,8 @@ class App(QMainWindow):
             "vlan_source": "", "routing_source": "", "dhcp_source_device": "",
             "routing_device": "", "routing_device_type": "",
             "network_id": network_id,
+            "all_used_ips": all_used_ips,
+            "used_schemes": used_schemes,
             # Multi-protocol support
             "protocol_map": {},                  # {device_name: "rip"|"ospf"|"eigrp"|"none"}
             "redistribution_router": "",          # auto-detected redistribution router
@@ -3464,14 +3480,33 @@ class App(QMainWindow):
                     if em:
                         ctx["enable_pw"] = em.group(1)
 
+        # ── Cross-segment protocol scan (redistribution needs global view) ──
+        for dname, model, _meta in self.devices:
+            if dname == exclude_name or dname in ctx["protocol_map"]:
+                continue
+            if not isinstance(model, RouterModel):
+                continue
+            tmpls = model.templates
+            detected_proto = "none"
+            rp_text = tmpls.get("guided_routing_protocol", "") or tmpls.get("guided_rip", "")
+            if rp_text:
+                if re.search(r"router\s+eigrp", rp_text, re.IGNORECASE):
+                    detected_proto = "eigrp"
+                elif re.search(r"router\s+ospf", rp_text, re.IGNORECASE):
+                    detected_proto = "ospf"
+                elif re.search(r"router\s+rip", rp_text, re.IGNORECASE):
+                    detected_proto = "rip"
+            ctx["protocol_map"][dname] = detected_proto
+            if re.search(r"redistribute\s+", rp_text, re.IGNORECASE):
+                ctx["existing_redistribution_router"] = dname
+
         # ── Post-loop: Redistribution auto-detection (subnet-based) ──────
         active_protos = {p for p in ctx["protocol_map"].values() if p != "none"}
         if len(active_protos) > 1:
             ctx["redistribution_needed"] = True
-            # Only attempt detection if no redistribution router is already configured
             if not ctx["existing_redistribution_router"]:
                 redist_info = self._detect_redistribution_router(
-                    ctx["protocol_map"], exclude_name, network_id
+                    ctx["protocol_map"], exclude_name
                 )
                 ctx["redistribution_router"] = redist_info.get("router", "")
                 ctx["redistribution_protocols"] = redist_info.get("protocols", list(active_protos))
@@ -3481,63 +3516,49 @@ class App(QMainWindow):
         return ctx
 
     def _detect_redistribution_router(self, protocol_map: dict,
-                                       exclude_name: str = "", network_id: str = "") -> dict:
+                                       exclude_name: str = "") -> dict:
         """
-        Subnet-based adjacency detection for redistribution.
+        Detect the redistribution candidate using GNS3 cable topology.
 
-        Instead of relying on GNS3 cable links (which miss L2 switches),
-        compare IP subnets across routers.  Two routers sharing a subnet
-        are considered adjacent — just like real routing protocols.
+        A router that connects to neighbors running different routing
+        protocols is the natural redistribution point.  Prefer the device
+        being configured (exclude_name) so the wizard can act on it.
 
-        Returns {"router": "R2", "protocols": ["ospf", "rip"]} or empty.
+        Returns {"router": "R3", "protocols": ["ospf", "rip"]} or empty.
         """
-        import ipaddress as _ip
-
-        # 1. Build subnet map for each router: {router_name: set(network_str)}
-        router_subnets: dict[str, set] = {}
+        # Build GNS3 physical adjacency: router_name -> {neighbor_names}
+        adjacency: dict[str, set[str]] = {}
         router_has_default: dict[str, bool] = {}
+        try:
+            project_id = getattr(self, "gns3_project_id", "")
+            raw_links = self.gns3.get_links(project_id) if project_id else []
+            raw_nodes = self.gns3.get_nodes(project_id) if project_id else []
+        except Exception:
+            raw_links, raw_nodes = [], []
 
+        nid_to_name: dict[str, str] = {}
         for dname, model, _meta in self.devices:
-            if network_id and _meta.get("network_id", "default") != network_id:
+            nid = str(_meta.get("node_id", ""))
+            if nid:
+                nid_to_name[nid] = dname
+            if isinstance(model, RouterModel):
+                adjacency.setdefault(dname, set())
+                sr_text = model.templates.get("guided_static_routes", "")
+                router_has_default[dname] = bool(
+                    re.search(r"ip\s+route\s+0\.0\.0\.0\s+0\.0\.0\.0", sr_text, re.IGNORECASE)
+                )
+
+        for link in raw_links:
+            eps = link.get("nodes", [])
+            if len(eps) < 2:
                 continue
-            if not isinstance(model, RouterModel):
-                continue
-            tmpls = model.templates
-            subnets = set()
+            a_name = nid_to_name.get(str(eps[0].get("node_id", "")), "")
+            b_name = nid_to_name.get(str(eps[1].get("node_id", "")), "")
+            if a_name in adjacency and b_name in adjacency:
+                adjacency[a_name].add(b_name)
+                adjacency[b_name].add(a_name)
 
-            # Parse WAN / routing IPs from guided templates
-            for tkey in ("guided_routing", "guided_wan", "guided_static_routes",
-                         "guided_routing_protocol", "guided_rip"):
-                text = tmpls.get(tkey, "")
-                if not text:
-                    continue
-                for m in re.finditer(r"ip\s+address\s+([\d.]+)\s+([\d.]+)", text, re.IGNORECASE):
-                    try:
-                        iface = _ip.ip_interface(f"{m.group(1)}/{m.group(2)}")
-                        subnets.add(str(iface.network))
-                    except Exception:
-                        pass
-
-            router_subnets[dname] = subnets
-
-            # Check for default route (ISP edge marker)
-            sr_text = tmpls.get("guided_static_routes", "")
-            router_has_default[dname] = bool(
-                re.search(r"ip\s+route\s+0\.0\.0\.0\s+0\.0\.0\.0", sr_text, re.IGNORECASE)
-            )
-
-        # 2. Build adjacency graph via shared subnets
-        adjacency: dict[str, set] = {r: set() for r in router_subnets}
-        router_names = list(router_subnets.keys())
-        for i, r1 in enumerate(router_names):
-            for r2 in router_names[i + 1:]:
-                if router_subnets[r1] & router_subnets[r2]:  # shared subnet
-                    adjacency[r1].add(r2)
-                    adjacency[r2].add(r1)
-
-        # 3. Find redistribution candidate
-        # Prefer the exclude_name router (the one being configured right now)
-        # because the user is actively setting it up.
+        # Find redistribution candidate — prefer the device being configured
         candidates = [exclude_name] + [r for r in adjacency if r != exclude_name]
         for router in candidates:
             if router not in adjacency:
@@ -3548,7 +3569,6 @@ class App(QMainWindow):
                 if p != "none":
                     neighbor_protos.add(p)
             if len(neighbor_protos) >= 2:
-                # Skip ISP edge routers
                 if router_has_default.get(router, False):
                     continue
                 return {"router": router, "protocols": sorted(neighbor_protos)}
