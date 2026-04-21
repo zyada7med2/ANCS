@@ -2762,6 +2762,16 @@ class App(QMainWindow):
         """)
         key_layout.addWidget(key_label)
         key_layout.addWidget(key_input, 1)
+        
+        btn_launch = QPushButton("Connect Agent")
+        btn_launch.setCursor(Qt.PointingHandCursor)
+        btn_launch.setStyleSheet("""
+            QPushButton { background-color: #238636; border: 1px solid #30363D;
+                border-radius: 6px; color: #FFFFFF; padding: 5px 12px; font-size: 12px; font-weight: bold; }
+            QPushButton:hover { background-color: #2ea043; }
+        """)
+        key_layout.addWidget(btn_launch)
+
         key_widget.setVisible(not bool(saved_key))
         layout.addWidget(key_widget)
         btn_config.clicked.connect(lambda: key_widget.setVisible(not key_widget.isVisible()))
@@ -3003,6 +3013,16 @@ class App(QMainWindow):
             self._copilot_worker.finished_signal.connect(on_finished)
             self._copilot_worker.ready_signal.connect(on_ready)
             self._copilot_worker.start()
+            
+            # Update UI state
+            key_widget.setVisible(False)
+            chat_browser.setHtml("<p style='color:#8b949e'>Connecting to AI agent...</p>")
+            status_lbl.setText("● Initializing...")
+            status_lbl.setStyleSheet("color: #d29922; font-size: 12px;")
+
+        # Wire up manual launch
+        btn_launch.clicked.connect(launch_agent)
+        key_input.returnPressed.connect(launch_agent)
 
         # Cleanup on close
         def on_close():
