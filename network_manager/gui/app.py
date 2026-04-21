@@ -1515,39 +1515,6 @@ class App(QMainWindow):
         left_sep_top.setStyleSheet("color: rgba(86,146,228,45);")
         left_layout.addWidget(left_sep_top)
 
-        # Action buttons
-        btn_sync = QPushButton("Project Setup")
-        btn_sync.setStyleSheet("""
-            QPushButton {
-                background-color: #6E40C9;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #8957E5; }
-        """)
-        btn_sync.setFixedHeight(36)
-        btn_sync.clicked.connect(self.run_project_sync)
-        left_layout.addWidget(btn_sync)
-
-        btn_backup = QPushButton("Backup Fleet")
-        btn_backup.setStyleSheet("""
-            QPushButton {
-                background-color: #D29922;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QPushButton:hover { background-color: #E3B341; }
-        """)
-        btn_backup.setFixedHeight(36)
-        btn_backup.clicked.connect(self.run_global_backup)
-        left_layout.addWidget(btn_backup)
-
         btn_guided = QPushButton("Guided Setup")
         btn_guided.setStyleSheet("""
             QPushButton {
@@ -3029,6 +2996,7 @@ class App(QMainWindow):
                 workspace_resolved=workspace_resolved,
                 gns3_project_id=str(gns3_project_id) if gns3_project_id else "",
                 project_snapshot=project_snapshot,
+                audit_fn=self._write_audit_log,
             )
             self._copilot_worker.terminal_log_signal.connect(on_terminal_log)
             self._copilot_worker.chat_response_signal.connect(on_chat_response)
@@ -4055,61 +4023,6 @@ class App(QMainWindow):
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Failed to open Project Setup: {e}")
 
-    def run_global_backup(self):
-        try:
-            from network_manager.ui_toast import BackupToast
-            # We will use a separate Toast overlay, but for now we'll create a top-level overlay
-            from network_manager.gui.sync_workflows import _run_threaded, BackupWorkerSignals
-            from network_manager.network.puller import ConfigPuller
-            import concurrent.futures
-
-            nodes = [d for d in self.devices if d[2].get('console_host')]
-            if not nodes:
-                self._show_status_toast("No devices found for backup.", error=True)
-                return
-
-            self._show_status_toast(f"Starting background backup of {len(nodes)} devices...")
-
-            signals = BackupWorkerSignals()
-            
-            def backup_task():
-                results = {}
-                with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                    futures = {}
-                    for n, model, meta in nodes:
-                        h = meta.get('console_host', 'localhost')
-                        p = int(meta.get('console_port', 23))
-                        futures[executor.submit(ConfigPuller.pull_sync, h, p, "", "", "")] = n
-                    for f in concurrent.futures.as_completed(futures):
-                        name = futures[f]
-                        try:
-                            res = f.result()
-                            if res and not res.get("is_blank"):
-                                results[name] = res["config"]
-                        except Exception:
-                            pass
-                
-                # Save to DB
-                if results:
-                    with db_lock:
-                        for device_name, cfg in results.items():
-                            cur.execute(
-                                "INSERT INTO snapshots (device_name, config_text, project_id, timestamp) VALUES (?, ?, ?, CURRENT_TIMESTAMP)",
-                                (device_name, cfg, getattr(self, "gns3_project_id", "default"))
-                            )
-                        conn.commit()
-                
-                signals.finished.emit()
-
-            def done():
-                self._show_status_toast("Backup Fleet completed successfully!")
-
-            signals.finished.connect(done)
-            _run_threaded(backup_task)
-            
-        except Exception as e:
-            self._show_status_toast(f"Backup failed: {e}", error=True)
-
     def open_topology(self):
         project_id = getattr(self, "gns3_project_id", None)
         if not project_id:
@@ -4201,13 +4114,6 @@ class App(QMainWindow):
             QMessageBox.information(self, "Deploy All", "No devices in workspace.")
             return
 
-        dlg = ActionConfirmDialog(self, "Deploy All Configurations",
-                                  "Are you sure you want to deploy the generated configurations "
-                                  "to ALL devices in the workspace?\n\nThis will apply changes instantly.",
-                                  "Deploy All")
-        if dlg.exec() != QDialog.Accepted:
-            return
-
 
         def _network(item):
             return item[2].get("network_id", "default")
@@ -4253,60 +4159,12 @@ class App(QMainWindow):
                 continue
             deploy_list.append((name, model, meta, host, port, username, password, enable_pw, "ready"))
 
-        self._show_deploy_progress(deploy_list)
-
-    def _show_deploy_progress(self, deploy_list):
-        dlg = QDialog(self)
-        dlg.setWindowTitle("Deploy All \u2014 Progress")
-        dlg.resize(900, 600)
-        dlg.setStyleSheet(self._dialog_style())
-        layout = QVBoxLayout(dlg)
-
-        summary = QLabel("Deploying configurations in priority order (Router -> Core -> Access).")
-        summary.setStyleSheet("color: #8B949E; font-size: 12px;")
-        layout.addWidget(summary)
-
-        table = QTableWidget(len(deploy_list), 3)
-        table.setHorizontalHeaderLabels(["Device", "Status", "Details"])
-        self._style_table_widget(table)
-        for i, (name, *_, status) in enumerate(deploy_list):
-            table.setItem(i, 0, QTableWidgetItem(name))
-            table.setItem(i, 1, QTableWidgetItem(status))
-            if status == "ready":
-                host = deploy_list[i][3]
-                port = deploy_list[i][4]
-                table.setItem(i, 2, QTableWidgetItem(f"target={host}:{port}"))
-            else:
-                table.setItem(i, 2, QTableWidgetItem(status))
-        layout.addWidget(table)
-
-        btn_close = QPushButton("Close")
-        btn_close.setEnabled(False)
-        btn_close.clicked.connect(dlg.accept)
-        layout.addWidget(btn_close, alignment=Qt.AlignRight)
-        dlg.show()
-
-        def worker():
-            for i, item in enumerate(deploy_list):
-                name, model, meta, host, port, user, pw, enable, status = item
-                if status != "ready":
-                    continue
-                config = model.build_full_config().strip()
-                self._run_on_main(lambda r=i: table.setItem(r, 1, QTableWidgetItem("Deploying...")))
-                try:
-                    ok = Sender.send_telnet(self.log, host, port, user, pw, enable, config)
-                    result = "Success" if ok else "Failed"
-                    detail = f"target={host}:{port}" if ok else "Send failed; check Logs tab"
-                    if ok:
-                        self._write_audit_log(name, "deploy-all", f"host={host}:{port}", config_content=config)
-                except Exception as e:
-                    result = f"Error: {e}"
-                    detail = "Unexpected exception while sending"
-                self._run_on_main(lambda r=i, s=result: table.setItem(r, 1, QTableWidgetItem(s)))
-                self._run_on_main(lambda r=i, d=detail: table.setItem(r, 2, QTableWidgetItem(d)))
-            self._run_on_main(lambda: btn_close.setEnabled(True))
-
-        threading.Thread(target=worker, daemon=True).start()
+        try:
+            from network_manager.gui.parallel_deploy import ParallelDeployDialog
+            dlg = ParallelDeployDialog(self, deploy_list)
+            dlg.exec()
+        except Exception as e:
+            QMessageBox.critical(self, "Parallel Deploy Error", str(e))
 
     # ── Audit log (Natively integrated in Logs Page) ────────────────────
 
@@ -4513,6 +4371,8 @@ class App(QMainWindow):
             self._assign_network_ids()
             self.refresh_device_list()
             self.log(f"Auto-imported {imported} GNS3 node(s) from '{proj_name}'")
+            # Automatically open the Project Setup when new devices are discovered
+            self.run_project_sync()
         self._set_gns3_status("\u2713 Connected", connected=True, project_name=proj_name or "Unknown project")
 
     def gns3_list_projects(self):

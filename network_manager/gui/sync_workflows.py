@@ -60,6 +60,7 @@ class ProjectSyncDialog(QDialog):
         super().__init__(parent)
         self.devices = devices
         self.result_chosen = None # "fresh" or "pull"
+        self.signals = SyncWorkerSignals()
         self.setWindowTitle("Project Configuration Setup")
         self.setMinimumWidth(500)
         self.setStyleSheet(_STYLE)
@@ -144,7 +145,6 @@ class ProjectSyncDialog(QDialog):
         self.pbar.setValue(0)
         self.pbar.show()
         
-        self.signals = SyncWorkerSignals()
         self.signals.progress.connect(self._update_progress)
         self.signals.log.connect(self.status_lbl.setText)
         self.signals.finished.connect(self._on_pull_finished)

@@ -31,6 +31,7 @@ class _AgentContext:
     primary_device_name: str = ""
     allow_raw_deploy: bool = False
     sessions: dict | None = None  # device_name -> (reader, writer); optional pool
+    audit_fn = None  # callable(device_name, action, details, config_snapshot)
 
     @staticmethod
     def log(msg: str):
@@ -564,6 +565,8 @@ def deploy_config_telnet(host: str, port: int, username: str, password: str, ena
         tail = "\n".join(log_lines[-5:])
         if ok is False:
             return f"Deployment failed (Telnet error).\n{tail}"
+        if getattr(ctx, "audit_fn", None):
+            ctx.audit_fn(f"Raw Device ({host})", "Deploy Config (Copilot)", f"Copilot deployed {len(config_text)} characters via raw Telnet call.", config_text)
         return f"Deployment successful.\n{tail}"
     except Exception as e:
         return f"Deployment failed: {e}"
@@ -583,6 +586,8 @@ def deploy_config_ssh(host: str, port: int, username: str, password: str, enable
         tail = "\n".join(log_lines[-5:])
         if ok is False:
             return f"Deployment failed (SSH error).\n{tail}"
+        if getattr(ctx, "audit_fn", None):
+            ctx.audit_fn(f"Raw Device ({host})", "Deploy Config (Copilot)", f"Copilot deployed {len(config_text)} characters via raw SSH call.", config_text)
         return f"Deployment successful.\n{tail}"
     except Exception as e:
         return f"Deployment failed: {e}"
@@ -620,6 +625,8 @@ def deploy_to_device(device_name: str, config_text: str) -> str:
         tail = "\n".join(log_lines[-8:])
         if ok is False:
             return f"Deployment failed.\n{tail}"
+        if getattr(ctx, "audit_fn", None):
+            ctx.audit_fn(device_name, "Deploy Config (Copilot)", f"Copilot deployed {len(config_text)} characters via Telnet.", config_text)
         return f"Deployment successful.\n{tail}"
     except Exception as e:
         return f"Deployment failed: {e}"
@@ -912,7 +919,8 @@ class CopilotWorker(QThread):
                  allow_raw_deploy: bool = False,
                  workspace_resolved: list | None = None,
                  gns3_project_id: str = "",
-                 project_snapshot: str = ""):
+                 project_snapshot: str = "",
+                 audit_fn=None):
         super().__init__()
         self.api_key = api_key
         self.gns3_url = gns3_url
@@ -933,6 +941,7 @@ class CopilotWorker(QThread):
         ctx.allow_raw_deploy = allow_raw_deploy
         ctx.sessions = {}
         ctx.log_fn = lambda msg: self.terminal_log_signal.emit(msg)
+        ctx.audit_fn = audit_fn
 
     def queue_message(self, text: str):
         """Called from the GUI thread to queue a user message."""
