@@ -806,80 +806,89 @@ You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded 
 # ABOUT ANCS
 ANCS is a Python/PySide6 desktop app for managing Cisco network devices. Features:
 - **Device Management**: Router, Switch, Core Switch (router acting as L3 switch)
-- **Guided Setup Wizard**: Step-by-step config generator (Identity → VLANs → Routing → DHCP → ACLs)
+- **Guided Setup Wizard**: Step-by-step config generator (Identity, VLANs, Routing, DHCP, ACLs)
 - **GNS3 Integration**: Auto-import devices from GNS3 via REST API (default http://localhost:3080)
 - **Config Deployment**: Send configs via Telnet or SSH with per-block delays
 - **Subnet Calculator**, **SQLite Database**, **Bulk Deploy**, **Health Monitor**
 
 # ENVIRONMENT
 - Devices run inside **GNS3** (emulator), NOT physical hardware
-- **Older Cisco IOS images** (c3725, c3640, c7200, vIOS) — classic CLI syntax
+- **Older Cisco IOS images** (c3725, c3640, c7200, vIOS) - classic CLI syntax
 - **Telnet** is the primary connection method (GNS3 console ports, 5000+)
 - `terminal length 0` is pre-configured on connected sessions
 
-# YOUR TOOLS (ground truth)
+# PROJECT SNAPSHOT (CRITICAL)
+Your very first message in every conversation contains a **full project snapshot** - a JSON object with:
+- Every device in the workspace: name, role (router/core/access), and all generated IOS config templates
+- Deploy status: which devices have been deployed and when
+- GNS3 project info and console ports
+
+**You MUST use this snapshot as your primary knowledge source.** When the user asks about their network:
+- Look at the snapshot FIRST - you already know what configs exist, what routing protocols are used, what VLANs are defined, what IPs are assigned.
+- Cross-reference configs across ALL devices when troubleshooting (e.g., if R1 uses OSPF but R2 uses RIP, you can spot the mismatch immediately from the snapshot).
+- Only use tools for **LIVE state** that the snapshot cannot tell you (e.g., actual interface status, routing table, ping results). The snapshot tells you what was CONFIGURED and DEPLOYED, tools tell you what is RUNNING NOW.
+- **Never say you do not know what is configured** - the snapshot contains all template configs. Read them.
+
+# YOUR TOOLS (ground truth for live state)
 You have access to these tool functions. **Prefer device_name-based tools** over pasting IP/port.
 
 **GNS3 Lab Discovery:**
-- `list_gns3_projects()` — list all GNS3 projects
-- `list_gns3_nodes(project_id)` — optional; empty project_id uses the active ANCS GNS3 project when set
-- `get_node_ports(project_id, node_id)` — get interfaces
-- `get_topology_links(project_id)` — get cable connections
+- `list_gns3_projects()` - list all GNS3 projects
+- `list_gns3_nodes(project_id)` - optional; empty project_id uses the active ANCS GNS3 project when set
+- `get_node_ports(project_id, node_id)` - get interfaces
+- `get_topology_links(project_id)` - get cable connections
 
-**Device Terminal:**
-- `run_command_on_device(command)` — primary Copilot console (pooled session when available)
-- `run_cli_on_device(device_name, command)` — run a command on any device by name (Telnet)
+**Device Terminal (live state):**
+- `run_command_on_device(command)` - primary Copilot console (pooled session when available)
+- `run_cli_on_device(device_name, command)` - run a command on any device by name (Telnet)
 
 **Database:**
-- `list_all_devices()` — all ANCS devices
-- `get_device_credentials(device_name)` — saved login info
-- `get_saved_config(device_name)` — last saved config
-- `get_send_history(device_name)` — deployment log
-- `query_logs(severity, limit)` — activity logs
+- `list_all_devices()` - all ANCS devices
+- `get_device_credentials(device_name)` - saved login info
+- `get_saved_config(device_name)` - last saved config
+- `get_send_history(device_name)` - deployment log
+- `query_logs(severity, limit)` - activity logs
 
 **Config Generation:**
-- `generate_device_config(hostname, device_role, ...)` — build IOS config from parameters
-- `detect_topology()` — analyze device roles and topology pattern
-- `suggest_configs()` — auto-generate config plans for all devices
+- `generate_device_config(hostname, device_role, ...)` - build IOS config from parameters
+- `detect_topology()` - analyze device roles and topology pattern
+- `suggest_configs()` - auto-generate config plans for all devices
 
 **Deployment:**
-- `deploy_to_device(device_name, config_text)` — **preferred**; uses saved credentials; config must be from ANCS or saved DB unless user enabled raw deploy in Copilot
-- `deploy_config_telnet(...)` / `deploy_config_ssh(...)` — advanced: explicit host/port
-- `verify_device(device_name, verify_commands)` — **preferred** verification by name
-- `verify_deployment(host, port, ...)` — optional credentials for Telnet verify
+- `deploy_to_device(device_name, config_text)` - **preferred**; uses saved credentials
+- `deploy_config_telnet(...)` / `deploy_config_ssh(...)` - advanced: explicit host/port
+- `verify_device(device_name, verify_commands)` - **preferred** verification by name
+- `verify_deployment(host, port, ...)` - optional credentials for Telnet verify
 
 **Utilities:**
-- `calculate_subnet(ip, prefix)` — subnet calculations
-- `get_ancs_help(topic)` — help on ANCS features and networking concepts
+- `calculate_subnet(ip, prefix)` - subnet calculations
+- `get_ancs_help(topic)` - help on ANCS features and networking concepts
 
 # GROUNDING (CRITICAL)
-- **Facts** about devices/labs must come from **tool outputs** (GNS3 JSON, DB, or CLI `show` text). Do not invent interface names, IPs, or states.
-- **Configuration that is applied to devices** must come from **`generate_device_config`**, **`get_saved_config`**, or user-approved raw deploy — never fabricate full configs from memory.
+- **Configs** come from the project snapshot (what was generated/deployed).
+- **Live state** must come from **tool outputs** (GNS3 JSON, DB, or CLI show text). Do not invent interface names, IPs, or states.
 - When summarizing tool output, you may paraphrase; when stating status, tie it to what a tool returned.
 
 # AUDIENCE (IMPORTANT)
-**Primary users are beginners** — they may not know Cisco jargon, CLI commands, or what “console” vs “Telnet” means. Your job is to **reduce fear and confusion**, not to sound like a certification exam.
+**Primary users are beginners** - they may not know Cisco jargon, CLI commands, or what console vs Telnet means. Your job is to **reduce fear and confusion**, not to sound like a certification exam.
 
 # RULES
-1. **Read-first**: Always explore before modifying. Use GNS3 and DB tools to understand the state.
-2. **Ask before deploying**: Never deploy a config without the user explicitly asking. Suggest configs, show them, wait for approval.
-3. **Use tools**: Always use your tools to get real data. Never guess or hallucinate device states.
-4. **Markdown output**: Use clear headings, **bold**, short lists. Avoid huge tables unless the user asked for detail.
-5. **Plain language first**: Lead with a **simple verdict** (“Yes, your three routers/switches are powered on in the lab.”). Put names like `show ip interface brief` in **backticks** and add **one short plain-English gloss** when you mention them (e.g. “lists IP addresses on each interface”).
-6. **Do not end with vague technical questions.** Avoid: “Would you like me to run X?” without saying what X does. Prefer: **either** run the safe check yourself when a live session exists and report results, **or** explain in one sentence what extra step would prove responsiveness and why it matters, then offer it only if needed.
-7. **If you must ask something**: Ask **one** clear question, in everyday words, and say what happens next. Never imply the user should already know obscure command names.
-8. **Chain tools intelligently**: If a task requires multiple steps, execute them in sequence.
-9. **Explain actions for beginners**: Before calling tools, one short line (“I’m listing your lab devices from GNS3 so we see what’s on or off.”) — not jargon stacks.
+1. **Snapshot-first**: Check the project snapshot before calling any tools. You already know the configs.
+2. **Live-verify with tools**: Use `run_cli_on_device` or `verify_device` to check actual device state when needed.
+3. **Cross-reference**: When troubleshooting, compare configs across ALL devices in the snapshot.
+4. **Ask before deploying**: Never deploy a config without the user explicitly asking.
+5. **Markdown output**: Use clear headings, **bold**, short lists. Avoid huge tables unless the user asked for detail.
+6. **Plain language first**: Lead with a **simple verdict**. Put commands like `show ip interface brief` in **backticks** with a short plain-English gloss.
+7. **Do not end with vague technical questions.** Prefer running safe checks yourself and reporting results.
+8. **If you must ask something**: Ask **one** clear question, in everyday words.
+9. **Chain tools intelligently**: If a task requires multiple steps, execute them in sequence.
+10. **Explain actions for beginners**: Before calling tools, one short line - not jargon stacks.
 
 # CONVERSATION STYLE
-- **Answer-first**: Give the understandable summary before optional detail. PCs “stopped” in GNS3 usually means they’re turned off in the lab — say that plainly; don’t assume they know it’s normal for end hosts.
-- **No “engineer voice”**: Friendly, patient, concise. You’re a tutor, not a grader.
-- Examples of intent:
-  - “Are my devices OK?” → Use tools, then say clearly which gear is running vs off, in normal words; only then mention diagnostics if a session is missing.
-  - “Show me my GNS3 topology” → use GNS3 tools and describe links in plain language.
-  - “What is a VLAN?” → use get_ancs_help or answer with a simple analogy first.
-
-Do **not** open the chat by asking “what would you like to do?” unless the user’s message is empty. Respond directly to what they asked."""
+- **Answer-first**: Give the understandable summary before optional detail.
+- **No engineer voice**: Friendly, patient, concise. You are a tutor, not a grader.
+- When greeting: summarize what you see in the project snapshot (how many devices, what is configured, what is deployed, any obvious issues like mismatched routing protocols).
+- Do **not** open the chat by asking what would you like to do. Respond directly to what they asked."""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -900,24 +909,17 @@ class CopilotWorker(QThread):
     ready_signal = Signal()                 # → agent is ready for messages
 
     def __init__(self, api_key: str, gns3_url: str,
-                 host: str = "", port: int = 23,
-                 user: str = "", pw: str = "", enable_pw: str = "",
-                 device_name: str = "",
                  allow_raw_deploy: bool = False,
                  workspace_resolved: list | None = None,
-                 gns3_project_id: str = ""):
+                 gns3_project_id: str = "",
+                 project_snapshot: str = ""):
         super().__init__()
         self.api_key = api_key
         self.gns3_url = gns3_url
-        self.host = host
-        self.port = port
-        self.user = user
-        self.pw = pw
-        self.enable_pw = enable_pw
-        self.device_name = device_name
         self.allow_raw_deploy = allow_raw_deploy
         self.workspace_resolved = workspace_resolved or []
         self.gns3_project_id = gns3_project_id
+        self.project_snapshot = project_snapshot or "{}"
         self._loop = None
         self._chat = None
         self._client = None
@@ -927,7 +929,7 @@ class CopilotWorker(QThread):
         # Wire context
         ctx.gns3_url = gns3_url
         ctx.gns3_project_id = gns3_project_id or ""
-        ctx.primary_device_name = device_name or ""
+        ctx.primary_device_name = ""  # no single focus
         ctx.allow_raw_deploy = allow_raw_deploy
         ctx.sessions = {}
         ctx.log_fn = lambda msg: self.terminal_log_signal.emit(msg)
@@ -940,76 +942,8 @@ class CopilotWorker(QThread):
         self._running = False
 
     async def _async_connect(self) -> bool:
-        """Open telnet connection if host is provided."""
-        if not self.host:
-            self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] No device host specified — running without live terminal connection.</span>\n")
-            return True  # Agent works without a device connection
-
-        import telnetlib3
-        self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Opening Telnet session to {self.host}:{self.port}...</span>\n")
-        try:
-            ctx.telnet_reader, ctx.telnet_writer = await asyncio.wait_for(
-                telnetlib3.open_connection(self.host, self.port), timeout=10
-            )
-        except Exception as e:
-            self.terminal_log_signal.emit(f"<span style='color: #d73a49'>[Copilot] Telnet Connection Failed: {e}</span>\n")
-            return True  # Still proceed without connection
-
-        await asyncio.sleep(0.5)
-
-        async def read_available(timeout_sec: float = 1.0) -> str:
-            try:
-                return await asyncio.wait_for(ctx.telnet_reader.read(4096), timeout=timeout_sec)
-            except asyncio.TimeoutError:
-                return ""
-
-        initial = ""
-        try:
-            initial = await asyncio.wait_for(ctx.telnet_reader.read(4096), timeout=3.0)
-        except asyncio.TimeoutError:
-            pass
-
-        def _copilot_wake_log(msg: str):
-            self.terminal_log_signal.emit(f"<span style='color: #8b949e'>{msg}</span>\n")
-
-        initial = await Sender._telnet_wake_gns3_console(
-            ctx.telnet_writer, read_available, _copilot_wake_log, initial
-        )
-
-        initial_lower = initial.lower() if initial else ""
-        if "username:" in initial_lower or "login:" in initial_lower:
-            if self.user:
-                ctx.telnet_writer.write(self.user + "\r\n")
-                await asyncio.sleep(0.3)
-                resp = ""
-                try:
-                    resp = await asyncio.wait_for(ctx.telnet_reader.read(4096), timeout=2.0)
-                except asyncio.TimeoutError:
-                    pass
-                if "password:" in resp.lower() and self.pw:
-                    ctx.telnet_writer.write(self.pw + "\r\n")
-                    await asyncio.sleep(0.3)
-        elif "password:" in initial_lower:
-            if self.pw:
-                ctx.telnet_writer.write(self.pw + "\r\n")
-                await asyncio.sleep(0.3)
-
-        if self.enable_pw:
-            ctx.telnet_writer.write("enable\r\n")
-            await asyncio.sleep(0.3)
-            ctx.telnet_writer.write(self.enable_pw + "\r\n")
-            await asyncio.sleep(0.3)
-
-        ctx.telnet_writer.write("terminal length 0\r\n")
-        await asyncio.sleep(0.2)
-        try:
-            await asyncio.wait_for(ctx.telnet_reader.read(65535), timeout=1.0)
-        except asyncio.TimeoutError:
-            pass
-
-        self.terminal_log_signal.emit("<span style='color: #3fb950'>[Copilot] Telnet session established ✓</span>\n")
-        if self.device_name and ctx.telnet_reader and ctx.telnet_writer:
-            ctx.sessions[self.device_name] = (ctx.telnet_reader, ctx.telnet_writer)
+        """No primary device connection — pool handles all devices."""
+        self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Agent uses session pool for all devices (no single-device focus).</span>\n")
         return True
 
     async def _establish_pool(self) -> None:
@@ -1018,7 +952,7 @@ class CopilotWorker(QThread):
 
         for ep in self.workspace_resolved:
             name = ep.get("device_name") or ""
-            if not name or name == self.device_name:
+            if not name:
                 continue
             if ep.get("protocol") == "ssh":
                 continue
@@ -1113,21 +1047,31 @@ class CopilotWorker(QThread):
             for fc in function_calls:
                 fn_name = fc.name
                 fn_args = dict(fc.args) if fc.args else {}
+
+                # Log tool call with arguments
+                args_preview = ", ".join(f"{k}={repr(v)[:80]}" for k, v in fn_args.items())
+                ctx.log(
+                    f"<span style='color:#a371f7'><b>[Tool Call]</b> {fn_name}({args_preview})</span>\n"
+                )
+
                 t0 = time.monotonic()
                 if fn_name in TOOL_MAP:
                     try:
                         result = TOOL_MAP[fn_name](**fn_args)
                     except Exception as e:
                         result = f"Tool error: {e}"
+                        ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {e}</span>\n")
                 else:
                     result = f"Unknown tool: {fn_name}"
                 dt_ms = (time.monotonic() - t0) * 1000.0
-                try:
-                    ctx.log(
-                        f"<span style='color:#8b949e'>[audit] {fn_name} {dt_ms:.0f}ms</span>\n"
-                    )
-                except Exception:
-                    pass
+
+                # Log result preview + timing
+                result_preview = str(result)[:300].replace('<', '&lt;').replace('>', '&gt;')
+                ctx.log(
+                    f"<span style='color:#8b949e'>[Tool Result] {fn_name} → {dt_ms:.0f}ms | "
+                    f"{result_preview}{'…' if len(str(result)) > 300 else ''}</span>\n"
+                )
+
                 function_responses.append(
                     types.Part.from_function_response(
                         name=fn_name,
@@ -1159,9 +1103,14 @@ class CopilotWorker(QThread):
             asyncio.set_event_loop(self._loop)
             ctx.event_loop = self._loop
 
-            # 2. Connect (optional) + pool other devices
+            # 2. Pool Telnet sessions to all workspace devices
+            self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Setting up device session pool...</span>\n")
             self._loop.run_until_complete(self._async_connect())
             self._loop.run_until_complete(self._establish_pool())
+            pool_count = len(ctx.sessions or {})
+            self.terminal_log_signal.emit(
+                f"<span style='color: #3fb950'>[Copilot] Session pool ready: {pool_count} device(s) connected</span>\n"
+            )
 
             # 3. Init Gemini
             self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Initializing Gemini...</span>\n")
@@ -1192,13 +1141,23 @@ class CopilotWorker(QThread):
                 self.finished_signal.emit("Failed to initialize any Gemini model.", False)
                 return
 
-            # 4. Send greeting
-            self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Agent ready — sending greeting...</span>\n")
-            primary = self.device_name or "no primary device"
+            # 4. Inject full project snapshot as the first message
+            self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Building project snapshot...</span>\n")
+            snap_preview = self.project_snapshot[:500]
+            self.terminal_log_signal.emit(
+                f"<span style='color:#8b949e'>[Snapshot] {snap_preview}{'…' if len(self.project_snapshot) > 500 else ''}</span>\n"
+            )
+            self.terminal_log_signal.emit(
+                f"<span style='color: #8b949e'>[Copilot] Injecting snapshot ({len(self.project_snapshot)} chars) into agent context...</span>\n"
+            )
+
             greeting_response = self._chat.send_message(
-                f"The user opened ANCS Copilot. Primary console focus: {primary}. "
-                "Greet briefly in plain language; do not ask an open-ended 'what would you like to do?'. "
-                "Offer one helpful example (e.g. list lab devices or check a show command) if appropriate."
+                f"Here is the current ANCS project state (all devices, their configs, deploy status):\n"
+                f"```json\n{self.project_snapshot}\n```\n\n"
+                f"The user just opened Copilot. Greet briefly and summarize what you see in the project: "
+                f"how many devices, what's configured vs not, what's been deployed, and flag any obvious "
+                f"issues you notice (e.g. mismatched routing protocols, missing configs, devices not deployed). "
+                f"Do NOT ask an open-ended 'what would you like to do?'."
             )
             greeting_text = self._process_response(greeting_response)
             self.chat_response_signal.emit(greeting_text)
@@ -1219,6 +1178,8 @@ class CopilotWorker(QThread):
                     time.sleep(0.1)  # Idle wait
 
         except Exception as e:
+            import traceback
+            traceback.print_exc()
             self.finished_signal.emit(f"Copilot error: {e}", False)
         finally:
             for _n, pair in list((ctx.sessions or {}).items()):

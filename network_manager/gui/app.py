@@ -2605,6 +2605,100 @@ class App(QMainWindow):
 
         return out
 
+    def _build_copilot_snapshot(self) -> str:
+        """Build a comprehensive JSON snapshot of the entire project for the AI agent.
+
+        Contains every device, its role, all generated IOS configs (templates),
+        deploy history, and GNS3 console info — so the agent starts fully aware.
+        """
+        from network_manager.models.devices import RouterModel, CoreSwitchModel, SwitchModel
+        snapshot = {"devices": [], "gns3_project": "", "total_devices": 0,
+                    "configured_count": 0, "deployed_count": 0}
+
+        # GNS3 project name
+        gns3_name = getattr(self, "_gns3_project_name", "") or ""
+        if not gns3_name:
+            try:
+                lbl = getattr(self, "lbl_gns3_project_name", None)
+                if lbl:
+                    gns3_name = lbl.text() or ""
+            except Exception:
+                pass
+        snapshot["gns3_project"] = gns3_name
+
+        for name, model, meta in self.devices:
+            # Determine role
+            if isinstance(model, RouterModel):
+                role = "router"
+            elif isinstance(model, CoreSwitchModel):
+                role = "core"
+            elif isinstance(model, SwitchModel):
+                role = "access"
+            else:
+                role = "unknown"
+
+            # Templates (actual IOS config text)
+            templates = {}
+            for tname, ttext in model.templates.items():
+                if ttext and ttext.strip():
+                    templates[tname] = ttext.strip()
+
+            has_config = bool(templates)
+
+            # Deploy history from audit DB
+            deployed = False
+            deploy_time = ""
+            deploy_method = ""
+            try:
+                from network_manager.config import cur, db_lock
+                with db_lock:
+                    cur.execute(
+                        "SELECT action, details, created_at FROM logs "
+                        "WHERE action LIKE ? ORDER BY created_at DESC LIMIT 1",
+                        (f"%{name}%",)
+                    )
+                    row = cur.fetchone()
+                    if row and ("send" in (row[0] or "").lower() or "deploy" in (row[0] or "").lower()):
+                        deployed = True
+                        deploy_time = row[2] or ""
+                        deploy_method = "telnet"  # default
+                        if "ssh" in (row[1] or "").lower():
+                            deploy_method = "ssh"
+                        elif "serial" in (row[1] or "").lower():
+                            deploy_method = "serial"
+            except Exception:
+                pass
+
+            # GNS3 console info
+            console = ""
+            if meta.get("console_host") and meta.get("console_port"):
+                console = f"{meta['console_host']}:{meta['console_port']}"
+
+            dev_entry = {
+                "name": name,
+                "type": model.__class__.__name__,
+                "role": role,
+                "templates": templates,
+                "has_config": has_config,
+                "deployed": deployed,
+            }
+            if deploy_time:
+                dev_entry["deploy_time"] = deploy_time
+                dev_entry["deploy_method"] = deploy_method
+            if console:
+                dev_entry["gns3_console"] = console
+            if meta.get("interfaces"):
+                dev_entry["interfaces"] = meta["interfaces"]
+
+            snapshot["devices"].append(dev_entry)
+            if has_config:
+                snapshot["configured_count"] += 1
+            if deployed:
+                snapshot["deployed_count"] += 1
+
+        snapshot["total_devices"] = len(self.devices)
+        return json.dumps(snapshot, indent=2)
+
     def _copilot_workspace_resolved(self) -> list[dict]:
         """Resolved connection dicts for every workspace device that has a host."""
         found: list[dict] = []
@@ -2671,71 +2765,19 @@ class App(QMainWindow):
         header_row.addWidget(btn_config)
         layout.addLayout(header_row)
 
-        # ── Device scope (resolved from DB / GNS3 — no manual host required) ──
+        # ── Scope info (agent sees all devices — no focus picker) ──────────
         scope_row = QHBoxLayout()
-        scope_row.addWidget(QLabel("Console focus:"))
-        combo_devices = QComboBox()
-        combo_devices.setMinimumWidth(220)
-        combo_devices.setStyleSheet("""
-            QComboBox { background-color: #161B22; color: #e6edf3; border: 1px solid #30363D;
-                border-radius: 6px; padding: 6px 10px; font-size: 13px; }
-            QComboBox:focus { border-color: #a371f7; }
-        """)
-        lbl_console = QLabel("")
-        lbl_console.setStyleSheet("color: #8b949e; font-size: 12px;")
-        lbl_console.setWordWrap(True)
-        chk_raw_deploy = QCheckBox("Allow raw config deploy (not from ANCS generator/saved config)")
+        n_devs = len(self.devices)
+        n_configured = sum(1 for _, m, _ in self.devices if any(m.templates.values()))
+        scope_lbl = QLabel(f"📡 Workspace: {n_devs} device(s), {n_configured} configured")
+        scope_lbl.setStyleSheet("color: #8b949e; font-size: 12px;")
+        chk_raw_deploy = QCheckBox("Allow raw config deploy")
         chk_raw_deploy.setStyleSheet("color: #8b949e; font-size: 12px;")
         chk_raw_deploy.setChecked(bool(cfg.get("agent_allow_raw_deploy", False)))
-        scope_row.addWidget(combo_devices)
-        scope_row.addWidget(lbl_console, 1)
+        scope_row.addWidget(scope_lbl)
+        scope_row.addStretch()
+        scope_row.addWidget(chk_raw_deploy)
         layout.addLayout(scope_row)
-        layout.addWidget(chk_raw_deploy)
-
-        if self.devices:
-            for n, _, _ in self.devices:
-                combo_devices.addItem(n)
-            pick = None
-            if self.current_device:
-                pick = self.current_device[0]
-            elif cfg.get("last_copilot_device"):
-                pick = cfg.get("last_copilot_device")
-            if pick:
-                idx = combo_devices.findText(pick)
-                if idx >= 0:
-                    combo_devices.setCurrentIndex(idx)
-        else:
-            combo_devices.addItem("(no devices in workspace)")
-
-        def _refresh_console_label():
-            txt = combo_devices.currentText()
-            if not txt or txt.startswith("("):
-                r = self._resolve_copilot_connection(None)
-            else:
-                r = self._resolve_copilot_connection(txt)
-            if r.get("host"):
-                lbl_console.setText(
-                    f"Console: {r['host']}:{r['port']} · {r.get('protocol', 'telnet')}"
-                )
-            else:
-                lbl_console.setText("Console: — (no host; GNS3 and database tools still work)")
-
-        def _persist_copilot_device_pref():
-            t = combo_devices.currentText()
-            if t and not t.startswith("("):
-                cfg["last_copilot_device"] = t
-                try:
-                    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                        json.dump(cfg, f, indent=2)
-                except Exception:
-                    pass
-
-        def _on_combo_changed(_idx=None):
-            _refresh_console_label()
-            _persist_copilot_device_pref()
-
-        combo_devices.currentIndexChanged.connect(_on_combo_changed)
-        _refresh_console_label()
 
         # Hidden API key row
         key_widget = QWidget()
@@ -2970,26 +3012,12 @@ class App(QMainWindow):
             except Exception:
                 pass
 
-            dtxt = combo_devices.currentText().strip()
-            preferred = None if (not dtxt or dtxt.startswith("(")) else dtxt
-            resolved = self._resolve_copilot_connection(preferred)
-            if resolved.get("device_name"):
-                cfg["last_copilot_device"] = resolved["device_name"]
-                try:
-                    with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                        json.dump(cfg, f, indent=2)
-                except Exception:
-                    pass
-
-            host = resolved.get("host") or ""
-            port = int(resolved.get("port") or 23)
-            user = resolved.get("user") or ""
-            pw = resolved.get("password") or ""
-            enable = resolved.get("enable_password") or ""
-
             # GNS3 URL
             gns3_url = getattr(self, '_gns3_url', GNS3_DEFAULT_URL) or GNS3_DEFAULT_URL
             gns3_project_id = getattr(self, "gns3_project_id", None) or ""
+
+            # Build full project snapshot for the agent
+            project_snapshot = self._build_copilot_snapshot()
 
             workspace_resolved = self._copilot_workspace_resolved()
 
@@ -2997,15 +3025,10 @@ class App(QMainWindow):
             self._copilot_worker = CopilotWorker(
                 api_key=api_key,
                 gns3_url=gns3_url,
-                host=host,
-                port=port,
-                user=user,
-                pw=pw,
-                enable_pw=enable,
-                device_name=resolved.get("device_name") or "",
                 allow_raw_deploy=chk_raw_deploy.isChecked(),
                 workspace_resolved=workspace_resolved,
                 gns3_project_id=str(gns3_project_id) if gns3_project_id else "",
+                project_snapshot=project_snapshot,
             )
             self._copilot_worker.terminal_log_signal.connect(on_terminal_log)
             self._copilot_worker.chat_response_signal.connect(on_chat_response)
@@ -3340,12 +3363,33 @@ class App(QMainWindow):
         if not filepath:
             return
         try:
-            export_data = {"version": "1.0", "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"), "devices": []}
+            export_data = {"version": "1.0", "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"), "devices": [], "audit_logs": []}
             type_map = {"RouterModel": "router", "SwitchModel": "switch", "CoreSwitchModel": "core switch"}
+            exported_names = []
             for name, model, meta in self.devices:
                 type_key = type_map.get(model.__class__.__name__, "router")
                 safe_meta = {k: v for k, v in meta.items() if isinstance(v, (str, int, float, bool, list, type(None)))}
                 export_data["devices"].append({"name": name, "type_key": type_key, "metadata": safe_meta, "templates": dict(model.templates)})
+                exported_names.append(name)
+                
+            if exported_names:
+                try:
+                    from network_manager.config import cur, db_lock
+                    with db_lock:
+                        placeholders = ",".join("?" * len(exported_names))
+                        cur.execute(
+                            f"SELECT device_name, action, details, config_snapshot, timestamp FROM logs "
+                            f"WHERE device_name IN ({placeholders})",
+                            exported_names
+                        )
+                        for r in cur.fetchall():
+                            export_data["audit_logs"].append({
+                                "device_name": r[0], "action": r[1],
+                                "details": r[2], "config_snapshot": r[3], "timestamp": r[4]
+                            })
+                except Exception as e:
+                    self.log(f"[export] Warning: Could not export logs: {e}")
+
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(export_data, f, indent=2)
             QMessageBox.information(self, "Export Complete", f"Exported {len(self.devices)} device(s) to:\n{filepath}")
@@ -3368,15 +3412,34 @@ class App(QMainWindow):
         if not devices_data:
             QMessageBox.information(self, "Import", "No devices found in file.")
             return
+
+        replace_mode = False
         if self.devices:
-            ret = QMessageBox.question(
-                self, "Import Project",
-                f"This will add {len(devices_data)} device(s) to the current workspace.\n"
-                "Devices with duplicate names will be skipped.\n\nContinue?")
-            if ret != QMessageBox.Yes:
+            msg = QMessageBox(self)
+            msg.setWindowTitle("Import Project")
+            msg.setText(
+                f"You already have {len(self.devices)} device(s) in the workspace.\n\n"
+                f"The imported file contains {len(devices_data)} device(s).\n\n"
+                "Choose how to proceed:"
+            )
+            btn_replace = msg.addButton("Replace All", QMessageBox.DestructiveRole)
+            btn_merge   = msg.addButton("Merge (add new only)", QMessageBox.AcceptRole)
+            btn_cancel  = msg.addButton("Cancel", QMessageBox.RejectRole)
+            msg.setDefaultButton(btn_merge)
+            msg.exec()
+
+            clicked = msg.clickedButton()
+            if clicked == btn_cancel:
                 return
+            replace_mode = (clicked == btn_replace)
+
+        if replace_mode:
+            self.devices.clear()
+            self.refresh_device_list()
+
         added = 0
         skipped = 0
+        imported_names = []
         for dev in devices_data:
             name = dev.get("name", "unnamed")
             type_key = dev.get("type_key", "router").lower()
@@ -3392,12 +3455,39 @@ class App(QMainWindow):
             for tname, ttext in templates.items():
                 model.set_template(tname, ttext)
             added += 1
+            imported_names.append(name)
+            
+        audit_logs = data.get("audit_logs", [])
+        logs_restored = 0
+        if audit_logs and imported_names:
+            try:
+                from network_manager.config import conn, cur, db_lock
+                with db_lock:
+                    for entry in audit_logs:
+                        dname = entry.get("device_name")
+                        if dname in imported_names:
+                            cur.execute(
+                                "INSERT INTO logs (device_name, action, details, config_snapshot, timestamp) "
+                                "VALUES (?, ?, ?, ?, ?)",
+                                (dname, entry.get("action"), entry.get("details"),
+                                 entry.get("config_snapshot"), entry.get("timestamp"))
+                            )
+                            logs_restored += 1
+                    conn.commit()
+            except Exception as e:
+                self.log(f"[import] Warning: could not restore logs: {e}")
+
         self.refresh_device_list()
-        QMessageBox.information(
-            self, "Import Complete",
-            f"Imported {added} device(s)." + (f"\nSkipped {skipped} duplicate(s)." if skipped else ""))
-        self.log(f"[import] loaded {added} device(s) from {filepath}")
-        self._set_status_message(f"Imported {added} device(s)", 3500)
+        mode_label = "Replaced" if replace_mode else "Imported"
+        msg_str = f"{mode_label} {added} device(s)."
+        if skipped:
+            msg_str += f"\nSkipped {skipped} duplicate(s)."
+        if logs_restored:
+            msg_str += f"\nRestored {logs_restored} audit log(s)."
+            
+        QMessageBox.information(self, "Import Complete", msg_str)
+        self.log(f"[import] {mode_label.lower()} {added} device(s) and {logs_restored} logs from {filepath}")
+        self._set_status_message(f"{mode_label} {added} device(s)", 3500)
 
     # ── Cross-device context extraction ─────────────────────────────────
 

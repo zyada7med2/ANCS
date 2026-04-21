@@ -96,6 +96,24 @@ class Sender:
             ser.write(b"\r\n\r\n")
             time.sleep(0.35)
 
+            def _wait_for_prompt_serial(timeout_sec=8.0):
+                """Read from serial until IOS prompt (# or >) appears."""
+                buf = b""
+                deadline = time.time() + timeout_sec
+                while time.time() < deadline:
+                    if ser.in_waiting:
+                        buf += ser.read(ser.in_waiting)
+                        stripped = buf.rstrip()
+                        if stripped and chr(stripped[-1]) in ("#", ">"):
+                            break
+                    time.sleep(0.1)
+                return buf.decode("utf-8", errors="ignore")
+
+            def _send_and_wait_serial(line, timeout_sec=8.0):
+                """Send a line then wait for device prompt."""
+                ser.write((line + "\r\n").encode("utf-8"))
+                _wait_for_prompt_serial(timeout_sec)
+
             blocks = Sender.split_into_blocks(text)
 
             if len(blocks) > 1:
@@ -105,11 +123,14 @@ class Sender:
                 if len(blocks) > 1:
                     log_fn(f"[serial] sending block {idx}/{len(blocks)}: {title}")
 
+                # Wait for a clean prompt before starting the block
+                _wait_for_prompt_serial(3.0)
+
                 for line in block_content.splitlines():
-                    if line.strip():
-                        ser.write((line + "\r\n").encode("utf-8"))
-                        log_fn(f"[serial] sent: {line}")
-                        time.sleep(newline_delay)
+                    stripped = line.strip()
+                    if stripped:
+                        _send_and_wait_serial(stripped)
+                        log_fn(f"[serial] sent: {stripped}")
 
                 if idx < len(blocks):
                     log_fn(f"[serial] waiting {block_delay}s before next block...")
@@ -174,18 +195,41 @@ class Sender:
             timeout=timeout
         )
         
-        async def write_line(line):
-            """Helper to write a line and flush"""
-            writer.write(line + "\r\n")
-            await asyncio.sleep(0.1)
-        
         async def read_available(timeout_sec=1.0):
             """Read whatever is available with timeout"""
             try:
                 return await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
             except asyncio.TimeoutError:
                 return ""
-        
+
+        async def wait_for_prompt(timeout_sec=8.0):
+            """Read until we see an IOS prompt (# or >) — proves the CLI is
+            idle and ready for the next command. Returns all text read."""
+            buf = ""
+            deadline = asyncio.get_event_loop().time() + timeout_sec
+            while asyncio.get_event_loop().time() < deadline:
+                try:
+                    chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
+                    if chunk:
+                        buf += chunk
+                        stripped = buf.rstrip()
+                        if stripped and stripped[-1] in ("#", ">"):
+                            break
+                except asyncio.TimeoutError:
+                    # No data for 0.5s — if we already have a prompt, done
+                    stripped = buf.rstrip()
+                    if stripped and stripped[-1] in ("#", ">"):
+                        break
+                    # Otherwise keep waiting until deadline
+            return buf
+
+        async def send_and_wait(line, extra_wait=0.0):
+            """Send a line then wait for the device prompt before returning."""
+            writer.write(line + "\r\n")
+            if extra_wait:
+                await asyncio.sleep(extra_wait)
+            await wait_for_prompt()
+
         try:
             await asyncio.sleep(0.4)
             
@@ -198,46 +242,42 @@ class Sender:
             initial_lower = initial.lower() if initial else ""
             if "username:" in initial_lower or "login:" in initial_lower:
                 if username:
-                    await write_line(username)
+                    writer.write(username + "\r\n")
                     await asyncio.sleep(0.3)
                     resp = await read_available(1.0)
                     if "password:" in resp.lower():
                         if password:
-                            await write_line(password)
+                            writer.write(password + "\r\n")
                             await asyncio.sleep(0.3)
                     log_fn("[telnet] login sent")
             elif "password:" in initial_lower:
                 if password:
-                    await write_line(password)
+                    writer.write(password + "\r\n")
                     await asyncio.sleep(0.3)
                     log_fn("[telnet] password sent")
             else:
-                # No login prompt, try sending credentials blind if provided
                 if username:
-                    await write_line(username)
+                    writer.write(username + "\r\n")
                     await asyncio.sleep(0.2)
                 if password:
-                    await write_line(password)
+                    writer.write(password + "\r\n")
                     await asyncio.sleep(0.2)
+
+            # Wait for the device to settle into a prompt after login
+            await wait_for_prompt(5.0)
             
             # Enable mode if needed
             if enable_pw:
-                await write_line("enable")
-                await asyncio.sleep(0.3)
-                await write_line(enable_pw)
-                await asyncio.sleep(0.2)
+                await send_and_wait("enable", 0.2)
+                await send_and_wait(enable_pw, 0.2)
                 log_fn("[telnet] enable sent")
             
             # Reduce noise that can corrupt long commands (syslog/paging)
             try:
-                await write_line("terminal length 0")
-                await asyncio.sleep(0.2)
-                await write_line("configure terminal")
-                await asyncio.sleep(0.2)
-                await write_line("no logging console")
-                await asyncio.sleep(0.2)
-                await write_line("exit")
-                await asyncio.sleep(0.2)
+                await send_and_wait("terminal length 0")
+                await send_and_wait("configure terminal")
+                await send_and_wait("no logging console")
+                await send_and_wait("end")
                 log_fn("[telnet] disabled console logging for this session")
             except Exception:
                 pass
@@ -251,12 +291,15 @@ class Sender:
             for idx, (title, block_content) in enumerate(blocks, 1):
                 if len(blocks) > 1:
                     log_fn(f"[telnet] sending block {idx}/{len(blocks)}: {title}")
+
+                # Wait for a clean prompt before starting the block
+                await wait_for_prompt(3.0)
                 
                 for line in block_content.splitlines():
-                    if line.strip():
-                        await write_line(line)
-                        log_fn(f"[telnet] sent: {line}")
-                        await asyncio.sleep(0.4)
+                    stripped = line.strip()
+                    if stripped:
+                        await send_and_wait(stripped)
+                        log_fn(f"[telnet] sent: {stripped}")
                 
                 # Wait between blocks
                 if idx < len(blocks):
@@ -536,21 +579,38 @@ class Sender:
             )
             chan = client.invoke_shell()
             time.sleep(0.4)
-            chan.send("terminal length 0\n")
-            time.sleep(0.1)
+
+            def _wait_for_prompt_ssh(timeout_sec=8.0):
+                """Read from SSH channel until IOS prompt (# or >) appears."""
+                buf = ""
+                deadline = time.time() + timeout_sec
+                while time.time() < deadline:
+                    time.sleep(0.15)
+                    if chan.recv_ready():
+                        buf += chan.recv(4096).decode("utf-8", errors="ignore")
+                        stripped = buf.rstrip()
+                        if stripped and stripped[-1] in ("#", ">"):
+                            break
+                    else:
+                        stripped = buf.rstrip()
+                        if stripped and stripped[-1] in ("#", ">"):
+                            break
+                return buf
+
+            def _send_and_wait(line, timeout_sec=8.0):
+                """Send a command line then wait for device prompt."""
+                chan.send(line + "\n")
+                _wait_for_prompt_ssh(timeout_sec)
+
+            _send_and_wait("terminal length 0")
             if enable_pw:
-                chan.send("enable\n")
-                time.sleep(0.2)
-                chan.send(enable_pw + "\n")
-                time.sleep(0.1)
+                _send_and_wait("enable")
+                _send_and_wait(enable_pw)
 
             try:
-                chan.send("configure terminal\n")
-                time.sleep(0.2)
-                chan.send("no logging console\n")
-                time.sleep(0.2)
-                chan.send("exit\n")
-                time.sleep(0.2)
+                _send_and_wait("configure terminal")
+                _send_and_wait("no logging console")
+                _send_and_wait("end")
                 log_fn("[ssh] disabled console logging for this session")
             except Exception:
                 pass
@@ -564,11 +624,14 @@ class Sender:
                 if len(blocks) > 1:
                     log_fn(f"[ssh] sending block {idx}/{len(blocks)}: {title}")
 
+                # Wait for a clean prompt before starting the block
+                _wait_for_prompt_ssh(3.0)
+
                 for line in block_content.splitlines():
-                    if line.strip():
-                        chan.send(line + "\n")
-                        log_fn(f"[ssh] sent: {line}")
-                        time.sleep(0.2)
+                    stripped = line.strip()
+                    if stripped:
+                        _send_and_wait(stripped)
+                        log_fn(f"[ssh] sent: {stripped}")
 
                 if idx < len(blocks):
                     log_fn(f"[ssh] waiting {block_delay}s before next block...")
