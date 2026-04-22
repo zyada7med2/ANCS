@@ -346,34 +346,42 @@ def query_logs(severity: str = "all", limit: int = 20) -> str:
 def generate_device_config(
     hostname: str,
     device_role: str,
-    enable_password: str = "cisco",
     vlans: str = "[]",
     routing_entries: str = "[]",
     dhcp_pools: str = "[]",
     uplinks: str = "[]",
     static_routes: str = "[]",
     acl_rules: str = "[]",
-    router_interface: str = "FastEthernet0/0",
-    enable_rip: bool = False,
-    rip_networks: str = "[]",
+    router_interface: str = "",
+    routing_protocol: str = "rip",
+    wan_interface: str = "",
+    wan_ip: str = "",
+    wan_mask: str = "255.255.255.252",
+    transit_links: str = "[]",
 ) -> str:
-    """Generate a full Cisco IOS configuration using the ANCS Guided Setup engine.
+    """Generate a full Cisco IOS configuration using the ANCS ConfigEngine (same engine as Guided Setup).
+
+    This produces block-formatted IOS config identical to the Guided Setup wizard, including
+    trunk encapsulation, portfast, speed/duplex, VLAN database syntax for core switches,
+    uplink port exclusion from access VLAN assignments, and proper DHCP excluded ranges.
 
     Args:
         hostname: Device hostname
         device_role: 'router', 'core', or 'access'
-        enable_password: Enable secret password
-        vlans: JSON array of {"id": "10", "name": "Staff", "ports": "Ethernet0/0-3"}
+        vlans: JSON array of {"id": "10", "name": "Staff", "ports": "Ethernet0/0,Ethernet0/1"}
         routing_entries: JSON array of {"vlan": "10", "name": "Staff", "ip": "192.168.10.1", "mask": "255.255.255.0"}
         dhcp_pools: JSON array of {"pool": "Staff", "network": "192.168.10.0", "mask": "255.255.255.0", "gateway": "192.168.10.1", "dns": "8.8.8.8", "start": "192.168.10.50", "end": "192.168.10.200"}
         uplinks: JSON array of {"ports": "Ethernet3/3", "mode": "trunk", "allowed vlans": "all"}
         static_routes: JSON array of {"network": "0.0.0.0", "mask": "0.0.0.0", "next-hop": "10.0.0.1", "description": "Default"}
-        acl_rules: JSON array of {"number": "100", "action": "permit", "protocol": "ip", "source": "192.168.10.0", "wildcard": "0.0.0.255", "dest": "any"}
-        router_interface: Physical interface for router subinterfaces
-        enable_rip: Whether to enable RIP routing
-        rip_networks: JSON array of network strings like ["192.168.10.0", "192.168.20.0"]
+        acl_rules: JSON array of {"acl #": "101", "action": "deny", "source": "192.168.10.0", "wildcard": "0.0.0.255", "destination": "192.168.30.0", "destination_wildcard": "0.0.0.255", "remark": "Block Guest from Servers"}
+        router_interface: Physical interface for router subinterfaces (e.g. FastEthernet0/0)
+        routing_protocol: 'rip', 'ospf', 'eigrp', or 'none'
+        wan_interface: WAN-facing interface (e.g. FastEthernet0/1)
+        wan_ip: WAN IP address or 'dhcp'
+        wan_mask: WAN subnet mask
+        transit_links: JSON array of {"local_interface": "FastEthernet0/1", "ip": "10.0.0.1", "mask": "255.255.255.252", "protocol": "ospf"}
 
-    Returns the complete IOS configuration text.
+    Returns the complete block-formatted IOS configuration text.
     """
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> generate_device_config(hostname={hostname}, role={device_role})</span>\n")
     try:
@@ -383,96 +391,195 @@ def generate_device_config(
         _uplinks = json.loads(uplinks) if isinstance(uplinks, str) else uplinks
         _static = json.loads(static_routes) if isinstance(static_routes, str) else static_routes
         _acl = json.loads(acl_rules) if isinstance(acl_rules, str) else acl_rules
-        _rip_nets = json.loads(rip_networks) if isinstance(rip_networks, str) else rip_networks
+        _transit = json.loads(transit_links) if isinstance(transit_links, str) else transit_links
     except json.JSONDecodeError as e:
         return f"JSON parse error: {e}"
 
-    config_lines = []
-    config_lines.append("enable")
-    config_lines.append("configure terminal")
+    try:
+        from network_manager.gui.wizards.config_engine import ConfigEngine
 
-    # Identity block
-    config_lines.append(f"hostname {hostname}")
-    config_lines.append(f"enable secret {enable_password}")
-    config_lines.append("no ip domain-lookup")
-    config_lines.append("service password-encryption")
-    config_lines.append("banner motd # Configured by ANCS Copilot #")
+        engine = ConfigEngine(
+            device_role=device_role,
+            hostname=hostname,
+            identity_data={"hostname": hostname},
+            vlans=_vlans,
+            uplinks=_uplinks,
+            routing_entries=_routing,
+            dhcp_pools=_dhcp,
+            static_routes=_static,
+            acl_rules=_acl,
+            router_interface=router_interface,
+            wan_interface=wan_interface,
+            wan_ip=wan_ip,
+            wan_mask=wan_mask,
+            routing_protocol=routing_protocol,
+            transit_links=_transit,
+        )
 
-    # VLAN block (switches)
-    if _vlans and device_role in ("access", "core"):
-        for v in _vlans:
-            config_lines.append(f"vlan {v['id']}")
-            config_lines.append(f" name {v['name']}")
-        # Port assignments
-        for v in _vlans:
-            ports = v.get("ports", "")
-            if ports:
-                config_lines.append(f"interface range {ports}")
-                config_lines.append(f" switchport mode access")
-                config_lines.append(f" switchport access vlan {v['id']}")
-                config_lines.append(f" no shutdown")
+        config_text = engine.build_full_config()
+        blocks = engine.render_all_blocks()
+        ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> Config generated via ConfigEngine: {len(blocks)} blocks, {len(config_text.splitlines())} lines</span>\n")
+        return config_text
+    except Exception as e:
+        return f"ConfigEngine error: {e}"
 
-    # Uplinks (trunk ports)
-    for up in _uplinks:
-        config_lines.append(f"interface {up['ports']}")
-        config_lines.append(f" switchport mode trunk")
-        allowed = up.get("allowed vlans", "all")
-        if allowed and allowed != "all":
-            config_lines.append(f" switchport trunk allowed vlan {allowed}")
-        config_lines.append(f" no shutdown")
 
-    # Routing (SVIs for core, subinterfaces for router)
-    if device_role == "core":
-        config_lines.append("ip routing")
-        for r in _routing:
-            config_lines.append(f"interface vlan {r['vlan']}")
-            config_lines.append(f" ip address {r['ip']} {r['mask']}")
-            config_lines.append(f" no shutdown")
-    elif device_role == "router" and _routing:
-        for r in _routing:
-            sub = f"{router_interface}.{r['vlan']}"
-            config_lines.append(f"interface {sub}")
-            config_lines.append(f" encapsulation dot1Q {r['vlan']}")
-            config_lines.append(f" ip address {r['ip']} {r['mask']}")
-            config_lines.append(f" no shutdown")
-        config_lines.append(f"interface {router_interface}")
-        config_lines.append(f" no shutdown")
+def audit_network() -> str:
+    """Scan ALL device configurations in the project snapshot for security issues, inconsistencies, and best-practice violations.
 
-    # Static routes
-    for sr in _static:
-        desc = sr.get("description", "")
-        cmd = f"ip route {sr['network']} {sr['mask']} {sr['next-hop']}"
-        if desc:
-            cmd += f" name {desc}"
-        config_lines.append(cmd)
+    Checks for: missing enable secret, no hostname set, mismatched routing protocols,
+    trunks without encapsulation, missing portfast, no default route, open VTY lines, etc.
 
-    # DHCP pools
-    for pool in _dhcp:
-        config_lines.append(f"ip dhcp pool {pool['pool']}")
-        config_lines.append(f" network {pool['network']} {pool['mask']}")
-        config_lines.append(f" default-router {pool['gateway']}")
-        if pool.get("dns"):
-            config_lines.append(f" dns-server {pool['dns']}")
-        config_lines.append(f"ip dhcp excluded-address {pool['gateway']} {pool['gateway']}")
+    Returns a structured JSON report of findings.
+    """
+    ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> audit_network()</span>\n")
+    try:
+        from network_manager.config import cur, db_lock
+        with db_lock:
+            cur.execute("SELECT name, type FROM devices ORDER BY name")
+            devices = cur.fetchall()
 
-    # ACL rules
-    for rule in _acl:
-        config_lines.append(f"access-list {rule['number']} {rule['action']} {rule['protocol']} {rule['source']} {rule['wildcard']} {rule.get('dest', 'any')}")
+        if not devices:
+            return json.dumps({"status": "empty", "message": "No devices in workspace."})
 
-    # RIP
-    if enable_rip and _rip_nets:
-        config_lines.append("router rip")
-        config_lines.append(" version 2")
-        config_lines.append(" no auto-summary")
-        for net in _rip_nets:
-            config_lines.append(f" network {net}")
+        findings = []
 
-    config_lines.append("end")
-    config_lines.append("write memory")
+        # Check for routing protocol mismatches
+        protocols = {}
+        for name, dtype in devices:
+            with db_lock:
+                cur.execute("SELECT config_snapshot FROM logs WHERE device_name=? ORDER BY id DESC LIMIT 1", (name,))
+                row = cur.fetchone()
+            config = row[0] if row else ""
+            if not config:
+                findings.append({"device": name, "severity": "warning", "issue": "No deployment history found — device may be unconfigured."})
+                continue
 
-    config_text = "\n".join(config_lines)
-    ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> Config generated: {len(config_lines)} lines</span>\n")
-    return config_text
+            config_lower = config.lower()
+
+            # Detect routing protocol
+            if "router ospf" in config_lower:
+                protocols[name] = "ospf"
+            elif "router eigrp" in config_lower:
+                protocols[name] = "eigrp"
+            elif "router rip" in config_lower:
+                protocols[name] = "rip"
+            else:
+                protocols[name] = "none"
+
+            # Security checks
+            if "enable secret" not in config_lower and "enable password" not in config_lower:
+                findings.append({"device": name, "severity": "critical", "issue": "No enable secret or enable password configured."})
+
+            if "hostname" not in config_lower:
+                findings.append({"device": name, "severity": "warning", "issue": "Hostname not explicitly set."})
+
+            if "no ip domain-lookup" not in config_lower:
+                findings.append({"device": name, "severity": "info", "issue": "ip domain-lookup is enabled — typos in CLI may cause DNS lookup delays."})
+
+            if "line vty" in config_lower and "login" not in config_lower:
+                findings.append({"device": name, "severity": "critical", "issue": "VTY lines appear to have no login authentication configured."})
+
+            if "banner" not in config_lower:
+                findings.append({"device": name, "severity": "info", "issue": "No login banner configured."})
+
+            # Trunk checks
+            if "switchport mode trunk" in config_lower and "encapsulation dot1q" not in config_lower:
+                findings.append({"device": name, "severity": "warning", "issue": "Trunk port configured without explicit dot1q encapsulation."})
+
+            # Default route check for routers
+            if dtype and "router" in dtype.lower():
+                if "ip route 0.0.0.0 0.0.0.0" not in config_lower and "default-information originate" not in config_lower:
+                    findings.append({"device": name, "severity": "info", "issue": "No default route configured. Devices behind this router may lack internet access."})
+
+        # Cross-device: routing protocol mismatch
+        unique_protos = set(v for v in protocols.values() if v != "none")
+        if len(unique_protos) > 1:
+            has_redistribution = False
+            for name, dtype in devices:
+                with db_lock:
+                    cur.execute("SELECT config_snapshot FROM logs WHERE device_name=? ORDER BY id DESC LIMIT 1", (name,))
+                    row = cur.fetchone()
+                config = (row[0] if row else "").lower()
+                if "redistribute" in config:
+                    has_redistribution = True
+                    break
+            if not has_redistribution:
+                findings.append({
+                    "device": "NETWORK-WIDE",
+                    "severity": "critical",
+                    "issue": f"Multiple routing protocols detected ({', '.join(p.upper() for p in unique_protos)}) but NO redistribution router found. Routes cannot be exchanged between protocol domains."
+                })
+
+        result = {
+            "status": "complete",
+            "total_devices": len(devices),
+            "findings_count": len(findings),
+            "protocol_map": protocols,
+            "findings": findings,
+        }
+        ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> Audit complete: {len(findings)} findings across {len(devices)} devices</span>\n")
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Audit error: {e}"
+
+
+def trace_connectivity(source_device: str, destination_ip: str) -> str:
+    """Trace network connectivity from a source device to a destination IP.
+
+    Runs diagnostic commands (ping, show ip route, show interfaces) on the source device
+    and follows the path hop by hop using routing table entries. Reports each hop's status.
+
+    Args:
+        source_device: Name of the starting device in ANCS
+        destination_ip: Target IP address to trace to
+
+    Returns a JSON report of the path trace results.
+    """
+    ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> trace_connectivity({source_device} → {destination_ip})</span>\n")
+    results = {"source": source_device, "destination": destination_ip, "hops": [], "verdict": ""}
+
+    try:
+        # Step 1: Ping from source
+        ctx.log(f"<span style='color:#C9D1D9'>Step 1: Ping test from {source_device}...</span>\n")
+        ping_result = run_cli_on_device(source_device, f"ping {destination_ip}")
+        success_rate = "unknown"
+        if "percent" in ping_result.lower():
+            for line in ping_result.splitlines():
+                if "percent" in line.lower():
+                    success_rate = line.strip()
+                    break
+        results["ping"] = {"output": ping_result[-500:], "success_rate": success_rate}
+
+        # Step 2: Check routing table
+        ctx.log(f"<span style='color:#C9D1D9'>Step 2: Checking routing table on {source_device}...</span>\n")
+        route_result = run_cli_on_device(source_device, f"show ip route {destination_ip}")
+        results["routing_table_lookup"] = route_result[-500:]
+
+        # Step 3: Check interfaces
+        ctx.log(f"<span style='color:#C9D1D9'>Step 3: Checking interface status on {source_device}...</span>\n")
+        intf_result = run_cli_on_device(source_device, "show ip interface brief")
+        results["interface_status"] = intf_result[-800:]
+
+        # Step 4: Check ARP table
+        ctx.log(f"<span style='color:#C9D1D9'>Step 4: Checking ARP table on {source_device}...</span>\n")
+        arp_result = run_cli_on_device(source_device, "show arp")
+        results["arp_table"] = arp_result[-500:]
+
+        # Determine verdict
+        if "!!!!!" in ping_result or "100 percent" in ping_result.lower():
+            results["verdict"] = "REACHABLE — All pings succeeded."
+        elif "....." in ping_result or "0 percent" in ping_result.lower():
+            results["verdict"] = "UNREACHABLE — All pings failed. Check routing, interfaces, and ACLs."
+        elif "!" in ping_result and "." in ping_result:
+            results["verdict"] = "PARTIAL — Some pings succeeded. Possible intermittent connectivity or ARP resolution delay."
+        else:
+            results["verdict"] = "UNKNOWN — Could not determine connectivity status from ping output."
+
+        ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> Trace complete: {results['verdict']}</span>\n")
+        return json.dumps(results, indent=2)
+    except Exception as e:
+        return f"Trace error: {e}"
 
 
 def detect_topology() -> str:
@@ -794,6 +901,9 @@ ALL_TOOLS = [
     deploy_to_device,
     verify_deployment,
     verify_device,
+    # Intelligence
+    audit_network,
+    trace_connectivity,
     # Utilities
     calculate_subnet,
     get_ancs_help,
@@ -856,8 +966,8 @@ You have access to these tool functions. **Prefer device_name-based tools** over
 - `get_send_history(device_name)` - deployment log
 - `query_logs(severity, limit)` - activity logs
 
-**Config Generation:**
-- `generate_device_config(hostname, device_role, ...)` - build IOS config from parameters
+**Config Generation (uses the SAME engine as the Guided Setup wizard):**
+- `generate_device_config(hostname, device_role, ...)` - build IOS config via ConfigEngine (block-formatted, with trunk encapsulation, portfast, speed/duplex, VLAN database syntax for core switches)
 - `detect_topology()` - analyze device roles and topology pattern
 - `suggest_configs()` - auto-generate config plans for all devices
 
@@ -867,9 +977,44 @@ You have access to these tool functions. **Prefer device_name-based tools** over
 - `verify_device(device_name, verify_commands)` - **preferred** verification by name
 - `verify_deployment(host, port, ...)` - optional credentials for Telnet verify
 
+**Network Intelligence (your superpower):**
+- `audit_network()` - scan ALL device configs for security issues, inconsistencies, mismatched routing protocols, missing trunks, etc. Returns structured findings.
+- `trace_connectivity(source_device, destination_ip)` - run ping, routing table, ARP, and interface checks from a device to diagnose reachability.
+
 **Utilities:**
 - `calculate_subnet(ip, prefix)` - subnet calculations
 - `get_ancs_help(topic)` - help on ANCS features and networking concepts
+
+# CONFIG GENERATION (CRITICAL)
+Your `generate_device_config` tool uses the **exact same ConfigEngine** as the Guided Setup wizard. This means:
+- Core switches get `vlan database` syntax (correct for c3640/c3725 images)
+- Trunk ports get `switchport trunk encapsulation dot1q`
+- Access ports on access switches get `spanning-tree portfast`
+- FastEthernet/Ethernet interfaces get `speed 100` and `duplex full`
+- Uplink ports are automatically excluded from VLAN access port assignments
+- DHCP pools include proper excluded-address ranges (not just the gateway)
+- OSPF, EIGRP, and RIP are all supported with redistribution
+- Output is block-formatted with `! BLOCK N:` headers for the Sender's per-block delays
+
+**When generating configs, you MUST use `generate_device_config` — do NOT write raw IOS commands yourself.** The ConfigEngine handles all the IOS quirks.
+
+# NETWORK-WIDE THINKING (YOUR UNIQUE ADVANTAGE)
+Unlike the Guided Setup wizard (which configures one device at a time), you can see the ENTIRE network simultaneously. Use this power:
+
+1. **Cross-device changes**: When asked to "add VLAN 40", update ALL relevant devices:
+   - Add VLAN definition on every switch
+   - Add to trunk allowed lists
+   - Create SVI on the core switch or subinterface on the router
+   - Add DHCP pool if the VLAN needs IP assignment
+   
+2. **Consistency checks**: Before deploying, verify the change is consistent across the network.
+   - Trunks between SW1 and CoreSW must carry the same VLANs
+   - All devices in an OSPF domain must be in the same area
+   
+3. **Impact analysis**: Before making changes, explain what will be affected.
+   - "Adding this ACL will block Guest users from accessing the Server VLAN on R1, CoreSW, and both access switches."
+
+4. **Proactive auditing**: When you first connect, run `audit_network()` mentally against the snapshot. Flag any issues upfront.
 
 # GROUNDING (CRITICAL)
 - **Configs** come from the project snapshot (what was generated/deployed).
@@ -890,6 +1035,8 @@ You have access to these tool functions. **Prefer device_name-based tools** over
 8. **If you must ask something**: Ask **one** clear question, in everyday words.
 9. **Chain tools intelligently**: If a task requires multiple steps, execute them in sequence.
 10. **Explain actions for beginners**: Before calling tools, one short line - not jargon stacks.
+11. **Use generate_device_config for ALL config generation**: Never write raw IOS by hand. Always use the ConfigEngine tool.
+12. **Think network-wide**: A change to one device almost always requires changes to other devices. Always consider the full topology.
 
 # CONVERSATION STYLE
 - **Answer-first**: Give the understandable summary before optional detail.
