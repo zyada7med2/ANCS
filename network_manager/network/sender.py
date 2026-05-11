@@ -226,10 +226,16 @@ class Sender:
         GNS3 IOS consoles often show 'Press RETURN to get started' before login.
         Send CR/LF until a login line or IOS prompt appears (or attempts exhausted).
         `read_available(timeout_sec)` must be an async callable returning str/bytes.
+
+        When many devices connect simultaneously (6+), GNS3's console multiplexer
+        can be slow to respond. We send up to 5 blind Enters with generous timeouts
+        to handle this case.
         """
         buf = initial or ""
         logged = False
-        for attempt in range(8):
+        MAX_BLIND_ATTEMPTS = 5   # was 2 — too few for saturated GNS3
+        BLIND_BUF_THRESHOLD = 200  # was 80 — GNS3 sometimes sends partial banners
+        for attempt in range(10):
             low = buf.lower()
             if "username:" in low or "login:" in low:
                 break
@@ -248,13 +254,17 @@ class Sender:
                     log_fn("[telnet] GNS3: sending Enter to pass IOS startup screen (Press RETURN)")
                     logged = True
                 writer.write("\r\n")
-                await asyncio.sleep(0.5)
-                buf += await read_available(1.5)
+                await asyncio.sleep(0.6)
+                buf += await read_available(2.0)
                 continue
-            if attempt < 2 and len(buf.strip()) < 80 and "username:" not in low and "login:" not in low:
+            # Blind Enter: GNS3 console may show nothing at all on first connect
+            if attempt < MAX_BLIND_ATTEMPTS and len(buf.strip()) < BLIND_BUF_THRESHOLD and "username:" not in low and "login:" not in low:
+                if not logged:
+                    log_fn(f"[telnet] GNS3: sending wake-up Enter ({attempt+1}/{MAX_BLIND_ATTEMPTS})")
+                    logged = True
                 writer.write("\r\n")
-                await asyncio.sleep(0.4)
-                buf += await read_available(1.2)
+                await asyncio.sleep(0.7)
+                buf += await read_available(2.0)
                 continue
             break
         return buf

@@ -2753,19 +2753,24 @@ class App(QMainWindow):
         import json, markdown
         from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                                         QLineEdit, QPushButton, QTextBrowser, QMessageBox,
-                                        QTabWidget, QWidget, QScrollArea, QFrame)
+                                        QTabWidget, QWidget, QScrollArea, QFrame, QCheckBox, QComboBox)
         from PySide6.QtCore import Qt, QTimer
         from network_manager.ai_agent import CopilotWorker
         from network_manager.config import CONFIG_FILE, GNS3_DEFAULT_URL
 
-        # ── Load API key ─────────────────────────────────────────────────
+        if not hasattr(self, "_copilot_history"):
+            self._copilot_history = []
+
+        # ── Load API key and provider/model config ─────────────────────────────
         cfg = {}
         try:
             with open(CONFIG_FILE, "r") as f:
                 cfg = json.load(f)
         except Exception:
             pass
-        saved_key = cfg.get("gemini_api_key", "")
+        saved_key = cfg.get("gemini_api_key", "") or cfg.get("openrouter_api_key", "")
+        saved_provider = cfg.get("agent_provider", "openrouter")
+        saved_model = cfg.get("agent_model", "openai/gpt-4o-mini")
 
         # ── Build Copilot Chat Dialog ────────────────────────────────────
         dlg = QDialog(self)
@@ -2816,23 +2821,78 @@ class App(QMainWindow):
         scope_row.addWidget(chk_raw_deploy)
         layout.addLayout(scope_row)
 
-        # Hidden API key row
+        # Hidden API key row (with provider and model selectors)
         key_widget = QWidget()
-        key_layout = QHBoxLayout(key_widget)
+        key_layout = QVBoxLayout(key_widget)
         key_layout.setContentsMargins(0, 0, 0, 0)
+        key_layout.setSpacing(8)
+        
+        # Row 1: Provider selector (NEW)
+        provider_row = QHBoxLayout()
+        provider_label = QLabel("Provider:")
+        provider_label.setStyleSheet("color: #8b949e; font-size: 12px;")
+        provider_combo = QComboBox()
+        provider_combo.addItems(["OpenRouter (Free Models)", "Google Gemini (API Key)"])
+        provider_combo.setCurrentIndex(1 if saved_provider == "gemini" else 0)
+        provider_combo.setStyleSheet("""
+            QComboBox { background-color: #161B22; border: 1px solid #30363D;
+                border-radius: 6px; color: #C9D1D9; padding: 5px 8px; font-size: 12px; }
+            QComboBox:focus { border-color: #a371f7; }
+            QComboBox::drop-down { border: none; }
+            QComboBox::down-arrow { image: url(noimg); }
+        """)
+        provider_row.addWidget(provider_label)
+        provider_row.addWidget(provider_combo, 1)
+        key_layout.addLayout(provider_row)
+        
+        # Row 2: API Key
+        key_row = QHBoxLayout()
         key_label = QLabel("API Key:")
         key_label.setStyleSheet("color: #8b949e; font-size: 12px;")
         key_input = QLineEdit(saved_key)
         key_input.setEchoMode(QLineEdit.Password)
-        key_input.setPlaceholderText("Paste your Google AI Studio API key")
+        key_input.setPlaceholderText("OpenRouter or Gemini API key")
         key_input.setStyleSheet("""
             QLineEdit { background-color: #161B22; border: 1px solid #30363D;
                 border-radius: 6px; color: #C9D1D9; padding: 5px 8px; font-size: 12px; }
             QLineEdit:focus { border-color: #a371f7; }
         """)
-        key_layout.addWidget(key_label)
-        key_layout.addWidget(key_input, 1)
+        key_row.addWidget(key_label)
+        key_row.addWidget(key_input, 1)
+        key_layout.addLayout(key_row)
         
+        # Row 3: Model selector (NEW)
+        model_row = QHBoxLayout()
+        model_label = QLabel("Model:")
+        model_label.setStyleSheet("color: #8b949e; font-size: 12px;")
+        model_combo = QComboBox()
+        model_combo.setEditable(True)
+        model_combo.addItems([
+            "openai/gpt-4o-mini",
+            "openai/gpt-4o-mini-2024-07-18",
+            "openai/gpt-oss-120b:free",
+            "mistralai/mistral-nemo:free",
+            "qwen/qwen-2-72b-instruct:free",
+            "nousresearch/hermes-3-llama-3.1-405b:free",
+            "meta-llama/llama-3.1-8b-instruct:free",
+            "google/gemma-2-27b-it:free",
+            "gemini-3-flash-preview",
+            "gemini-3-flash",
+        ])
+        model_combo.setCurrentText(saved_model)
+        model_combo.setStyleSheet("""
+            QComboBox { background-color: #161B22; border: 1px solid #30363D;
+                border-radius: 6px; color: #C9D1D9; padding: 5px 8px; font-size: 12px; }
+            QComboBox:focus { border-color: #a371f7; }
+            QComboBox::drop-down { border: none; }
+            QComboBox::down-arrow { image: url(noimg); }
+        """)
+        model_row.addWidget(model_label)
+        model_row.addWidget(model_combo, 1)
+        key_layout.addLayout(model_row)
+        
+        # Row 4: Buttons
+        button_row = QHBoxLayout()
         btn_launch = QPushButton("Connect Agent")
         btn_launch.setCursor(Qt.PointingHandCursor)
         btn_launch.setStyleSheet("""
@@ -2840,7 +2900,20 @@ class App(QMainWindow):
                 border-radius: 6px; color: #FFFFFF; padding: 5px 12px; font-size: 12px; font-weight: bold; }
             QPushButton:hover { background-color: #2ea043; }
         """)
-        key_layout.addWidget(btn_launch)
+        button_row.addWidget(btn_launch)
+
+        btn_disconnect = QPushButton("Disconnect")
+        btn_disconnect.setCursor(Qt.PointingHandCursor)
+        btn_disconnect.setToolTip("Stop the agent and close all device sessions")
+        btn_disconnect.setStyleSheet("""
+            QPushButton { background-color: #da3633; border: 1px solid #30363D;
+                border-radius: 6px; color: #FFFFFF; padding: 5px 12px; font-size: 12px; font-weight: bold; }
+            QPushButton:hover { background-color: #f85149; }
+        """)
+        btn_disconnect.setVisible(False)
+        button_row.addWidget(btn_disconnect)
+        button_row.addStretch()
+        key_layout.addLayout(button_row)
 
         key_widget.setVisible(not bool(saved_key))
         layout.addWidget(key_widget)
@@ -2865,7 +2938,7 @@ class App(QMainWindow):
             QTextBrowser { background-color: #0D1117; border: none; color: #e6edf3;
                 font-family: 'Segoe UI', 'Inter', sans-serif; font-size: 13px; padding: 14px; }
         """)
-        chat_browser.setHtml("<p style='color:#8b949e'>Connecting to AI agent...</p>")
+        chat_browser.setHtml("<p style='color:#8b949e'>Click Connect Agent or enter your API key to start.</p>")
         tabs.addTab(chat_browser, "💬  Chat")
 
         # Tab 2: Execution Logs
@@ -2971,18 +3044,20 @@ class App(QMainWindow):
             th { background: #161B22; color: #a371f7; }
             .user-msg { background: #1a1f3a; border-left: 3px solid #58a6ff; padding: 8px 14px; border-radius: 6px; margin: 8px 0; }
             .ai-msg { padding: 8px 0; margin: 8px 0; }
+            .system-msg { color: #8b949e; font-style: italic; text-align: center; margin: 12px 0; font-size: 12px; }
         </style>
         """
 
-        # ── Chat history for rendering ───────────────────────────────────
-        chat_html_parts = [md_css]
+        # ── Chat history — persisted on self so it survives dialog close/reopen ──
+        if not hasattr(self, "_copilot_chat_history"):
+            self._copilot_chat_history = [md_css]
 
         def render_chat():
-            chat_browser.setHtml("".join(chat_html_parts))
+            chat_browser.setHtml("".join(self._copilot_chat_history))
             chat_browser.verticalScrollBar().setValue(chat_browser.verticalScrollBar().maximum())
 
         def add_user_message(text: str):
-            chat_html_parts.append(
+            self._copilot_chat_history.append(
                 f"<div class='user-msg'><b style='color: #58a6ff'>You:</b> "
                 f"<span style='color: #e6edf3'>{text}</span></div>"
             )
@@ -2990,12 +3065,67 @@ class App(QMainWindow):
 
         def add_ai_message(text: str):
             rendered = markdown.markdown(text, extensions=["fenced_code", "tables"])
-            chat_html_parts.append(f"<div class='ai-msg'>{rendered}</div><hr>")
+            self._copilot_chat_history.append(f"<div class='ai-msg'>{rendered}</div><hr>")
+            render_chat()
+
+        def add_system_message(text: str):
+            self._copilot_chat_history.append(
+                f"<div class='system-msg'>— {text} —</div>"
+            )
+            render_chat()
+
+        # Restore existing chat history if dialog was closed and reopened
+        if len(self._copilot_chat_history) > 1:
             render_chat()
 
         # ── Worker lifecycle ─────────────────────────────────────────────
-        self._copilot_worker = None
+        if not hasattr(self, "_copilot_worker"):
+            self._copilot_worker = None
         _waiting_for_reply = {"flag": False}
+
+        def _is_worker_alive() -> bool:
+            return (self._copilot_worker is not None
+                    and self._copilot_worker.isRunning()
+                    and getattr(self._copilot_worker, "_running", False))
+
+        def _update_button_states():
+            """Sync button labels/visibility with worker state."""
+            alive = _is_worker_alive()
+            if alive:
+                btn_launch.setText("Reconnect")
+                btn_launch.setToolTip("Stop current session, reconnect with fresh device pool & snapshot")
+                btn_launch.setStyleSheet("""
+                    QPushButton { background-color: #9e6a03; border: 1px solid #30363D;
+                        border-radius: 6px; color: #FFFFFF; padding: 5px 12px; font-size: 12px; font-weight: bold; }
+                    QPushButton:hover { background-color: #bb8009; }
+                """)
+                btn_disconnect.setVisible(True)
+            else:
+                btn_launch.setText("Connect Agent")
+                btn_launch.setToolTip("Start the AI agent and connect to all devices")
+                btn_launch.setStyleSheet("""
+                    QPushButton { background-color: #238636; border: 1px solid #30363D;
+                        border-radius: 6px; color: #FFFFFF; padding: 5px 12px; font-size: 12px; font-weight: bold; }
+                    QPushButton:hover { background-color: #2ea043; }
+                """)
+                btn_disconnect.setVisible(False)
+
+        def _stop_worker():
+            """Stop the current worker and clean up sessions."""
+            if self._copilot_worker is not None:
+                # Persist history
+                self._copilot_history = getattr(self._copilot_worker, "_messages", [])
+                self._copilot_worker.stop()
+                if self._copilot_worker.isRunning():
+                    self._copilot_worker.wait(5000)
+                try:
+                    self._copilot_worker.terminal_log_signal.disconnect()
+                    self._copilot_worker.chat_response_signal.disconnect()
+                    self._copilot_worker.finished_signal.disconnect()
+                    self._copilot_worker.ready_signal.disconnect()
+                except Exception:
+                    pass
+                self._copilot_worker = None
 
         def on_terminal_log(html_text: str):
             logs_browser.append(html_text)
@@ -3042,16 +3172,40 @@ class App(QMainWindow):
         btn_send.clicked.connect(send_message)
         chat_input.returnPressed.connect(send_message)
 
-        # ── Start the agent immediately ──────────────────────────────────
+        # ── Start / reconnect the agent ─────────────────────────────────
         def launch_agent():
             api_key = key_input.text().strip()
             if not api_key:
                 key_widget.setVisible(True)
-                QMessageBox.warning(dlg, "Missing Key", "Please enter your Google AI Studio API key, then reopen Copilot.")
+                QMessageBox.warning(dlg, "Missing Key", "Please enter your API key (OpenRouter or Gemini).")
                 return
+
+            # Determine provider from combo index (0=OpenRouter, 1=Gemini)
+            provider = "gemini" if provider_combo.currentIndex() == 1 else "openrouter"
+            model_name = model_combo.currentText().strip()
+
+            # If worker is already running and healthy with the same key/provider/model, skip
+            if _is_worker_alive():
+                current_key = getattr(self._copilot_worker, "api_key", "")
+                current_provider = getattr(self._copilot_worker, "provider", "openrouter")
+                current_model = getattr(self._copilot_worker, "model_name", "")
+                if current_key == api_key and current_provider == provider and current_model == model_name:
+                    status_lbl.setText("● Online")
+                    status_lbl.setStyleSheet("color: #3fb950; font-size: 12px;")
+                    key_widget.setVisible(False)
+                    return
+                # Key/provider/model changed — reconnect
+                add_system_message("Reconnecting with updated settings...")
+                self._copilot_history = [] # Reset history on model/key change
+                _stop_worker()
+            elif self._copilot_worker is not None:
+                add_system_message("Reconnecting...")
+                _stop_worker()
 
             # Save key + agent preferences
             cfg["gemini_api_key"] = api_key
+            cfg["agent_provider"] = provider
+            cfg["agent_model"] = model_name
             cfg["agent_allow_raw_deploy"] = chk_raw_deploy.isChecked()
             try:
                 with open(CONFIG_FILE, "w", encoding="utf-8") as f:
@@ -3063,10 +3217,14 @@ class App(QMainWindow):
             gns3_url = getattr(self, '_gns3_url', GNS3_DEFAULT_URL) or GNS3_DEFAULT_URL
             gns3_project_id = getattr(self, "gns3_project_id", None) or ""
 
-            # Build full project snapshot for the agent
+            # Build FRESH project snapshot (picks up newly added devices)
             project_snapshot = self._build_copilot_snapshot()
-
             workspace_resolved = self._copilot_workspace_resolved()
+
+            # Update scope label with current device count
+            n_devs_now = len(self.devices)
+            n_cfg_now = sum(1 for _, m, _ in self.devices if any(m.templates.values()))
+            scope_lbl.setText(f"📡 Workspace: {n_devs_now} device(s), {n_cfg_now} configured")
 
             start_thinking()
             self._copilot_worker = CopilotWorker(
@@ -3077,6 +3235,9 @@ class App(QMainWindow):
                 gns3_project_id=str(gns3_project_id) if gns3_project_id else "",
                 project_snapshot=project_snapshot,
                 audit_fn=self._write_audit_log,
+                provider=provider,
+                model_name=model_name,
+                initial_messages=self._copilot_history,
             )
             self._copilot_worker.terminal_log_signal.connect(on_terminal_log)
             self._copilot_worker.chat_response_signal.connect(on_chat_response)
@@ -3086,25 +3247,50 @@ class App(QMainWindow):
             
             # Update UI state
             key_widget.setVisible(False)
-            chat_browser.setHtml("<p style='color:#8b949e'>Connecting to AI agent...</p>")
-            status_lbl.setText("● Initializing...")
+            status_lbl.setText("● Connecting...")
             status_lbl.setStyleSheet("color: #d29922; font-size: 12px;")
+            _update_button_states()
 
-        # Wire up manual launch
+        def disconnect_agent():
+            """Explicitly disconnect the agent and free all device sessions."""
+            _stop_worker()
+            stop_thinking()
+            add_system_message("Agent disconnected")
+            status_lbl.setText("● Disconnected")
+            status_lbl.setStyleSheet("color: #f85149; font-size: 12px;")
+            chat_input.setEnabled(False)
+            _copilot_set_send_enabled(False)
+            _update_button_states()
+
+        # Wire up buttons
         btn_launch.clicked.connect(launch_agent)
         key_input.returnPressed.connect(launch_agent)
+        btn_disconnect.clicked.connect(disconnect_agent)
 
-        # Cleanup on close
-        def on_close():
-            pass # We leave the worker running in the background so it can be reopened!
-            
-        dlg.finished.connect(lambda _: on_close())
+        # Cleanup on close — keep worker alive so dialog can be reopened instantly
+        dlg.finished.connect(lambda _: None)
 
-        # Auto-launch if we have an API key
-        if saved_key:
+        # Sync button states with current worker status
+        _update_button_states()
+
+        # If worker is already alive (dialog was closed and reopened), show online status
+        if _is_worker_alive():
+            try:
+                self._copilot_worker.terminal_log_signal.connect(on_terminal_log)
+                self._copilot_worker.chat_response_signal.connect(on_chat_response)
+                self._copilot_worker.finished_signal.connect(on_finished)
+                self._copilot_worker.ready_signal.connect(on_ready)
+            except Exception:
+                pass
+            status_lbl.setText("● Online")
+            status_lbl.setStyleSheet("color: #3fb950; font-size: 12px;")
+            chat_input.setEnabled(True)
+            _copilot_set_send_enabled(True)
+        elif saved_key:
+            # Auto-launch if we have an API key and no worker running
             QTimer.singleShot(300, launch_agent)
         else:
-            chat_browser.setHtml("<p style='color:#d29922'>Please configure your API key using the ⚙️ button, then reopen Copilot.</p>")
+            key_widget.setVisible(True)
 
         dlg.show()
 

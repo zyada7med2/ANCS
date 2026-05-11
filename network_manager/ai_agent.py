@@ -9,9 +9,11 @@ import base64
 import json
 import time
 import ipaddress
+import inspect
 from PySide6.QtCore import QThread, Signal
 from google import genai
 from google.genai import types
+import openai
 
 from network_manager.network.sender import Sender
 
@@ -745,12 +747,68 @@ def deploy_to_device(device_name: str, config_text: str) -> str:
             )
         tail = "\n".join(log_lines[-8:])
         if ok is False:
-            return f"Deployment failed.\n{tail}"
+            return f"Deployment FAILED (sender returned error).\n{tail}"
+
+        # ── Post-deploy verification ──────────────────────────────────
+        # Extract expected hostname from config to verify it actually took effect
+        expected_hostname = ""
+        for line in config_text.splitlines():
+            stripped = line.strip()
+            if stripped.lower().startswith("hostname "):
+                expected_hostname = stripped.split(None, 1)[1].strip()
+                break
+
+        if expected_hostname and info.get("protocol") != "ssh":
+            ctx.log(f"<span style='color:#8b949e'>[Copilot] Verifying deployment on {device_name}...</span>\n")
+            try:
+                import time as _time
+                _time.sleep(1.5)  # Let GNS3 settle after deploy
+                verify_result = Sender.run_show_commands_telnet(
+                    log_fn, info["host"], info["port"],
+                    info["username"], info["password"], info["enable_password"],
+                    ["show running-config | include hostname"],
+                )
+                verify_output = ""
+                for _k, _v in verify_result.items():
+                    if _k != "_error":
+                        verify_output += _v
+                if expected_hostname.lower() in verify_output.lower():
+                    ctx.log(f"<span style='color:#3fb950'><b>[Copilot]</b> ✓ Verified: hostname '{expected_hostname}' confirmed on device</span>\n")
+                else:
+                    ctx.log(f"<span style='color:#d73a49'><b>[Copilot]</b> ✗ Verification FAILED: hostname '{expected_hostname}' not found in running-config</span>\n")
+                    return (
+                        f"Deployment FAILED — config was sent but the device did not apply it. "
+                        f"Expected hostname '{expected_hostname}' not found in running-config. "
+                        f"The device may have been unresponsive (GNS3 console not ready).\n{tail}"
+                    )
+            except Exception as ve:
+                ctx.log(f"<span style='color:#d29922'>[Copilot] Post-deploy verification error (non-fatal): {ve}</span>\n")
+
         if getattr(ctx, "audit_fn", None):
             ctx.audit_fn(device_name, "Deploy Config (Copilot)", f"Copilot deployed {len(config_text)} characters via Telnet.", config_text)
-        return f"Deployment successful.\n{tail}"
+        return f"Deployment successful (verified).\n{tail}"
     except Exception as e:
         return f"Deployment failed: {e}"
+
+
+def _probe_session_alive(reader, writer) -> bool:
+    """Send a single Enter and check if the device responds with a prompt."""
+    try:
+        # Drain any stale buffer
+        try:
+            ctx.event_loop.run_until_complete(
+                asyncio.wait_for(reader.read(65535), timeout=0.1)
+            )
+        except (asyncio.TimeoutError, Exception):
+            pass
+        writer.write("\r\n")
+        probe = ctx.event_loop.run_until_complete(
+            asyncio.wait_for(reader.read(4096), timeout=2.0)
+        )
+        tail = (probe or "").rstrip()
+        return bool(tail and tail[-1] in (">", "#"))
+    except Exception:
+        return False
 
 
 def run_cli_on_device(device_name: str, command: str) -> str:
@@ -758,12 +816,22 @@ def run_cli_on_device(device_name: str, command: str) -> str:
     ctx.log(f"\n<span style='color: #a371f7'><b>[Tool]</b> run_cli_on_device({device_name}): {command}</span>\n")
     if device_name in (ctx.sessions or {}) and ctx.sessions[device_name]:
         reader, writer = ctx.sessions[device_name]
+        # Health-check: make sure the pooled session is still alive
+        if _probe_session_alive(reader, writer):
+            try:
+                out = ctx.event_loop.run_until_complete(_async_exec_rw(reader, writer, command))
+                ctx.log(f"<span style='color:#C9D1D9'>{out}</span>\n")
+                return out.strip()
+            except Exception as e:
+                ctx.log(f"<span style='color:#d29922'>[Copilot] Pooled session for {device_name} failed: {e} — falling back to fresh connection</span>\n")
+        else:
+            ctx.log(f"<span style='color:#d29922'>[Copilot] Pooled session for {device_name} is dead — evicting and using fresh connection</span>\n")
+        # Evict dead session
         try:
-            out = ctx.event_loop.run_until_complete(_async_exec_rw(reader, writer, command))
-            ctx.log(f"<span style='color:#C9D1D9'>{out}</span>\n")
-            return out.strip()
-        except Exception as e:
-            return f"Execution error: {e}"
+            writer.close()
+        except Exception:
+            pass
+        del ctx.sessions[device_name]
     info = _resolve_device_connection(device_name)
     if not info:
         return f"Error: no host/credentials for '{device_name}'."
@@ -927,12 +995,103 @@ ALL_TOOLS = [
 TOOL_MAP = {fn.__name__: fn for fn in ALL_TOOLS}
 
 
+def _build_openai_tools():
+    """Convert Python tool functions to OpenAI tool-calling JSON schemas.
+    
+    Uses inspect.signature() to extract parameter types, defaults, and docstrings.
+    Returns a list of OpenAI tool definition dicts for function calling.
+    """
+    import re
+    
+    tools = []
+    for fn in ALL_TOOLS:
+        # Get function signature
+        sig = inspect.signature(fn)
+        
+        # Get docstring
+        docstring = inspect.getdoc(fn) or ""
+        
+        # Use full docstring as description so the model understands all parameters
+        description = docstring if docstring else f"Call {fn.__name__}"
+        
+        # Parse Args section for per-parameter descriptions
+        param_docs = {}
+        if "Args:" in docstring:
+            args_section = docstring.split("Args:")[1]
+            if "Returns:" in args_section:
+                args_section = args_section.split("Returns:")[0]
+            
+            # Extract individual param descriptions like "  param_name (type): description"
+            for line in args_section.split('\n'):
+                line = line.strip()
+                if not line:
+                    continue
+                # Match "param_name (type): description" or "param_name: description"
+                match = re.match(r'(\w+)\s*(?:\([^)]*\))?\s*:\s*(.*)', line)
+                if match:
+                    param_name, param_desc = match.groups()
+                    param_docs[param_name] = param_desc.strip()
+        
+        # Build parameters object
+        properties = {}
+        required = []
+        
+        for param_name, param in sig.parameters.items():
+            if param_name == 'self':
+                continue
+            
+            # Determine type from annotation
+            param_type = "string"  # default
+            if param.annotation != inspect.Parameter.empty:
+                if param.annotation == int:
+                    param_type = "integer"
+                elif param.annotation == float:
+                    param_type = "number"
+                elif param.annotation == bool:
+                    param_type = "boolean"
+                elif param.annotation == list or param.annotation == dict:
+                    param_type = "object"
+                else:
+                    param_type = "string"
+            
+            # Get description from docstring or use generic
+            param_desc = param_docs.get(param_name, f"Parameter: {param_name}")
+            
+            properties[param_name] = {
+                "type": param_type,
+                "description": param_desc,
+            }
+            
+            # Check if required (no default value)
+            if param.default == inspect.Parameter.empty:
+                required.append(param_name)
+        
+        # Build tool definition
+        tool_def = {
+            "type": "function",
+            "function": {
+                "name": fn.__name__,
+                "description": description,
+                "parameters": {
+                    "type": "object",
+                    "properties": properties,
+                    "required": required,
+                },
+            },
+        }
+        tools.append(tool_def)
+    
+    return tools
+
+OPENAI_TOOLS = _build_openai_tools()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # SYSTEM PROMPT
 # ═══════════════════════════════════════════════════════════════════════════════
 
 SYSTEM_PROMPT = """# IDENTITY
-You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded inside the **ANCS (Auto Network Configuration System)** desktop application. You are powered by Gemini and operate as an intelligent assistant that can explore, analyze, configure, deploy, and troubleshoot network devices.
+You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded inside the **ANCS (Auto Network Configuration System)** desktop application. You are powered by AI and operate as an intelligent assistant that can explore, analyze, configure, deploy, and troubleshoot network devices.
 
 # ABOUT ANCS
 ANCS is a Python/PySide6 desktop app for managing Cisco network devices. Features:
@@ -1056,7 +1215,14 @@ Unlike the Guided Setup wizard (which configures one device at a time), you can 
 - **Answer-first**: Give the understandable summary before optional detail.
 - **No engineer voice**: Friendly, patient, concise. You are a tutor, not a grader.
 - When greeting: summarize what you see in the project snapshot (how many devices, what is configured, what is deployed, any obvious issues like mismatched routing protocols).
-- Do **not** open the chat by asking what would you like to do. Respond directly to what they asked."""
+- Do **not** open the chat by asking what would you like to do. Respond directly to what they asked.
+
+# CISCO IOS QUICK REFERENCE (for model grounding)
+Common commands: show running-config, show ip interface brief, show ip route, show vlan brief, show interfaces trunk, show spanning-tree, ping X.X.X.X
+Config mode: configure terminal → hostname X → interface X → ip address X M → no shutdown → end
+VLAN database (older IOS): vlan database → vlan 10 name Staff → exit
+Trunk: interface X → switchport trunk encapsulation dot1q → switchport mode trunk
+"""
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1081,7 +1247,10 @@ class CopilotWorker(QThread):
                  workspace_resolved: list | None = None,
                  gns3_project_id: str = "",
                  project_snapshot: str = "",
-                 audit_fn=None):
+                 audit_fn=None,
+                 provider: str = "openrouter",
+                 model_name: str = "openai/gpt-4o-mini",
+                 initial_messages: list | None = None):
         super().__init__()
         self.api_key = api_key
         self.gns3_url = gns3_url
@@ -1089,18 +1258,22 @@ class CopilotWorker(QThread):
         self.workspace_resolved = workspace_resolved or []
         self.gns3_project_id = gns3_project_id
         self.project_snapshot = project_snapshot or "{}"
+        self.provider = provider
+        self.model_name = model_name
         self._loop = None
         self._chat = None
         self._client = None
         self._msg_queue = []
         self._running = True
+        self._messages = initial_messages or []  # For OpenRouter chat history management
 
         # Wire context
         ctx.gns3_url = gns3_url
         ctx.gns3_project_id = gns3_project_id or ""
         ctx.primary_device_name = ""  # no single focus
         ctx.allow_raw_deploy = allow_raw_deploy
-        ctx.sessions = {}
+        if ctx.sessions is None:
+            ctx.sessions = {}
         ctx.log_fn = lambda msg: self.terminal_log_signal.emit(msg)
         ctx.audit_fn = audit_fn
 
@@ -1117,9 +1290,15 @@ class CopilotWorker(QThread):
         return True
 
     async def _establish_pool(self) -> None:
-        """Open Telnet sessions for other workspace devices (parallel-friendly CLI)."""
+        """Open Telnet sessions for workspace devices with staggered timing.
+
+        GNS3's console multiplexer can be overwhelmed when many connections
+        open simultaneously.  We stagger each device by 1.5 s and verify the
+        session is actually alive before storing it in the pool.
+        """
         import telnetlib3
 
+        device_idx = 0
         for ep in self.workspace_resolved:
             name = ep.get("device_name") or ""
             if not name:
@@ -1129,6 +1308,32 @@ class CopilotWorker(QThread):
             host, port = ep.get("host"), ep.get("port")
             if not host:
                 continue
+
+            # ── Reuse existing active session if available ─────────────
+            if name in ctx.sessions:
+                try:
+                    _r, _w = ctx.sessions[name]
+                    # Fast probe: send newline and see if it's writable
+                    _w.write("\r\n")
+                    self.terminal_log_signal.emit(
+                        f"<span style='color: #3fb950'>[Copilot] Pool ✓ {name} (reusing active session)</span>\n"
+                    )
+                    continue
+                except Exception:
+                    # Session stale or dead, cleanup and proceed to reconnect
+                    try: ctx.sessions[name][1].close()
+                    except: pass
+                    del ctx.sessions[name]
+
+            # ── Stagger: let GNS3 breathe between connections ──────────
+            if device_idx > 0:
+                stagger = 1.5
+                self.terminal_log_signal.emit(
+                    f"<span style='color:#8b949e'>[Copilot] Waiting {stagger}s before next device...</span>\n"
+                )
+                await asyncio.sleep(stagger)
+            device_idx += 1
+
             try:
                 self.terminal_log_signal.emit(
                     f"<span style='color:#8b949e'>[Copilot] Pool session: {name} ({host}:{port})...</span>\n"
@@ -1142,9 +1347,12 @@ class CopilotWorker(QThread):
                 )
                 continue
 
-            async def read_available(timeout_sec: float = 1.0) -> str:
+            # Closures need to capture the *current* reader, not the loop var
+            _reader = reader
+
+            async def read_available(timeout_sec: float = 1.0, _r=_reader) -> str:
                 try:
-                    return await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
+                    return await asyncio.wait_for(_r.read(4096), timeout=timeout_sec)
                 except asyncio.TimeoutError:
                     return ""
 
@@ -1187,22 +1395,42 @@ class CopilotWorker(QThread):
                 await asyncio.sleep(0.3)
                 writer.write(en + "\r\n")
                 await asyncio.sleep(0.3)
-                
+
             # Extra line clear before command mode
             writer.write("\r\n")
             await asyncio.sleep(0.2)
             writer.write("terminal length 0\r\n")
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(0.3)
             try:
-                await asyncio.wait_for(reader.read(65535), timeout=1.0)
+                await asyncio.wait_for(reader.read(65535), timeout=1.5)
             except asyncio.TimeoutError:
                 pass
-            ctx.sessions[name] = (reader, writer)
-            self.terminal_log_signal.emit(
-                f"<span style='color: #3fb950'>[Copilot] Pool ✓ {name}</span>\n"
-            )
 
-    def _process_response(self, response):
+            # ── Verify session is alive ────────────────────────────────
+            writer.write("\r\n")
+            await asyncio.sleep(0.5)
+            probe = ""
+            try:
+                probe = await asyncio.wait_for(reader.read(4096), timeout=2.0)
+            except asyncio.TimeoutError:
+                pass
+            probe_tail = (probe or "").rstrip()
+            if probe_tail and probe_tail[-1] in (">", "#"):
+                ctx.sessions[name] = (reader, writer)
+                self.terminal_log_signal.emit(
+                    f"<span style='color: #3fb950'>[Copilot] Pool ✓ {name} (session verified)</span>\n"
+                )
+            else:
+                # Session connected but device never responded — don't store a dead session
+                self.terminal_log_signal.emit(
+                    f"<span style='color:#d29922'>[Copilot] Pool ⚠ {name}: connected but no prompt detected — skipping</span>\n"
+                )
+                try:
+                    writer.close()
+                except Exception:
+                    pass
+
+    def _process_response_gemini(self, response):
         """Handle the agentic tool-calling loop and return final text."""
         MAX_TURNS = 25
         for turn in range(MAX_TURNS):
@@ -1270,6 +1498,106 @@ class CopilotWorker(QThread):
 
         return final_text or "I completed the requested actions. Check the Execution Logs for details."
 
+    def _process_response_openrouter(self, response):
+        """Handle the agentic tool-calling loop (OpenAI format) and return final text."""
+        MAX_TURNS = 25
+        for turn in range(MAX_TURNS):
+            message = response.choices[0].message
+
+            # If no tool calls, we're done
+            if not message.tool_calls:
+                break
+
+            # Add assistant message (with tool_calls) to history
+            self._messages.append(message.model_dump())
+
+            # Execute each tool call
+            for tc in message.tool_calls:
+                fn_name = tc.function.name
+                try:
+                    fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                except json.JSONDecodeError:
+                    fn_args = {}
+                    ctx.log(f"<span style='color:#d29922'>[Copilot] Warning: bad JSON args for {fn_name}</span>\n")
+
+                # Log tool call with arguments (same style as Gemini version)
+                args_preview = ", ".join(f"{k}={repr(v)[:80]}" for k, v in fn_args.items())
+                ctx.log(f"<span style='color:#a371f7'><b>[Tool Call]</b> {fn_name}({args_preview})</span>\n")
+
+                t0 = time.monotonic()
+                if fn_name in TOOL_MAP:
+                    try:
+                        result = TOOL_MAP[fn_name](**fn_args)
+                    except (json.JSONDecodeError, TypeError) as e:
+                        result = f"ERROR: Bad arguments for {fn_name} — {e}. Please check parameter types and retry."
+                        ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {e}</span>\n")
+                    except Exception as e:
+                        result = f"Tool error: {e}"
+                        ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {e}</span>\n")
+                else:
+                    result = f"Unknown tool: {fn_name}"
+                dt_ms = (time.monotonic() - t0) * 1000.0
+
+                # Log result preview + timing (same style as Gemini version)
+                result_preview = str(result)[:300].replace('<', '&lt;').replace('>', '&gt;')
+                ctx.log(
+                    f"<span style='color:#8b949e'>[Tool Result] {fn_name} → {dt_ms:.0f}ms | "
+                    f"{result_preview}{'…' if len(str(result)) > 300 else ''}</span>\n"
+                )
+
+                # Add tool result to messages
+                self._messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": str(result),
+                })
+
+            # Context anchoring every 8 tool turns to prevent drift
+            if turn > 0 and turn % 8 == 0:
+                self._messages.append({
+                    "role": "system",
+                    "content": "REMINDER: Stay focused on the user's original request. "
+                               "Do not repeat tools you already called successfully."
+                })
+
+            # Get next response with retry logic for rate limits
+            for attempt in range(3):
+                try:
+                    response = self._client.chat.completions.create(
+                        model=self.model_name,
+                        messages=self._messages,
+                        tools=OPENAI_TOOLS,
+                        extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"},
+                    )
+                    break
+                except openai.RateLimitError:
+                    if attempt < 2:
+                        wait = 2 ** (attempt + 1)
+                        self.terminal_log_signal.emit(
+                            f"<span style='color:#d29922'>[Copilot] Rate limited, retrying in {wait}s...</span>\n"
+                        )
+                        time.sleep(wait)
+                    else:
+                        raise
+
+        # Extract final text
+        final_text = ""
+        try:
+            final_text = response.choices[0].message.content or ""
+            if final_text:
+                self._messages.append({"role": "assistant", "content": final_text})
+        except Exception:
+            pass
+
+        return final_text or "I completed the requested actions. Check the Execution Logs for details."
+
+    def _process_response(self, response):
+        """Dispatch to the appropriate response processor based on provider."""
+        if self.provider == "gemini":
+            return self._process_response_gemini(response)
+        else:
+            return self._process_response_openrouter(response)
+
     def run(self):
         try:
             # 1. Create event loop
@@ -1286,36 +1614,56 @@ class CopilotWorker(QThread):
                 f"<span style='color: #3fb950'>[Copilot] Session pool ready: {pool_count} device(s) connected</span>\n"
             )
 
-            # 3. Init Gemini
-            self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Initializing Gemini...</span>\n")
-            self._client = genai.Client(
-                api_key=self.api_key,
-                http_options=types.HttpOptions(api_version="v1alpha"),
-            )
-
-            models_to_try = ["gemini-3-flash-preview", "gemini-3-flash"]
-            for model_name in models_to_try:
-                try:
-                    self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Trying model: {model_name}...</span>\n")
-                    self._chat = self._client.chats.create(
-                        model=model_name,
-                        config=types.GenerateContentConfig(
-                            tools=ALL_TOOLS,
-                            temperature=0.2,
-                            system_instruction=SYSTEM_PROMPT,
+            # 3. Init AI Client
+            if self.provider == "gemini":
+                # ── Gemini path (original, unchanged) ──
+                self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Initializing Gemini...</span>\n")
+                self._client = genai.Client(
+                    api_key=self.api_key,
+                    http_options=types.HttpOptions(api_version="v1alpha"),
+                )
+                models_to_try = [self.model_name] if self.model_name else ["gemini-3-flash-preview", "gemini-3-flash"]
+                for mn in models_to_try:
+                    try:
+                        self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Trying model: {mn}...</span>\n")
+                        self._chat = self._client.chats.create(
+                            model=mn,
+                            config=types.GenerateContentConfig(
+                                tools=ALL_TOOLS,
+                                temperature=0.2,
+                                system_instruction=SYSTEM_PROMPT,
+                            )
                         )
-                    )
-                    self.terminal_log_signal.emit(f"<span style='color: #3fb950'>[Copilot] Model loaded: {model_name} ✓</span>\n")
-                    break
-                except Exception as e:
-                    self.terminal_log_signal.emit(f"<span style='color: #d73a49'>[Copilot] {model_name} failed: {e}</span>\n")
-                    self._chat = None
+                        self.terminal_log_signal.emit(f"<span style='color: #3fb950'>[Copilot] Model loaded: {mn} ✓</span>\n")
+                        break
+                    except Exception as e:
+                        self.terminal_log_signal.emit(f"<span style='color: #d73a49'>[Copilot] {mn} failed: {e}</span>\n")
+                        self._chat = None
+                if not self._chat:
+                    self.finished_signal.emit("Failed to initialize any Gemini model.", False)
+                    return
 
-            if not self._chat:
-                self.finished_signal.emit("Failed to initialize any Gemini model.", False)
-                return
+            else:
+                # ── OpenRouter path (new) ──
+                self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Initializing OpenRouter...</span>\n")
+                key_preview = f"{self.api_key[:8]}...{self.api_key[-4:]}" if len(self.api_key) > 12 else "(empty)"
+                self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] API Key: {key_preview}</span>\n")
+                self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Provider: {self.provider} | Model: {self.model_name}</span>\n")
+                self._client = openai.OpenAI(
+                    api_key=self.api_key,
+                    base_url="https://openrouter.ai/api/v1",
+                    default_headers={
+                        "HTTP-Referer": "https://github.com/ANCS",
+                        "X-Title": "ANCS Copilot",
+                    },
+                )
+                if not self._messages:
+                    self._messages = [
+                        {"role": "system", "content": SYSTEM_PROMPT},
+                    ]
+                self.terminal_log_signal.emit(f"<span style='color: #3fb950'>[Copilot] Model: {self.model_name} ✓</span>\n")
 
-            # 4. Inject full project snapshot as the first message
+            # 4. Inject snapshot + greeting
             self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Building project snapshot...</span>\n")
             snap_preview = self.project_snapshot[:500]
             self.terminal_log_signal.emit(
@@ -1325,7 +1673,7 @@ class CopilotWorker(QThread):
                 f"<span style='color: #8b949e'>[Copilot] Injecting snapshot ({len(self.project_snapshot)} chars) into agent context...</span>\n"
             )
 
-            greeting_response = self._chat.send_message(
+            greeting_prompt = (
                 f"Here is the current ANCS project state (all devices, their configs, deploy status):\n"
                 f"```json\n{self.project_snapshot}\n```\n\n"
                 f"The user just opened Copilot. Greet briefly and summarize what you see in the project: "
@@ -1333,23 +1681,47 @@ class CopilotWorker(QThread):
                 f"issues you notice (e.g. mismatched routing protocols, missing configs, devices not deployed). "
                 f"Do NOT ask an open-ended 'what would you like to do?'."
             )
-            greeting_text = self._process_response(greeting_response)
-            self.chat_response_signal.emit(greeting_text)
+
+            # Only send greeting if this is a fresh conversation (no history yet)
+            if (self.provider == "gemini") or (self.provider == "openrouter" and len(self._messages) <= 1):
+                if self.provider == "gemini":
+                    greeting_response = self._chat.send_message(greeting_prompt)
+                else:
+                    self._messages.append({"role": "user", "content": greeting_prompt})
+                    greeting_response = self._client.chat.completions.create(
+                        model=self.model_name,
+                        messages=self._messages,
+                        tools=OPENAI_TOOLS,
+                        extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"},
+                    )
+
+                greeting_text = self._process_response(greeting_response)
+                self.chat_response_signal.emit(greeting_text)
+            
             self.ready_signal.emit()
 
-            # 5. Message loop — wait for user messages
+            # 5. Message loop
             while self._running:
                 if self._msg_queue:
                     user_msg = self._msg_queue.pop(0)
                     self.terminal_log_signal.emit(f"\n<span style='color: #58A6FF'><b>[User]</b> {user_msg}</span>\n")
                     try:
-                        response = self._chat.send_message(user_msg)
+                        if self.provider == "gemini":
+                            response = self._chat.send_message(user_msg)
+                        else:
+                            self._messages.append({"role": "user", "content": user_msg})
+                            response = self._client.chat.completions.create(
+                                model=self.model_name,
+                                messages=self._messages,
+                                tools=OPENAI_TOOLS,
+                                extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"},
+                            )
                         reply = self._process_response(response)
                         self.chat_response_signal.emit(reply)
                     except Exception as e:
                         self.chat_response_signal.emit(f"**Error:** {e}")
                 else:
-                    time.sleep(0.1)  # Idle wait
+                    time.sleep(0.1)
 
         except Exception as e:
             import traceback
