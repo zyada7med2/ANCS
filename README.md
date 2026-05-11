@@ -2,77 +2,84 @@
 
 **Auto Network Configuration System**
 
-A modern desktop application for network device configuration management with GNS3 integration.
+A modern desktop application for network device configuration management with GNS3 integration, featuring a rich **PySide6** glass-transparent UI and an integrated **Agentic AI Copilot**.
 
-![ANCS Screenshot](network_manager/screenshots/main-ui.PNG)
+## ✨ Core Features
 
-## ✨ Features
+- **Device & Topology Management**: Manage routers, switches, and core switches. Auto-import entire network topologies (nodes and console links) directly from **GNS3**.
+- **Agentic AI Copilot**: An advanced AI network brain (powered by Gemini) built directly into the app. It can:
+  - Run multi-hop connectivity traces.
+  - Audit network security and routing protocol mismatches.
+  - Auto-generate configurations based on network topology.
+  - Interact directly with device consoles via the `sender.py` pool.
+- **Live State Sync**: Pull live `running-config` from devices using `puller.py` and `parser.py` to detect existing VLANs, IP assignments, and routing protocols, avoiding blind overwrites.
+- **Smart Guided Wizards**: Complex multi-step wizards that auto-derive DHCP pools, static routes, and ACLs based on your chosen routing scheme (RIP, OSPF, EIGRP).
+- **Async Network Engine**: High-performance concurrent deployments via `telnetlib3` (Telnet) and `paramiko` (SSH), ensuring the UI never freezes during long deployments.
+- **Modern PySide6 UI**: A highly polished, custom-themed dark mode interface with true glass transparency, responsive geometry, and custom widget components.
 
-- **Device Management** - Create and manage router, switch, and core switch configurations
-- **Template System** - Create reusable configuration templates
-- **GNS3 Integration** - Auto-import devices from GNS3 projects
-- **Network Communication** - Send configurations via Serial, Telnet, or SSH
-- **Configuration Wizards** - GUI wizards for VLAN and STP setup
-- **Subnet Calculator** - Calculate and plan network subnets
-- **Config Database** - SQLite storage for device and configuration persistence
-- **Modern Dark UI** - Clean, responsive interface built with CustomTkinter
-
-## 🚀 Installation
+## 🚀 Installation & Running
 
 1. Clone the repository:
 ```bash
 git clone https://github.com/zyada7med2/ANCS.git
-cd ANCS/network_manager
+cd ANCS
 ```
 
-2. Install dependencies:
+2. Setup virtual environment & dependencies:
 ```bash
-pip install -r requirements.txt
+python -m venv .venv
+# Activate your venv here (e.g., .venv\Scripts\activate on Windows)
+pip install -r network_manager/requirements.txt
 ```
 
 3. Run the application:
 ```bash
-python main.py
+# Uses the main run script which handles virtual environment re-execution
+python run.py
 ```
+
+## 🏗️ Project Architecture
+
+```
+ANCS/
+├── run.py                          # Primary entry point
+├── network_manager/
+│   ├── main.py                     # App initialisation
+│   ├── config.py                   # Global styling tokens & DB path
+│   ├── ai_agent.py                 # The AI Copilot logic and tool definitions
+│   ├── models/
+│   │   └── devices.py              # SQLite data classes (Router, Switch, CoreSwitch)
+│   ├── network/
+│   │   ├── sender.py               # Async CLI execution (telnetlib3, paramiko)
+│   │   ├── puller.py               # Connects to live devices to scrape configs
+│   │   ├── parser.py               # Parses live config into structured wizard data
+│   │   └── gns3.py                 # Communicates with GNS3 local server API
+│   └── gui/
+│       ├── app.py                  # The main PySide6 window and routing layout
+│       ├── wizards/
+│       │   ├── guided_setup_wizard.py # The core network logic generator
+│       │   └── config_engine.py    # Builds raw Cisco IOS strings
+│       ├── terminal_panel.py       # Live interactive console for devices
+│       ├── topology_viewer.py      # Network graph visualisation
+│       └── ...
+```
+
+## 📋 Key Dependencies
+
+- `PySide6`: Modern Qt framework for the UI.
+- `telnetlib3`: Async communication for GNS3 nodes.
+- `paramiko`: Secure SSH communication for physical devices.
+- `google-genai`: Powers the intelligent network Copilot.
+- `pyserial`: Fallback for physical console connections.
 
 ## 📦 Building Executable
 
-To create a standalone executable using cx_Freeze:
+To create a standalone executable for Windows:
 
 ```bash
 python setup_build.py build
 ```
-
-The executable will be in the `build/exe.win-amd64-3.x/` directory.
-
-## 🏗️ Project Structure
-
-```
-network_manager/
-├── main.py                 # Entry point
-├── config.py               # Configuration constants
-├── models/
-│   └── devices.py          # Device models (Router, Switch, CoreSwitch)
-├── network/
-│   ├── sender.py           # Network communication (Serial, Telnet, SSH)
-│   └── gns3.py             # GNS3 API connector
-├── gui/
-│   ├── app.py              # Main application window
-│   ├── wizards/            # VLAN & STP configuration wizards
-│   ├── calculators/        # Subnet calculator
-│   └── dialogs/            # Popup dialogs
-└── requirements.txt
-```
-
-## 📋 Requirements
-
-- Python 3.7+
-- customtkinter
-- paramiko (SSH)
-- pyserial (Serial)
-- requests (GNS3 API)
+The executable will be generated in the `build/` directory.
 
 ## 📄 License
-
 MIT License
-

@@ -126,6 +126,8 @@ try:
     # SHA-256 hash of the last successfully deployed config — used by Deploy All
     # to detect whether the config changed since the last send.
     _add_column_if_not_exists("devices", "deployed_config_hash TEXT DEFAULT ''")
+    # Vendor OS (cisco_ios, huawei_vrp, etc.) — used by multi-vendor abstraction layer
+    _add_column_if_not_exists("devices", "vendor_id TEXT DEFAULT 'cisco_ios'")
 
     # -----------------------------------------------------------------------
     # New tables

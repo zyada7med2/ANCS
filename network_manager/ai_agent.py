@@ -219,6 +219,13 @@ def run_command_on_device(command: str) -> str:
 
 async def _async_exec(command: str) -> str:
     """Send a command over the telnet session and read output."""
+    try:
+        await asyncio.wait_for(ctx.telnet_reader.read(65535), timeout=0.1)
+    except asyncio.TimeoutError:
+        pass
+    
+    ctx.telnet_writer.write("\r\n")
+    await asyncio.sleep(0.15)
     ctx.telnet_writer.write(command + "\r\n")
     await asyncio.sleep(1.2)
     buf = ""
@@ -238,6 +245,13 @@ async def _async_exec(command: str) -> str:
 
 async def _async_exec_rw(reader, writer, command: str) -> str:
     """Send a command on an arbitrary Telnet reader/writer pair (session pool)."""
+    try:
+        await asyncio.wait_for(reader.read(65535), timeout=0.1)
+    except asyncio.TimeoutError:
+        pass
+        
+    writer.write("\r\n")
+    await asyncio.sleep(0.15)
     writer.write(command + "\r\n")
     await asyncio.sleep(1.2)
     buf = ""
@@ -1173,6 +1187,10 @@ class CopilotWorker(QThread):
                 await asyncio.sleep(0.3)
                 writer.write(en + "\r\n")
                 await asyncio.sleep(0.3)
+                
+            # Extra line clear before command mode
+            writer.write("\r\n")
+            await asyncio.sleep(0.2)
             writer.write("terminal length 0\r\n")
             await asyncio.sleep(0.2)
             try:

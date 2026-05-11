@@ -121,6 +121,7 @@ from ..models import DeviceModel, RouterModel, SwitchModel, CoreSwitchModel
 from ..network import Sender, GNS3Connector
 from .utils import apply_responsive_geometry, enable_global_dark_dialogs
 from .outlined_label import OutlinedLabel
+from .physical_discovery_dialog import PhysicalDiscoveryDialog
 
 try:
     import requests
@@ -1358,15 +1359,15 @@ class App(QMainWindow):
                 border: 1px solid rgba(50, 85, 160, 80);
             }
         """)
-        left_panel.setMinimumWidth(220)
-        left_panel.setMaximumWidth(340)
+        left_panel.setMinimumWidth(260)
+        left_panel.setMaximumWidth(380)
         left_scroll = QScrollArea()
         left_scroll.setWidget(left_panel)
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.NoFrame)
         left_scroll.setStyleSheet("background: transparent;")
-        left_scroll.setMinimumWidth(220)
-        left_scroll.setMaximumWidth(340)
+        left_scroll.setMinimumWidth(260)
+        left_scroll.setMaximumWidth(380)
         left_scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -1380,7 +1381,7 @@ class App(QMainWindow):
 
         self.device_list = QListWidget()
         self.device_list.setIconSize(QSize(16, 16))
-        self.device_list.setMinimumHeight(120)
+        self.device_list.setMinimumHeight(250)
         self.device_list.setAutoFillBackground(True)
         self.device_list.setStyleSheet("""
             QListWidget {
@@ -1448,6 +1449,7 @@ class App(QMainWindow):
         left_layout.addWidget(lbl_templates)
 
         self.template_list = QListWidget()
+        self.template_list.setMinimumHeight(200)
         self.template_list.setAutoFillBackground(True)
         self.template_list.setStyleSheet("""
             QListWidget {
@@ -1693,8 +1695,8 @@ class App(QMainWindow):
         right_layout.setContentsMargins(18, 18, 18, 18)
         right_layout.setSpacing(10)
 
-        # GNS3 section
-        lbl_gns3 = QLabel("GNS3 Project")
+        # Import & Discovery section
+        lbl_gns3 = QLabel("Discovery & Import")
         lbl_gns3.setStyleSheet("color: white; font-size: 18px; font-weight: 700;")
         right_layout.addWidget(lbl_gns3)
 
@@ -1710,7 +1712,9 @@ class App(QMainWindow):
         gns3_row.addWidget(self.lbl_gns3_status)
         right_layout.addLayout(gns3_row)
 
-        gns3_btns = QHBoxLayout()
+        gns3_btns = QGridLayout()
+        gns3_btns.setHorizontalSpacing(6)
+        gns3_btns.setVerticalSpacing(6)
         btn_gns3_import = QPushButton("Import")
         btn_gns3_import.setStyleSheet("""
             QPushButton {
@@ -1739,6 +1743,22 @@ class App(QMainWindow):
         """)
         btn_gns3_refresh.setFixedHeight(32)
         btn_gns3_refresh.clicked.connect(self.refresh_gns3_connection)
+        
+        btn_physical_discovery = QPushButton("Add Physical")
+        btn_physical_discovery.setStyleSheet("""
+            QPushButton {
+                background-color: #238636;
+                border: 1px solid rgba(255, 255, 255, 20);
+                border-radius: 6px;
+                color: #FFFFFF;
+                font-size: 14px;
+                font-weight: bold;
+            }
+            QPushButton:hover { background-color: #2EA043; }
+        """)
+        btn_physical_discovery.setFixedHeight(32)
+        btn_physical_discovery.clicked.connect(self.show_physical_discovery)
+        
         btn_network_rescan = QPushButton("Rescan Networks")
         btn_network_rescan.setStyleSheet("""
             QPushButton {
@@ -1750,9 +1770,10 @@ class App(QMainWindow):
         """)
         btn_network_rescan.setFixedHeight(32)
         btn_network_rescan.clicked.connect(self._assign_network_ids)
-        gns3_btns.addWidget(btn_gns3_import)
-        gns3_btns.addWidget(btn_gns3_refresh)
-        gns3_btns.addWidget(btn_network_rescan)
+        gns3_btns.addWidget(btn_gns3_import, 0, 0)
+        gns3_btns.addWidget(btn_physical_discovery, 0, 1)
+        gns3_btns.addWidget(btn_gns3_refresh, 1, 0)
+        gns3_btns.addWidget(btn_network_rescan, 1, 1)
         right_layout.addLayout(gns3_btns)
 
         right_sep_top = QFrame()
@@ -2084,11 +2105,53 @@ class App(QMainWindow):
 
     # ── Thread-safe UI helpers (replaces self.after) ────────────────────
 
-    def _execute_main_thread_call(self, fn):
-        try:
-            fn()
-        except Exception:
-            pass
+    def _execute_main_thread_call(self, func):
+        func()
+
+    def show_physical_discovery(self):
+        """Shows the physical subnet/CDP discovery dialog and ingests findings."""
+        dlg = PhysicalDiscoveryDialog(self)
+        dlg.discovery_complete.connect(self._ingest_physical_devices)
+        dlg.exec()
+
+    def _ingest_physical_devices(self, found_devices):
+        """Ingests list of {'name':..., 'ip':..., 'port':..., 'protocol':..., 'type':...}"""
+        self._safe_bg_log(f"Importing {len(found_devices)} physical devices...")
+        
+        imported_count = 0
+        assigned = set([dev.name for _, dev, _ in self.devices])
+        
+        for p_dev in found_devices:
+            name = p_dev.get("name")
+            dev_type = p_dev.get("type", "router")
+            if not name or name in assigned:
+                import uuid
+                name = f"{name or 'Node'}-{str(uuid.uuid4())[:4]}"
+            
+            ModelClass = self.device_types.get(dev_type.lower(), DeviceModel)
+            model = ModelClass(name)
+            meta = {
+                "ip": p_dev.get("ip"),
+                "port": p_dev.get("port"),
+                "protocol": p_dev.get("protocol"),
+                "is_physical": True,
+                "type": dev_type
+            }
+            imported_count += 1
+            self.devices.append((name, model, meta))
+            assigned.add(name)
+
+        if imported_count > 0:
+            # Trigger UI update
+            self.lbl_gns3_project_name.setText(f"Physical/GNS3 Mixed")
+            self.lbl_gns3_status.setText(f"Active")
+            self.lbl_gns3_status.setStyleSheet(
+                "color: #7EE787; background-color: rgba(30,56,36,210); "
+                "border: 1px solid rgba(86,211,100,70); border-radius: 7px; "
+                "padding: 5px 11px; font-weight: bold; font-size: 13px;"
+            )
+            QTimer.singleShot(0, self.update_device_list)
+            QMessageBox.information(self, "Physical Discovery", f"Successfully imported {imported_count} devices from the physical network.")
 
     def _run_on_main(self, fn):
         app = QApplication.instance()
@@ -2681,6 +2744,12 @@ class App(QMainWindow):
 
     def invoke_ai_agent(self):
         """Triggered by the AI ✨ button — opens the Copilot interactive chat dialog."""
+        if getattr(self, "_copilot_dlg", None) is not None:
+            self._copilot_dlg.show()
+            self._copilot_dlg.raise_()
+            self._copilot_dlg.activateWindow()
+            return
+
         import json, markdown
         from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                                         QLineEdit, QPushButton, QTextBrowser, QMessageBox,
@@ -2700,6 +2769,7 @@ class App(QMainWindow):
 
         # ── Build Copilot Chat Dialog ────────────────────────────────────
         dlg = QDialog(self)
+        self._copilot_dlg = dlg
         dlg.setWindowTitle("ANCS Copilot — AI Agent")
         dlg.resize(920, 700)
         dlg.setStyleSheet(self._dialog_style())
@@ -3026,10 +3096,8 @@ class App(QMainWindow):
 
         # Cleanup on close
         def on_close():
-            if self._copilot_worker:
-                self._copilot_worker.stop()
-                self._copilot_worker.wait(2000)
-                self._copilot_worker = None
+            pass # We leave the worker running in the background so it can be reopened!
+            
         dlg.finished.connect(lambda _: on_close())
 
         # Auto-launch if we have an API key
@@ -3038,7 +3106,7 @@ class App(QMainWindow):
         else:
             chat_browser.setHtml("<p style='color:#d29922'>Please configure your API key using the ⚙️ button, then reopen Copilot.</p>")
 
-        dlg.exec()
+        dlg.show()
 
     def _set_send_busy(self, busy: bool):
         self._send_in_progress = busy

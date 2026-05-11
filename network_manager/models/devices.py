@@ -5,8 +5,9 @@ import copy
 
 
 class DeviceModel:
-    def __init__(self, name: str):
+    def __init__(self, name: str, vendor_id: str = "cisco_ios"):
         self.name = name
+        self.vendor_id = vendor_id
         self.templates: dict[str, str] = {}
         self.snapshots: list[dict[str, str]] = []
         self.state: dict = {}  # Structured network state from live sync (VLANs, IPs, etc.)
@@ -52,19 +53,19 @@ class DeviceModel:
 
 
 class RouterModel(DeviceModel):
-    def __init__(self, name="router1"):
-        super().__init__(name)
+    def __init__(self, name="router1", vendor_id: str = "cisco_ios"):
+        super().__init__(name, vendor_id)
         self.templates = {}
 
 
 class SwitchModel(DeviceModel):
-    def __init__(self, name="switch1"):
-        super().__init__(name)
+    def __init__(self, name="switch1", vendor_id: str = "cisco_ios"):
+        super().__init__(name, vendor_id)
         self.templates = {}
 
 
 class CoreSwitchModel(DeviceModel):
-    def __init__(self, name="core-sw1"):
-        super().__init__(name)
+    def __init__(self, name="core-sw1", vendor_id: str = "cisco_ios"):
+        super().__init__(name, vendor_id)
         self.templates = {}
 

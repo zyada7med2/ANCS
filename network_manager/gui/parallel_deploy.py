@@ -215,7 +215,11 @@ class ParallelDeployDialog(QDialog):
         self.parent_app._run_on_main(lambda r=row: self.table.setItem(r, 2, QTableWidgetItem("Deploying...")))
         
         try:
-            ok = Sender.send_telnet(self.parent_app.log, host, port, user, pw, enable, config)
+            # Get vendor-correct session config from the device model
+            from network_manager.vendors import get_profile
+            _vendor_id = getattr(model, "vendor_id", "cisco_ios")
+            _sc = get_profile(_vendor_id).session_config()
+            ok = Sender.send_telnet(self.parent_app.log, host, port, user, pw, enable, config, session_config=_sc)
             result = "Success" if ok else "Failed"
             detail = f"target={host}:{port}" if ok else "Send failed; check Logs tab"
             if ok:

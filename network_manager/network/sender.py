@@ -5,6 +5,9 @@ import time
 import asyncio
 import re
 
+from ..vendors.base import SessionConfig
+from ..vendors import get_profile
+
 # Optional imports
 try:
     import serial
@@ -83,7 +86,77 @@ class Sender:
         return blocks
 
     @staticmethod
-    def send_serial(log_fn, port, baud, text, newline_delay=0.02, block_delay=3.0):
+    def _get_default_session_config() -> SessionConfig:
+        """Get Cisco IOS default session config."""
+        return get_profile("cisco_ios").session_config()
+
+    @staticmethod
+    async def _handle_save_confirmation_async(
+        writer, read_available, log_fn, session_config: SessionConfig, timeout_sec: float = 3.0
+    ):
+        """Handle interactive save confirmation (e.g., Huawei's 'Are you sure?')."""
+        if not session_config.save_confirm_prompt:
+            return  # No confirmation needed (Cisco)
+
+        buf = ""
+        deadline = asyncio.get_event_loop().time() + timeout_sec
+        while asyncio.get_event_loop().time() < deadline:
+            try:
+                chunk = await asyncio.wait_for(read_available(0.3), timeout=0.3)
+                if chunk:
+                    buf += chunk
+                    if session_config.save_confirm_prompt in buf:
+                        log_fn(f"[telnet] save confirmation prompt detected: sending '{session_config.save_confirm_response}'")
+                        writer.write(session_config.save_confirm_response + "\r\n")
+                        await asyncio.sleep(0.2)
+                        return
+            except asyncio.TimeoutError:
+                pass
+
+    @staticmethod
+    def _handle_save_confirmation_serial(
+        ser, log_fn, session_config: SessionConfig, timeout_sec: float = 3.0
+    ):
+        """Handle interactive save confirmation for serial."""
+        if not session_config.save_confirm_prompt:
+            return
+
+        buf = b""
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            if ser.in_waiting:
+                buf += ser.read(ser.in_waiting)
+                if session_config.save_confirm_prompt.encode() in buf:
+                    log_fn(f"[serial] save confirmation prompt detected: sending '{session_config.save_confirm_response}'")
+                    ser.write((session_config.save_confirm_response + "\r\n").encode("utf-8"))
+                    time.sleep(0.2)
+                    return
+            time.sleep(0.1)
+
+    @staticmethod
+    def _handle_save_confirmation_ssh(
+        chan, log_fn, session_config: SessionConfig, timeout_sec: float = 3.0
+    ):
+        """Handle interactive save confirmation for SSH."""
+        if not session_config.save_confirm_prompt:
+            return
+
+        buf = ""
+        deadline = time.time() + timeout_sec
+        while time.time() < deadline:
+            time.sleep(0.15)
+            if chan.recv_ready():
+                buf += chan.recv(4096).decode("utf-8", errors="ignore")
+                if session_config.save_confirm_prompt in buf:
+                    log_fn(f"[ssh] save confirmation prompt detected: sending '{session_config.save_confirm_response}'")
+                    chan.send(session_config.save_confirm_response + "\n")
+                    time.sleep(0.2)
+                    return
+
+    @staticmethod
+    def send_serial(log_fn, port, baud, text, newline_delay=0.02, block_delay=3.0, session_config: SessionConfig = None):
+        if session_config is None:
+            session_config = Sender._get_default_session_config()
         if serial is None:
             log_fn("[serial] pyserial not installed")
             return False
@@ -92,19 +165,18 @@ class Sender:
             log_fn(f"[serial] opening {port} @ {baud}")
             ser = serial.Serial(port=port, baudrate=baud, timeout=1)
             time.sleep(0.5)
-            # Same IOS "Press RETURN to get started" screen as GNS3 telnet consoles
             ser.write(b"\r\n\r\n")
             time.sleep(0.35)
 
             def _wait_for_prompt_serial(timeout_sec=8.0):
-                """Read from serial until IOS prompt (# or >) appears."""
+                """Read from serial until device prompt appears."""
                 buf = b""
                 deadline = time.time() + timeout_sec
                 while time.time() < deadline:
                     if ser.in_waiting:
                         buf += ser.read(ser.in_waiting)
                         stripped = buf.rstrip()
-                        if stripped and chr(stripped[-1]) in ("#", ">"):
+                        if stripped and re.search(session_config.prompt_pattern_exec, stripped.decode("utf-8", errors="ignore")):
                             break
                     time.sleep(0.1)
                 return buf.decode("utf-8", errors="ignore")
@@ -188,13 +260,15 @@ class Sender:
         return buf
 
     @staticmethod
-    async def _send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=4.0):
+    async def _send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=4.0, session_config: SessionConfig = None):
         """Async implementation of telnet send using telnetlib3"""
+        if session_config is None:
+            session_config = Sender._get_default_session_config()
         reader, writer = await asyncio.wait_for(
             telnetlib3.open_connection(host, port),
             timeout=timeout
         )
-        
+
         async def read_available(timeout_sec=1.0):
             """Read whatever is available with timeout"""
             try:
@@ -203,8 +277,7 @@ class Sender:
                 return ""
 
         async def wait_for_prompt(timeout_sec=8.0):
-            """Read until we see an IOS prompt (# or >) — proves the CLI is
-            idle and ready for the next command. Returns all text read."""
+            """Read until we see a device prompt — proves the CLI is ready."""
             buf = ""
             deadline = asyncio.get_event_loop().time() + timeout_sec
             while asyncio.get_event_loop().time() < deadline:
@@ -212,15 +285,11 @@ class Sender:
                     chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
                     if chunk:
                         buf += chunk
-                        stripped = buf.rstrip()
-                        if stripped and stripped[-1] in ("#", ">"):
+                        if re.search(session_config.prompt_pattern_exec, buf):
                             break
                 except asyncio.TimeoutError:
-                    # No data for 0.5s — if we already have a prompt, done
-                    stripped = buf.rstrip()
-                    if stripped and stripped[-1] in ("#", ">"):
+                    if re.search(session_config.prompt_pattern_exec, buf):
                         break
-                    # Otherwise keep waiting until deadline
             return buf
 
         async def send_and_wait(line, extra_wait=0.0):
@@ -265,19 +334,21 @@ class Sender:
 
             # Wait for the device to settle into a prompt after login
             await wait_for_prompt(5.0)
-            
-            # Enable mode if needed
-            if enable_pw:
-                await send_and_wait("enable", 0.2)
-                await send_and_wait(enable_pw, 0.2)
-                log_fn("[telnet] enable sent")
-            
-            # Reduce noise that can corrupt long commands (syslog/paging)
+
+            # Privilege mode if needed
+            if session_config.privilege_command:
+                await send_and_wait(session_config.privilege_command, 0.2)
+                if enable_pw:
+                    await send_and_wait(enable_pw, 0.2)
+                log_fn("[telnet] privilege mode entered")
+
+            # Reduce noise that can corrupt long commands
             try:
-                await send_and_wait("terminal length 0")
-                await send_and_wait("configure terminal")
-                await send_and_wait("no logging console")
-                await send_and_wait("end")
+                await send_and_wait(session_config.paging_disable)
+                await send_and_wait(session_config.config_mode_enter)
+                if session_config.logging_disable:
+                    await send_and_wait(session_config.logging_disable)
+                await send_and_wait(session_config.config_mode_exit)
                 log_fn("[telnet] disabled console logging for this session")
             except Exception:
                 pass
@@ -306,6 +377,12 @@ class Sender:
                     log_fn(f"[telnet] waiting {block_delay}s before next block...")
                     await asyncio.sleep(block_delay)
             
+            # Handle save confirmation (e.g. Huawei's Y/N prompt)
+            if session_config and session_config.save_confirm_prompt:
+                await Sender._handle_save_confirmation_async(
+                    writer, read_available, log_fn, session_config
+                )
+
             # Read final output
             await asyncio.sleep(0.4)
             out = await read_available(1.0)
@@ -326,8 +403,10 @@ class Sender:
             raise e
 
     @staticmethod
-    def send_telnet(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0):
+    def send_telnet(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0, session_config: SessionConfig = None):
         """Send configuration via telnet using async telnetlib3"""
+        if session_config is None:
+            session_config = Sender._get_default_session_config()
         if telnetlib3 is None:
             log_fn("[telnet] telnetlib3 not installed")
             return False
@@ -335,7 +414,7 @@ class Sender:
             log_fn(f"[telnet] connecting to {host}:{port} ...")
             # Run the async function in a new event loop
             return asyncio.run(
-                Sender._send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout, block_delay)
+                Sender._send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout, block_delay, session_config)
             )
         except Exception as e:
             log_fn(f"[telnet] error: {e}")
@@ -346,11 +425,12 @@ class Sender:
         log_fn,
         host: str,
         port: int,
-        username: str,
-        password: str,
-        enable_pw: str,
         commands: list[str],
+        username: str = "",
+        password: str = "",
+        enable_pw: str = "",
         timeout: int = 10,
+        session_config: SessionConfig = None,
     ) -> dict[str, str]:
         """
         One Telnet session: wake/login/enable, terminal length 0, then each show command.
@@ -380,7 +460,7 @@ class Sender:
                     if chunk:
                         buf += chunk
                         stripped = buf.rstrip()
-                        if stripped and stripped[-1] in (">", "#"):
+                        if stripped and (stripped[-1] in (">", "#") or stripped[-1] == "]"):
                             break
                 except asyncio.TimeoutError:
                     break
@@ -416,13 +496,21 @@ class Sender:
                     await write_line(password)
                     await asyncio.sleep(0.2)
 
-            if enable_pw:
+            # Use session_config if provided, otherwise fall back to Cisco defaults
+            if session_config and session_config.privilege_command:
+                await write_line(session_config.privilege_command)
+                await asyncio.sleep(0.3)
+                if enable_pw:
+                    await write_line(enable_pw)
+                    await asyncio.sleep(0.2)
+            elif enable_pw:
                 await write_line("enable")
                 await asyncio.sleep(0.3)
                 await write_line(enable_pw)
                 await asyncio.sleep(0.2)
 
-            await write_line("terminal length 0")
+            paging_cmd = session_config.paging_disable if session_config else "terminal length 0"
+            await write_line(paging_cmd)
             await asyncio.sleep(0.25)
             await read_until_prompt(2.5)
 
@@ -473,7 +561,7 @@ class Sender:
     async def _verify_telnet_async(
         log_fn, host: str, port: int, commands: list[str],
         username: str = "", password: str = "", enable_pw: str = "",
-        timeout: int = 10
+        timeout: int = 10, session_config: SessionConfig = None
     ) -> dict[str, str]:
         """
         Open a new Telnet connection, run each show command, and capture output.
@@ -496,7 +584,7 @@ class Sender:
                     if chunk:
                         buf += chunk
                         stripped = buf.rstrip()
-                        if stripped and stripped[-1] in (">", "#"):
+                        if stripped and (stripped[-1] in (">", "#") or stripped[-1] == "]"):
                             break
                 except asyncio.TimeoutError:
                     break
@@ -516,7 +604,10 @@ class Sender:
             await Sender._telnet_wake_gns3_console(writer, read_available, log_fn, banner)
             await read_until_prompt(3.0)  # drain banner / reach prompt
 
-            await write_line("terminal length 0")
+            if session_config and session_config.paging_disable:
+                await write_line(session_config.paging_disable)
+            else:
+                await write_line("terminal length 0")
             await read_until_prompt(2.0)
 
             for cmd in commands:
@@ -539,12 +630,14 @@ class Sender:
     def verify_telnet(
         log_fn, host: str, port: int, commands: list[str],
         username: str = "", password: str = "", enable_pw: str = "",
-        timeout: int = 10
+        timeout: int = 10, session_config: SessionConfig = None
     ) -> dict[str, str]:
         """
         Connect via Telnet, run `commands`, and return {command: raw_output}.
         Designed to run after a successful config send.
         """
+        if session_config is None:
+            session_config = Sender._get_default_session_config()
         if telnetlib3 is None:
             log_fn("[verify] telnetlib3 not installed — skipping verification")
             return {}
@@ -552,7 +645,7 @@ class Sender:
             return asyncio.run(
                 Sender._verify_telnet_async(
                     log_fn, host, port, commands,
-                    username, password, enable_pw, timeout
+                    username, password, enable_pw, timeout, session_config
                 )
             )
         except Exception as exc:
@@ -562,7 +655,9 @@ class Sender:
     # ─────────────────────────────────────────────────────────────────────────
 
     @staticmethod
-    def send_ssh(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0):
+    def send_ssh(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0, session_config: SessionConfig = None):
+        if session_config is None:
+            session_config = Sender._get_default_session_config()
         if paramiko is None:
             log_fn("[ssh] paramiko not installed")
             return False
@@ -581,19 +676,17 @@ class Sender:
             time.sleep(0.4)
 
             def _wait_for_prompt_ssh(timeout_sec=8.0):
-                """Read from SSH channel until IOS prompt (# or >) appears."""
+                """Read from SSH channel until device prompt appears."""
                 buf = ""
                 deadline = time.time() + timeout_sec
                 while time.time() < deadline:
                     time.sleep(0.15)
                     if chan.recv_ready():
                         buf += chan.recv(4096).decode("utf-8", errors="ignore")
-                        stripped = buf.rstrip()
-                        if stripped and stripped[-1] in ("#", ">"):
+                        if re.search(session_config.prompt_pattern_exec, buf):
                             break
                     else:
-                        stripped = buf.rstrip()
-                        if stripped and stripped[-1] in ("#", ">"):
+                        if re.search(session_config.prompt_pattern_exec, buf):
                             break
                 return buf
 
@@ -602,15 +695,17 @@ class Sender:
                 chan.send(line + "\n")
                 _wait_for_prompt_ssh(timeout_sec)
 
-            _send_and_wait("terminal length 0")
-            if enable_pw:
-                _send_and_wait("enable")
-                _send_and_wait(enable_pw)
+            _send_and_wait(session_config.paging_disable)
+            if session_config.privilege_command:
+                _send_and_wait(session_config.privilege_command)
+                if enable_pw:
+                    _send_and_wait(enable_pw)
 
             try:
-                _send_and_wait("configure terminal")
-                _send_and_wait("no logging console")
-                _send_and_wait("end")
+                _send_and_wait(session_config.config_mode_enter)
+                if session_config.logging_disable:
+                    _send_and_wait(session_config.logging_disable)
+                _send_and_wait(session_config.config_mode_exit)
                 log_fn("[ssh] disabled console logging for this session")
             except Exception:
                 pass
@@ -636,6 +731,12 @@ class Sender:
                 if idx < len(blocks):
                     log_fn(f"[ssh] waiting {block_delay}s before next block...")
                     time.sleep(block_delay)
+
+            # Handle save confirmation if the last block was a save command.
+            # The guided_save block already sent the save command in the loop
+            # above, so we only need to handle the interactive confirmation
+            # (e.g. Huawei's Y/N prompt). We do NOT send save again.
+            Sender._handle_save_confirmation_ssh(chan, log_fn, session_config)
 
             time.sleep(0.4)
             output = ""
