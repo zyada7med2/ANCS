@@ -434,10 +434,6 @@ def generate_device_config(
 
         config_text = engine.build_full_config()
         blocks = engine.render_all_blocks()
-
-        # Add marker so deploy_to_device accepts generated configs
-        config_text = f"! Configured by ANCS Copilot\n\n{config_text}"
-
         ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> Config generated via ConfigEngine: {len(blocks)} blocks, {len(config_text.splitlines())} lines</span>\n")
         return config_text
     except Exception as e:
@@ -1589,7 +1585,7 @@ class CopilotWorker(QThread):
                         model=self.model_name,
                         messages=self._messages,
                         tools=OPENAI_TOOLS,
-                        extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"},
+                        extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"} if self.provider == "openrouter" else {},
                     )
                     break
                 except openai.RateLimitError:
@@ -1700,17 +1696,26 @@ class CopilotWorker(QThread):
 
             # 4. Inject snapshot + greeting
             self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Building project snapshot...</span>\n")
-            snap_preview = self.project_snapshot[:500]
+
+            # Hapuppy has stricter request size limits; truncate large snapshots
+            snapshot_to_inject = self.project_snapshot
+            if self.provider == "hapuppy" and len(self.project_snapshot) > 20000:
+                self.terminal_log_signal.emit(
+                    f"<span style='color:#d29922'>[Copilot] Snapshot too large for Hapuppy ({len(self.project_snapshot)} chars). Truncating...</span>\n"
+                )
+                snapshot_to_inject = self.project_snapshot[:20000] + "\n[... snapshot truncated for request size limits]"
+
+            snap_preview = snapshot_to_inject[:500]
             self.terminal_log_signal.emit(
-                f"<span style='color:#8b949e'>[Snapshot] {snap_preview}{'…' if len(self.project_snapshot) > 500 else ''}</span>\n"
+                f"<span style='color:#8b949e'>[Snapshot] {snap_preview}{'…' if len(snapshot_to_inject) > 500 else ''}</span>\n"
             )
             self.terminal_log_signal.emit(
-                f"<span style='color: #8b949e'>[Copilot] Injecting snapshot ({len(self.project_snapshot)} chars) into agent context...</span>\n"
+                f"<span style='color: #8b949e'>[Copilot] Injecting snapshot ({len(snapshot_to_inject)} chars) into agent context...</span>\n"
             )
 
             greeting_prompt = (
                 f"Here is the current ANCS project state (all devices, their configs, deploy status):\n"
-                f"```json\n{self.project_snapshot}\n```\n\n"
+                f"```json\n{snapshot_to_inject}\n```\n\n"
                 f"The user just opened Copilot. Greet briefly and summarize what you see in the project: "
                 f"how many devices, what's configured vs not, what's been deployed, and flag any obvious "
                 f"issues you notice (e.g. mismatched routing protocols, missing configs, devices not deployed). "
@@ -1727,7 +1732,7 @@ class CopilotWorker(QThread):
                         model=self.model_name,
                         messages=self._messages,
                         tools=OPENAI_TOOLS,
-                        extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"},
+                        extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"} if self.provider == "openrouter" else {},
                     )
 
                 greeting_text = self._process_response(greeting_response)
@@ -1749,7 +1754,7 @@ class CopilotWorker(QThread):
                                 model=self.model_name,
                                 messages=self._messages,
                                 tools=OPENAI_TOOLS,
-                                extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"},
+                                extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"} if self.provider == "openrouter" else {},
                             )
                         reply = self._process_response(response)
                         self.chat_response_signal.emit(reply)
