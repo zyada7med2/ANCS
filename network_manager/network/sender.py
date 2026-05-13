@@ -386,12 +386,24 @@ class Sender:
                 if idx < len(blocks):
                     log_fn(f"[telnet] waiting {block_delay}s before next block...")
                     await asyncio.sleep(block_delay)
-            
+
             # Handle save confirmation (e.g. Huawei's Y/N prompt)
             if session_config and session_config.save_confirm_prompt:
                 await Sender._handle_save_confirmation_async(
                     writer, read_available, log_fn, session_config
                 )
+            else:
+                # For Cisco: send final Enter after write memory to ensure device processes it
+                log_fn(f"[telnet] sending final Enter to confirm save")
+                writer.write("\r\n")
+                await asyncio.sleep(0.2)
+                try:
+                    final_response = await asyncio.wait_for(read_available(0.5), timeout=0.5)
+                    if final_response:
+                        log_fn(f"[telnet] device response after save: {final_response[:100]}")
+                except asyncio.TimeoutError:
+                    log_fn(f"[telnet] no response after final Enter (device may be processing)")
+
 
             # Read final output
             await asyncio.sleep(0.4)

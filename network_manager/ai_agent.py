@@ -434,6 +434,10 @@ def generate_device_config(
 
         config_text = engine.build_full_config()
         blocks = engine.render_all_blocks()
+
+        # Add marker so deploy_to_device accepts generated configs
+        config_text = f"! Configured by ANCS Copilot\n\n{config_text}"
+
         ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> Config generated via ConfigEngine: {len(blocks)} blocks, {len(config_text.splitlines())} lines</span>\n")
         return config_text
     except Exception as e:
