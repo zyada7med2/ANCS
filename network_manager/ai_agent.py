@@ -434,6 +434,10 @@ def generate_device_config(
 
         config_text = engine.build_full_config()
         blocks = engine.render_all_blocks()
+
+        # Add marker so deploy_to_device accepts generated configs
+        config_text = f"! Configured by ANCS Copilot\n\n{config_text}"
+
         ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> Config generated via ConfigEngine: {len(blocks)} blocks, {len(config_text.splitlines())} lines</span>\n")
         return config_text
     except Exception as e:
@@ -1284,6 +1288,24 @@ class CopilotWorker(QThread):
     def stop(self):
         self._running = False
 
+    def _send_with_retry(self, msg: str, max_retries: int = 3) -> str:
+        """Send message to Gemini/Vertex with automatic retry on 429 rate limits."""
+        for attempt in range(max_retries):
+            try:
+                response = self._chat.send_message(msg)
+                return response
+            except Exception as e:
+                error_str = str(e).lower()
+                if "429" in error_str or "resource_exhausted" in error_str or "rate" in error_str:
+                    if attempt < max_retries - 1:
+                        wait_time = 2 ** (attempt + 1)  # 2s, 4s, 8s...
+                        self.terminal_log_signal.emit(
+                            f"<span style='color:#d29922'>[Copilot] Rate limited. Retrying in {wait_time}s...</span>\n"
+                        )
+                        time.sleep(wait_time)
+                        continue
+                raise
+
     async def _async_connect(self) -> bool:
         """No primary device connection — pool handles all devices."""
         self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Agent uses session pool for all devices (no single-device focus).</span>\n")
@@ -1593,7 +1615,7 @@ class CopilotWorker(QThread):
 
     def _process_response(self, response):
         """Dispatch to the appropriate response processor based on provider."""
-        if self.provider == "gemini":
+        if self.provider in ("gemini", "vertex"):
             return self._process_response_gemini(response)
         else:
             return self._process_response_openrouter(response)
@@ -1615,14 +1637,25 @@ class CopilotWorker(QThread):
             )
 
             # 3. Init AI Client
-            if self.provider == "gemini":
-                # ── Gemini path (original, unchanged) ──
-                self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Initializing Gemini...</span>\n")
-                self._client = genai.Client(
-                    api_key=self.api_key,
-                    http_options=types.HttpOptions(api_version="v1alpha"),
-                )
-                models_to_try = [self.model_name] if self.model_name else ["gemini-3-flash-preview", "gemini-3-flash"]
+            if self.provider in ("gemini", "vertex"):
+                if self.provider == "vertex":
+                    self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Initializing Vertex AI with ADC...</span>\n")
+                    try:
+                        # Use Application Default Credentials (already set up via gcloud)
+                        self._client = genai.Client(vertexai=True)
+                        self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Vertex AI client initialized</span>\n")
+                    except Exception as e:
+                        self.terminal_log_signal.emit(f"<span style='color: #d73a49'>[Copilot] Vertex AI init failed: {e}</span>\n")
+                        self.finished_signal.emit(f"Failed to initialize Vertex AI: {e}", False)
+                        return
+                else:
+                    # ── Gemini path (original) ──
+                    self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Initializing Gemini...</span>\n")
+                    self._client = genai.Client(
+                        api_key=self.api_key,
+                        http_options=types.HttpOptions(api_version="v1alpha"),
+                    )
+                models_to_try = [self.model_name] if self.model_name else ["gemini-3-flash-preview", "gemini-2.0-flash", "gemini-1.5-flash", "gemini-pro"]
                 for mn in models_to_try:
                     try:
                         self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Trying model: {mn}...</span>\n")
@@ -1640,22 +1673,24 @@ class CopilotWorker(QThread):
                         self.terminal_log_signal.emit(f"<span style='color: #d73a49'>[Copilot] {mn} failed: {e}</span>\n")
                         self._chat = None
                 if not self._chat:
-                    self.finished_signal.emit("Failed to initialize any Gemini model.", False)
+                    self.finished_signal.emit("Failed to initialize any Gemini/Vertex model.", False)
                     return
 
             else:
-                # ── OpenRouter path (new) ──
-                self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Initializing OpenRouter...</span>\n")
+                # ── OpenRouter / Hapuppy path (OpenAI-compatible) ──
+                provider_name = "Hapuppy" if self.provider == "hapuppy" else "OpenRouter"
+                self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Initializing {provider_name}...</span>\n")
                 key_preview = f"{self.api_key[:8]}...{self.api_key[-4:]}" if len(self.api_key) > 12 else "(empty)"
                 self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] API Key: {key_preview}</span>\n")
                 self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Provider: {self.provider} | Model: {self.model_name}</span>\n")
+
+                base_url = "https://beta.hapuppy.com/v1" if self.provider == "hapuppy" else "https://openrouter.ai/api/v1"
+                headers = {"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"} if self.provider == "openrouter" else {}
+
                 self._client = openai.OpenAI(
                     api_key=self.api_key,
-                    base_url="https://openrouter.ai/api/v1",
-                    default_headers={
-                        "HTTP-Referer": "https://github.com/ANCS",
-                        "X-Title": "ANCS Copilot",
-                    },
+                    base_url=base_url,
+                    default_headers=headers,
                 )
                 if not self._messages:
                     self._messages = [
@@ -1683,9 +1718,9 @@ class CopilotWorker(QThread):
             )
 
             # Only send greeting if this is a fresh conversation (no history yet)
-            if (self.provider == "gemini") or (self.provider == "openrouter" and len(self._messages) <= 1):
-                if self.provider == "gemini":
-                    greeting_response = self._chat.send_message(greeting_prompt)
+            if (self.provider in ("gemini", "vertex")) or (self.provider in ("openrouter", "hapuppy") and len(self._messages) <= 1):
+                if self.provider in ("gemini", "vertex"):
+                    greeting_response = self._send_with_retry(greeting_prompt)
                 else:
                     self._messages.append({"role": "user", "content": greeting_prompt})
                     greeting_response = self._client.chat.completions.create(
@@ -1706,8 +1741,8 @@ class CopilotWorker(QThread):
                     user_msg = self._msg_queue.pop(0)
                     self.terminal_log_signal.emit(f"\n<span style='color: #58A6FF'><b>[User]</b> {user_msg}</span>\n")
                     try:
-                        if self.provider == "gemini":
-                            response = self._chat.send_message(user_msg)
+                        if self.provider in ("gemini", "vertex"):
+                            response = self._send_with_retry(user_msg)
                         else:
                             self._messages.append({"role": "user", "content": user_msg})
                             response = self._client.chat.completions.create(

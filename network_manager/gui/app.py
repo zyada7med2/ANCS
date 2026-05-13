@@ -2832,8 +2832,11 @@ class App(QMainWindow):
         provider_label = QLabel("Provider:")
         provider_label.setStyleSheet("color: #8b949e; font-size: 12px;")
         provider_combo = QComboBox()
-        provider_combo.addItems(["OpenRouter (Free Models)", "Google Gemini (API Key)"])
-        provider_combo.setCurrentIndex(1 if saved_provider == "gemini" else 0)
+        provider_combo.addItems(["OpenRouter (Free Models)", "Google Gemini (API Key)", "Vertex AI (Cloud Credits)", "Hapuppy (Cheap Models)"])
+        if saved_provider == "hapuppy": provider_combo.setCurrentIndex(3)
+        elif saved_provider == "vertex": provider_combo.setCurrentIndex(2)
+        elif saved_provider == "gemini": provider_combo.setCurrentIndex(1)
+        else: provider_combo.setCurrentIndex(0)
         provider_combo.setStyleSheet("""
             QComboBox { background-color: #161B22; border: 1px solid #30363D;
                 border-radius: 6px; color: #C9D1D9; padding: 5px 8px; font-size: 12px; }
@@ -2851,7 +2854,7 @@ class App(QMainWindow):
         key_label.setStyleSheet("color: #8b949e; font-size: 12px;")
         key_input = QLineEdit(saved_key)
         key_input.setEchoMode(QLineEdit.Password)
-        key_input.setPlaceholderText("OpenRouter or Gemini API key")
+        key_input.setPlaceholderText("API key (leave empty for Vertex AI, required for OpenRouter/Gemini/Hapuppy)")
         key_input.setStyleSheet("""
             QLineEdit { background-color: #161B22; border: 1px solid #30363D;
                 border-radius: 6px; color: #C9D1D9; padding: 5px 8px; font-size: 12px; }
@@ -2868,6 +2871,9 @@ class App(QMainWindow):
         model_combo = QComboBox()
         model_combo.setEditable(True)
         model_combo.addItems([
+            "gemini-2.5-flash",
+            "gpt-4o-mini",
+            "deepseek-v3",
             "openai/gpt-4o-mini",
             "openai/gpt-4o-mini-2024-07-18",
             "openai/gpt-oss-120b:free",
@@ -3175,13 +3181,20 @@ class App(QMainWindow):
         # ── Start / reconnect the agent ─────────────────────────────────
         def launch_agent():
             api_key = key_input.text().strip()
-            if not api_key:
+
+            # Determine provider from combo index (0=OpenRouter, 1=Gemini, 2=Vertex, 3=Hapuppy)
+            idx = provider_combo.currentIndex()
+            if idx == 1: provider = "gemini"
+            elif idx == 2: provider = "vertex"
+            elif idx == 3: provider = "hapuppy"
+            else: provider = "openrouter"
+
+            # API key is required for OpenRouter, Gemini, and Hapuppy, but not for Vertex AI (uses ADC)
+            if provider != "vertex" and not api_key:
                 key_widget.setVisible(True)
-                QMessageBox.warning(dlg, "Missing Key", "Please enter your API key (OpenRouter or Gemini).")
+                QMessageBox.warning(dlg, "Missing Key", "Please enter your API key.")
                 return
 
-            # Determine provider from combo index (0=OpenRouter, 1=Gemini)
-            provider = "gemini" if provider_combo.currentIndex() == 1 else "openrouter"
             model_name = model_combo.currentText().strip()
 
             # If worker is already running and healthy with the same key/provider/model, skip

@@ -1,0 +1,36 @@
+# General
+.git/
+.venv/
+__pycache__/
+*.pyc
+
+# Data & Persistence
+*.db
+figma_data.json
+figma_groups.json
+
+# Build & Dist
+build/
+dist/
+*.spec
+
+# Media & Assets
+*.png
+*.PNG
+*.jpg
+*.jpeg
+*.gif
+*.ico
+network_manager/screenshots/
+test_out.png
+
+# Logs
+*.log
+error.log
+
+# Other
+.cursor/
+.gemini/
+antigravity_session_v2.1.0_backup.md
+future_ideas.md
+ROUTER_FEATURES.md

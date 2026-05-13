@@ -1,0 +1,107 @@
+MULTI-VENDOR HUAWEI VRP — ENGINEERING CODE REVIEW
+===============================================
+
+Reviewer: Network Engineering perspective
+Scope: All files created/modified in Phases 1A-2B
+Date: 2026-04-27
+
+OVERALL ASSESSMENT
+------------------
+The architecture is solid. The VendorProfile ABC + SessionConfig pattern is clean, the dependency direction is correct (everything imports FROM vendors, never the reverse), and the default-fallback-everywhere strategy genuinely protects existing Cisco functionality. The code is well-organized and the separation of concerns is good.
+
+However, I found 8 critical bugs, 13 medium issues, and 4 low-priority improvements that need attention before this goes to production or a demo.
+
+
+CRITICAL BUGS
+-------------
+
+C1: Huawei OSPF redistribution into RIP — wrong "import-route rip 1"
+File: huawei_vrp.py
+The _redist_into_ospf method returns "import-route rip 1". On Huawei VRP, the default RIP process doesn't require an instance number. The correct redistribution command is simply "import-route rip".
+
+C2: Huawei RIP redistribution — "metric" is not valid VRP syntax
+File: huawei_vrp.py
+Returns "import-route ospf 1 metric 3". On Huawei VRP, the correct keyword is "cost", not "metric". The device will reject this command.
+
+C3: SSH sender sends save command twice
+File: sender.py
+The "save" command is sent as part of the normal block loop, then sent AGAIN explicitly. This triggers a second Y/N confirmation prompt on Huawei, causing latency and timing risks.
+
+C4: Telnet sender — missing save confirmation handling
+File: sender.py
+The telnet async sender never calls the save confirmation handler. When "save" is sent on Huawei, the device prompts Y/N but the response Y is never sent. Config will not be saved.
+
+C5: Huawei prompt regex matches [Y/N] as a device prompt
+File: huawei_vrp.py
+Regex [<>\]]\\s*$ matches "Are you sure to continue?[Y/N]". The code falsely thinks it found a prompt and stops before sending the Y response.
+
+C6: Stale "interface range" command in Huawei VLAN block
+File: huawei_vrp.py
+Huawei VRP doesn't have an "interface range" command. This line is dead code from Cisco logic and will produce an error.
+
+C7: GNS3 detection keyword "ar" will false-positive on Cisco devices
+File: huawei_vrp.py
+The keyword "ar" is too short and appears in many Cisco image names (e.g., "adventerprise"). This would misdetect Cisco devices as Huawei.
+
+C8: Wizard summary preview shows Cisco, templates save Huawei
+File: guided_setup_wizard.py
+The preview panel uses old hardcoded Cisco render methods, but the save flow uses the new ConfigEngine. The user sees wrong commands in the UI before deploying.
+
+
+MEDIUM ISSUES
+-------------
+
+M1: _run_show_commands_telnet_async still hardcoded Cisco (sender.py)
+M2: _verify_telnet_async also hardcoded Cisco (sender.py)
+M3: parallel_deploy.py doesn't pass session_config to sender.
+M4: Wizard _render_wan_block() bypasses vendor abstraction.
+M5: app.py never wires vendor_id to UI flow.
+M6: Validators always use cisco_ios profile for all devices.
+M7: Huawei DHCP missing global "dhcp enable" command.
+M8: Huawei DHCP missing excluded-address within pools.
+M9: Wizard summary preview uses old Cisco render methods.
+M10: Protocol selector hardcodes EIGRP for Huawei.
+M11: puller.py entirely hardcoded Cisco (enable, show run, prompts).
+M12: monitor.py hardcodes Cisco show commands.
+M13: ai_agent.py hardcodes Cisco commands throughout.
+
+
+LOW PRIORITY
+------------
+
+L1: vlan_wizard.py still hardcodes "write memory".
+L2: Huawei "undo info-center enable" is too aggressive for session suppression.
+L3: No VLAN ID range validation (1-4094) for batch commands.
+L4: Duplicate Cisco-only render methods in wizard are dead code once M9 is fixed.
+
+
+SUMMARY MATRIX
+--------------
+
+| #  | Severity | File                    | Issue                                         |
+|----|----------|-------------------------|-----------------------------------------------|
+| C1 | CRITICAL | huawei_vrp.py           | import-route rip 1 syntax error               |
+| C2 | CRITICAL | huawei_vrp.py           | metric vs cost syntax error                   |
+| C3 | CRITICAL | sender.py               | Double save command sent                      |
+| C4 | CRITICAL | sender.py               | Telnet missing save confirmation handler      |
+| C5 | CRITICAL | huawei_vrp.py           | Prompt regex false-match on [Y/N]             |
+| C6 | CRITICAL | huawei_vrp.py           | interface range does not exist in VRP         |
+| C7 | CRITICAL | huawei_vrp.py           | "ar" keyword causes Cisco false-positives     |
+| C8 | CRITICAL | guided_setup_wizard.py  | UI preview vs Template mismatch               |
+| M1 | MEDIUM   | sender.py               | Hardcoded Cisco in show commands              |
+| M11| MEDIUM   | puller.py               | Entirely Cisco-hardcoded                      |
+| M13| MEDIUM   | ai_agent.py             | Hardcoded Cisco commands throughout           |
+
+
+RECOMMENDED FIX PRIORITY
+------------------------
+1. Fix C5 first (prompt regex) - Root cause of interactive failures.
+2. Fix C6 (interface range) - Simple deletion.
+3. Fix C1 + C2 (redistribution) - Correct syntax errors.
+4. Fix C3 + C4 (save handling) - Ensure config persistence.
+5. Fix C7 (detection) - Prevent misdetection.
+6. Fix M9 + M10 (UI) - Fix user-facing discrepancies.
+7. Fix M7 + M8 (DHCP) - Fix non-functional DHCP.
+
+
+NOTE: The architecture is excellent. The bugs are in vendor-specific syntax details, not in the design pattern. Zero-breakage for Cisco is confirmed.

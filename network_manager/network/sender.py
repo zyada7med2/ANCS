@@ -396,8 +396,9 @@ class Sender:
             # Read final output
             await asyncio.sleep(0.4)
             out = await read_available(1.0)
-            if out and out.strip():
-                log_fn("[telnet] output:\n" + out[:2000])
+            if out and str(out).strip():
+                out_str = out if isinstance(out, str) else str(out)
+                log_fn("[telnet] output:\n" + out_str[:2000])
             else:
                 log_fn("[telnet] no output")
             

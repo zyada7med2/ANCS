@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(/c/Users/Zyad/AppData/Local/Programs/Python/Python314/python)",
+      "Bash(/c/Users/Zyad/AppData/Local/Programs/Python/Python314/python test_fixes_comprehensive.py)"
+    ]
+  }
+}
