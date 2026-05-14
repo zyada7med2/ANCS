@@ -4502,7 +4502,7 @@ class App(QMainWindow):
                     proj = projs[0]
             self.gns3 = g
             self.last_gns3_project = proj
-            project_id = proj.get('project_id') or proj.get('projectId') or proj.get('id')
+            project_id = proj.get('project_id') or proj.get('projectId')
             self.gns3_project_id = project_id
             if not project_id:
                 self._set_gns3_status("Project missing ID", False, "")
