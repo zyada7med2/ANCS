@@ -4687,7 +4687,7 @@ class App(QMainWindow):
                 return
             project = projs[idx]
             self.last_gns3_project = project
-            self.gns3_project_id = project.get('project_id') or project.get('projectId') or project.get('id')
+            self.gns3_project_id = project.get('project_id') or project.get('projectId')
             proj_name = project.get('name', '')
             self._set_gns3_status("\u2713 Connected", connected=True, project_name=proj_name or "Unknown project")
             QMessageBox.information(self, "GNS3", f"Selected {proj_name}")

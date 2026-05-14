@@ -37,7 +37,13 @@ class GNS3Connector:
                 f"{timeout} seconds."
             )
         except requests.exceptions.HTTPError as exc:
-            raise RuntimeError(f"GNS3 API error: {exc}")
+            # Include status code and response body for debugging
+            status = exc.response.status_code if hasattr(exc, 'response') else "unknown"
+            body = exc.response.text if hasattr(exc, 'response') else ""
+            raise RuntimeError(
+                f"GNS3 API error ({status}): {path}\n"
+                f"Response: {body[:200]}"
+            )
         except ValueError as exc:
             raise RuntimeError(f"GNS3 returned non-JSON response: {exc}")
 
