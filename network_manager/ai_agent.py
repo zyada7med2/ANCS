@@ -35,6 +35,7 @@ class _AgentContext:
     allow_raw_deploy: bool = False
     sessions: dict | None = None  # device_name -> (reader, writer); optional pool
     audit_fn = None  # callable(device_name, action, details, config_snapshot)
+    workspace_resolved: list | None = None  # live GNS3 connection info (host/port/creds)
     _gns3_connector_instance = None  # lazy singleton
 
     @staticmethod
@@ -71,46 +72,89 @@ def _truncate_tool_result(text: str, max_bytes: int = 10_000) -> str:
 
 
 def _resolve_device_connection(device_name: str) -> dict | None:
-    """Resolve host/port/credentials from SQLite (devices LEFT JOIN credentials)."""
+    """Resolve host/port/credentials — always uses live GNS3 console port."""
+    result = None
+
+    # ── Check workspace_resolved first ────────────────────────────────
+    if ctx.workspace_resolved:
+        for ep in ctx.workspace_resolved:
+            if (ep.get("device_name") or "").lower() == device_name.lower():
+                result = {
+                    "host": ep.get("host", ""),
+                    "port": ep.get("port", 23),
+                    "username": ep.get("user", ""),
+                    "password": ep.get("password", ""),
+                    "enable_password": ep.get("enable_password", ""),
+                    "protocol": ep.get("protocol", "telnet"),
+                }
+                break
+
+    # ── Fallback: SQLite database ─────────────────────────────────────
+    if result is None:
+        try:
+            from network_manager.config import cur, db_lock
+            with db_lock:
+                cur.execute(
+                    "SELECT d.ip, d.port, "
+                    "c.host, c.port, c.username, c.password, c.enable_password, c.protocol "
+                    "FROM devices d LEFT JOIN credentials c ON c.device_name = d.name "
+                    "WHERE d.name=?",
+                    (device_name,),
+                )
+                row = cur.fetchone()
+        except Exception:
+            return None
+        if not row:
+            return None
+        dip, dport, ch, cp, cu, cpw, ce, cprot = row
+        host = ((ch or "") if ch else (dip or "")).strip()
+        port_s = (str(cp or "") if cp else str(dport or "")).strip()
+        user = (cu or "").strip()
+        pw = _deobfuscate_pw(cpw or "")
+        enable = _deobfuscate_pw(ce or "")
+        protocol = "telnet"
+        if cprot and str(cprot).lower() in ("telnet", "ssh", "serial"):
+            protocol = str(cprot).lower()
+        if not host:
+            return None
+        try:
+            port_int = int(port_s) if str(port_s).isdigit() else 23
+        except Exception:
+            port_int = 23
+        result = {
+            "host": host,
+            "port": port_int,
+            "username": user,
+            "password": pw,
+            "enable_password": enable,
+            "protocol": protocol,
+        }
+
+    # ── Override port with live GNS3 console port ─────────────────────
+    # GNS3 reassigns console ports on every project restart. The DB/credentials
+    # value goes stale. Query the GNS3 API to get the actual live port.
     try:
-        from network_manager.config import cur, db_lock
-        with db_lock:
-            cur.execute(
-                "SELECT d.ip, d.port, "
-                "c.host, c.port, c.username, c.password, c.enable_password, c.protocol "
-                "FROM devices d LEFT JOIN credentials c ON c.device_name = d.name "
-                "WHERE d.name=?",
-                (device_name,),
-            )
-            row = cur.fetchone()
+        if ctx.gns3_project_id:
+            gns3 = ctx.get_gns3_connector()
+            nodes = gns3.get_nodes(ctx.gns3_project_id)
+            for node in nodes:
+                if (node.get("name") or "").lower() == device_name.lower():
+                    live_port = node.get("console")
+                    live_host = node.get("console_host", "")
+                    if live_port and int(live_port) != result["port"]:
+                        ctx.log(
+                            f"<span style='color:#d29922'>[Copilot] Port override: "
+                            f"{device_name} DB port {result['port']} → GNS3 live port {live_port}"
+                            f"</span>\n"
+                        )
+                        result["port"] = int(live_port)
+                    if live_host and live_host != "0.0.0.0":
+                        result["host"] = live_host
+                    break
     except Exception:
-        return None
-    if not row:
-        return None
-    dip, dport, ch, cp, cu, cpw, ce, cprot = row
-    # Credentials take priority; fall back to device table
-    host = ((ch or "") if ch else (dip or "")).strip()
-    port_s = (str(cp or "") if cp else str(dport or "")).strip()
-    user = (cu or "").strip()
-    pw = _deobfuscate_pw(cpw or "")
-    enable = _deobfuscate_pw(ce or "")
-    protocol = "telnet"
-    if cprot and str(cprot).lower() in ("telnet", "ssh", "serial"):
-        protocol = str(cprot).lower()
-    if not host:
-        return None
-    try:
-        port_int = int(port_s) if str(port_s).isdigit() else 23
-    except Exception:
-        port_int = 23
-    return {
-        "host": host,
-        "port": port_int,
-        "username": user,
-        "password": pw,
-        "enable_password": enable,
-        "protocol": protocol,
-    }
+        pass  # GNS3 unavailable — use whatever we already resolved
+
+    return result
 
 
 def _deploy_provenance_ok(device_name: str, config_text: str) -> bool:
@@ -281,33 +325,80 @@ async def _async_exec_rw(reader, writer, command: str) -> str:
 # ── 6-10: Database Tools ─────────────────────────────────────────────────────
 
 def list_all_devices() -> str:
-    """List all devices stored in the ANCS database. Returns JSON array with name, type, ip, port, status, connection_type."""
+    """List devices in the current project, enriched with live GNS3 status and ports."""
     try:
         from network_manager.config import cur, db_lock
         with db_lock:
-            cur.execute("SELECT name, type, ip, port, status, connection_type FROM devices ORDER BY name")
+            # Only select devices belonging to the current project or manually added ones (project_id is NULL/empty)
+            if ctx.gns3_project_id:
+                cur.execute(
+                    "SELECT name, type, ip, port, status, connection_type FROM devices "
+                    "WHERE project_id=? OR project_id IS NULL OR project_id='' ORDER BY name",
+                    (ctx.gns3_project_id,)
+                )
+            else:
+                cur.execute("SELECT name, type, ip, port, status, connection_type FROM devices ORDER BY name")
             rows = cur.fetchall()
-        result = [{"name": r[0], "type": r[1], "ip": r[2], "port": r[3], "status": r[4], "connection_type": r[5]} for r in rows]
-        ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> list_all_devices → {len(result)} devices</span>\n")
+
+        # Build base list from DB
+        result = []
+        for r in rows:
+            result.append({
+                "name": r[0], "type": r[1], "ip": r[2], "port": r[3],
+                "status": r[4] or "unknown", "connection_type": r[5],
+            })
+
+        # Enrich with live GNS3 data if available
+        gns3_nodes = {}
+        try:
+            if ctx.gns3_project_id:
+                gns3 = ctx.get_gns3_connector()
+                nodes = gns3.get_nodes(ctx.gns3_project_id)
+                for node in nodes:
+                    gns3_nodes[(node.get("name") or "").lower()] = node
+        except Exception:
+            pass
+
+        seen_ports = {}
+        for dev in result:
+            name_lower = (dev["name"] or "").lower()
+            if name_lower in gns3_nodes:
+                node = gns3_nodes[name_lower]
+                live_port = node.get("console")
+                live_status = node.get("status", "unknown")
+                if live_port:
+                    dev["port"] = live_port
+                dev["status"] = live_status  # "started", "stopped", etc.
+
+            # Flag duplicate ports
+            port_key = f"{dev.get('ip', '')}:{dev.get('port', '')}"
+            if port_key in seen_ports and dev.get("port"):
+                dev["warning"] = f"duplicate port — shared with {seen_ports[port_key]}"
+            elif dev.get("port"):
+                seen_ports[port_key] = dev["name"]
+
+        ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> list_all_devices → {len(result)} devices (filtered to current project)</span>\n")
         return json.dumps(result, indent=2)
     except Exception as e:
         return f"Error: {e}"
 
 
 def get_device_credentials(device_name: str) -> str:
-    """Get saved credentials (host, port, username, password, protocol) for a specific device. Passwords are included for connection purposes."""
-    try:
-        from network_manager.config import cur, db_lock
-        with db_lock:
-            cur.execute("SELECT host, port, username, password, enable_password, protocol FROM credentials WHERE device_name=?", (device_name,))
-            row = cur.fetchone()
-        if not row:
-            return f"No saved credentials for '{device_name}'"
-        result = {"host": row[0], "port": row[1], "username": row[2], "password": row[3], "enable_password": row[4], "protocol": row[5]}
-        ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> get_device_credentials({device_name})</span>\n")
-        return json.dumps(result, indent=2)
-    except Exception as e:
-        return f"Error: {e}"
+    """Get connection info (host, port, username, protocol) for a specific device. Uses live GNS3 port when available."""
+    info = _resolve_device_connection(device_name)
+    if not info:
+        return f"No connection info for '{device_name}'"
+    # Redact passwords for display safety — the deploy tools use _resolve_device_connection directly
+    result = {
+        "host": info["host"],
+        "port": info["port"],
+        "username": info["username"],
+        "password": "***" if info["password"] else "",
+        "enable_password": "***" if info["enable_password"] else "",
+        "protocol": info["protocol"],
+    }
+    ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> get_device_credentials({device_name})</span>\n")
+    return json.dumps(result, indent=2)
 
 
 def get_saved_config(device_name: str) -> str:
@@ -335,12 +426,12 @@ def get_send_history(device_name: str) -> str:
         from network_manager.config import cur, db_lock
         with db_lock:
             cur.execute("""
-                SELECT l.action, l.details, l.severity, l.created_at
-                FROM logs l JOIN devices d ON l.device_id = d.id
-                WHERE d.name=? ORDER BY l.created_at DESC LIMIT 10
+                SELECT action, details, config_snapshot, timestamp
+                FROM logs
+                WHERE device_name=? ORDER BY timestamp DESC LIMIT 10
             """, (device_name,))
             rows = cur.fetchall()
-        result = [{"action": r[0], "details": r[1], "severity": r[2], "timestamp": r[3]} for r in rows]
+        result = [{"action": r[0], "details": r[1], "config_snapshot": (r[2] or "")[:200], "timestamp": r[3]} for r in rows]
         ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> get_send_history({device_name}) → {len(result)} entries</span>\n")
         return json.dumps(result, indent=2)
     except Exception as e:
@@ -365,6 +456,34 @@ def query_logs(severity: str = "all", limit: int = 20) -> str:
 
 
 # ── 11-13: Config Generation ─────────────────────────────────────────────────
+
+def _parse_json_arg(val: str) -> list:
+    """Robustly parse JSON/Python lists from LLM outputs (handles markdown blocks and single quotes)."""
+    if not isinstance(val, str):
+        return val if val is not None else []
+    
+    val = val.strip()
+    if not val:
+        return []
+        
+    # Strip markdown code blocks if the model wrapped it
+    import re
+    val = re.sub(r'^```(?:json|python)?\s*\n', '', val)
+    val = re.sub(r'\n```$', '', val)
+    val = val.strip()
+
+    import json
+    import ast
+    try:
+        return json.loads(val)
+    except Exception:
+        pass
+        
+    try:
+        return ast.literal_eval(val)
+    except Exception:
+        raise ValueError(f"Could not parse array. Please provide a valid JSON or Python list. Got: {val[:100]}...")
+
 
 def generate_device_config(
     hostname: str,
@@ -391,32 +510,32 @@ def generate_device_config(
     Args:
         hostname: Device hostname
         device_role: 'router', 'core', or 'access'
-        vlans: JSON array of {"id": "10", "name": "Staff", "ports": "Ethernet0/0,Ethernet0/1"}
-        routing_entries: JSON array of {"vlan": "10", "name": "Staff", "ip": "192.168.10.1", "mask": "255.255.255.0"}
-        dhcp_pools: JSON array of {"pool": "Staff", "network": "192.168.10.0", "mask": "255.255.255.0", "gateway": "192.168.10.1", "dns": "8.8.8.8", "start": "192.168.10.50", "end": "192.168.10.200"}
-        uplinks: JSON array of {"ports": "Ethernet3/3", "mode": "trunk", "allowed vlans": "all"}
-        static_routes: JSON array of {"network": "0.0.0.0", "mask": "0.0.0.0", "next-hop": "10.0.0.1", "description": "Default"}
-        acl_rules: JSON array of {"acl #": "101", "action": "deny", "source": "192.168.10.0", "wildcard": "0.0.0.255", "destination": "192.168.30.0", "destination_wildcard": "0.0.0.255", "remark": "Block Guest from Servers"}
+        vlans: Array of {"id": "10", "name": "Staff", "ports": "Ethernet0/0,Ethernet0/1"}
+        routing_entries: Array of {"vlan": "10", "name": "Staff", "ip": "192.168.10.1", "mask": "255.255.255.0"}
+        dhcp_pools: Array of {"pool": "Staff", "network": "192.168.10.0", "mask": "255.255.255.0", "gateway": "192.168.10.1", "dns": "8.8.8.8", "start": "192.168.10.50", "end": "192.168.10.200"}
+        uplinks: Array of {"ports": "Ethernet3/3", "mode": "trunk", "allowed vlans": "all"}
+        static_routes: Array of {"network": "0.0.0.0", "mask": "0.0.0.0", "next-hop": "10.0.0.1", "description": "Default"}
+        acl_rules: Array of {"acl #": "101", "action": "deny", "source": "192.168.10.0", "wildcard": "0.0.0.255", "destination": "192.168.30.0", "destination_wildcard": "0.0.0.255", "remark": "Block Guest from Servers"}
         router_interface: Physical interface for router subinterfaces (e.g. FastEthernet0/0)
         routing_protocol: 'rip', 'ospf', 'eigrp', or 'none'
         wan_interface: WAN-facing interface (e.g. FastEthernet0/1)
         wan_ip: WAN IP address or 'dhcp'
         wan_mask: WAN subnet mask
-        transit_links: JSON array of {"local_interface": "FastEthernet0/1", "ip": "10.0.0.1", "mask": "255.255.255.252", "protocol": "ospf"}
+        transit_links: Array of {"local_interface": "FastEthernet0/1", "ip": "10.0.0.1", "mask": "255.255.255.252", "protocol": "ospf"}
 
     Returns the complete block-formatted IOS configuration text.
     """
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> generate_device_config(hostname={hostname}, role={device_role})</span>\n")
     try:
-        _vlans = json.loads(vlans) if isinstance(vlans, str) else vlans
-        _routing = json.loads(routing_entries) if isinstance(routing_entries, str) else routing_entries
-        _dhcp = json.loads(dhcp_pools) if isinstance(dhcp_pools, str) else dhcp_pools
-        _uplinks = json.loads(uplinks) if isinstance(uplinks, str) else uplinks
-        _static = json.loads(static_routes) if isinstance(static_routes, str) else static_routes
-        _acl = json.loads(acl_rules) if isinstance(acl_rules, str) else acl_rules
-        _transit = json.loads(transit_links) if isinstance(transit_links, str) else transit_links
-    except json.JSONDecodeError as e:
-        return f"JSON parse error: {e}"
+        _vlans = _parse_json_arg(vlans)
+        _routing = _parse_json_arg(routing_entries)
+        _dhcp = _parse_json_arg(dhcp_pools)
+        _uplinks = _parse_json_arg(uplinks)
+        _static = _parse_json_arg(static_routes)
+        _acl = _parse_json_arg(acl_rules)
+        _transit = _parse_json_arg(transit_links)
+    except ValueError as e:
+        return f"Parse error: {e}"
 
     try:
         from network_manager.gui.wizards.config_engine import ConfigEngine
@@ -451,6 +570,67 @@ def generate_device_config(
         return f"ConfigEngine error: {e}"
 
 
+def generate_and_deploy_device_config(
+    hostname: str,
+    device_role: str,
+    vlans: str = "[]",
+    routing_entries: str = "[]",
+    dhcp_pools: str = "[]",
+    uplinks: str = "[]",
+    static_routes: str = "[]",
+    acl_rules: str = "[]",
+    router_interface: str = "",
+    routing_protocol: str = "rip",
+    wan_interface: str = "",
+    wan_ip: str = "",
+    wan_mask: str = "255.255.255.252",
+    transit_links: str = "[]",
+) -> str:
+    """Generate AND immediately deploy a Cisco IOS config in one atomic step.
+    
+    This is the PREFERRED way to configure a device! It prevents errors that happen
+    when generating and deploying in separate steps.
+    
+    Args:
+        hostname: Device hostname (MUST match the target device name exactly)
+        device_role: 'router', 'core', or 'access'
+        vlans: Array of {"id": "10", "name": "Staff", "ports": "Ethernet0/0,Ethernet0/1"}
+        routing_entries: Array of {"vlan": "10", "name": "Staff", "ip": "192.168.10.1", "mask": "255.255.255.0"}
+        dhcp_pools: Array of {"pool": "Staff", "network": "192.168.10.0", "mask": "255.255.255.0", "gateway": "192.168.10.1", "dns": "8.8.8.8", "start": "192.168.10.50", "end": "192.168.10.200"}
+        uplinks: Array of {"ports": "Ethernet3/3", "mode": "trunk", "allowed vlans": "all"}
+        static_routes: Array of {"network": "0.0.0.0", "mask": "0.0.0.0", "next-hop": "10.0.0.1", "description": "Default"}
+        acl_rules: Array of {"acl #": "101", "action": "deny", "source": "192.168.10.0", "wildcard": "0.0.0.255", "destination": "192.168.30.0", "destination_wildcard": "0.0.0.255", "remark": "Block Guest from Servers"}
+        router_interface: Physical interface for router subinterfaces (e.g. FastEthernet0/0)
+        routing_protocol: 'rip', 'ospf', 'eigrp', or 'none'
+        wan_interface: WAN-facing interface (e.g. FastEthernet0/1)
+        wan_ip: WAN IP address or 'dhcp'
+        wan_mask: WAN subnet mask
+        transit_links: Array of {"local_interface": "FastEthernet0/1", "ip": "10.0.0.1", "mask": "255.255.255.252", "protocol": "ospf"}
+
+    Returns the deployment log output.
+    """
+    ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> generate_and_deploy_device_config(hostname={hostname})</span>\n")
+    
+    # 1. Generate the config
+    config_result = generate_device_config(
+        hostname=hostname, device_role=device_role, vlans=vlans, 
+        routing_entries=routing_entries, dhcp_pools=dhcp_pools, uplinks=uplinks, 
+        static_routes=static_routes, acl_rules=acl_rules, 
+        router_interface=router_interface, routing_protocol=routing_protocol, 
+        wan_interface=wan_interface, wan_ip=wan_ip, wan_mask=wan_mask, 
+        transit_links=transit_links
+    )
+    
+    if "ConfigEngine error" in config_result or "JSON parse error" in config_result:
+        return f"Failed to generate config: {config_result}"
+        
+    # 2. Deploy it immediately
+    ctx.log(f"<span style='color:#8b949e'>[Copilot] Auto-deploying generated config to {hostname}...</span>\n")
+    deploy_result = deploy_to_device(device_name=hostname, config_text=config_result)
+    
+    return f"GENERATION SUCCESSFUL. DEPLOYMENT RESULTS:\n{deploy_result}"
+
+
 def audit_network() -> str:
     """Scan ALL device configurations in the project snapshot for security issues, inconsistencies, and best-practice violations.
 
@@ -463,14 +643,20 @@ def audit_network() -> str:
     try:
         from network_manager.config import cur, db_lock
 
-        # Single query: fetch all devices with their latest config snapshot in one JOIN
+        # Fetch devices in the current project (or unassigned), along with their latest deployed config from logs
         with db_lock:
-            cur.execute(
-                "SELECT d.name, d.type, s.config_text "
-                "FROM devices d LEFT JOIN snapshots s ON s.device_name = d.name "
-                "AND s.id = (SELECT MAX(s2.id) FROM snapshots s2 WHERE s2.device_name = d.name) "
-                "ORDER BY d.name"
-            )
+            query = """
+                SELECT d.name, d.type, l.config_snapshot 
+                FROM devices d 
+                LEFT JOIN logs l ON l.device_name = d.name 
+                  AND l.id = (SELECT MAX(l2.id) FROM logs l2 WHERE l2.device_name = d.name AND l2.config_snapshot IS NOT NULL AND l2.config_snapshot != '') 
+            """
+            if ctx.gns3_project_id:
+                query += "WHERE d.project_id=? OR d.project_id IS NULL OR d.project_id='' ORDER BY d.name"
+                cur.execute(query, (ctx.gns3_project_id,))
+            else:
+                query += "ORDER BY d.name"
+                cur.execute(query)
             devices_with_configs = cur.fetchall()
 
         if not devices_with_configs:
@@ -684,9 +870,29 @@ def suggest_configs() -> str:
 
 # ── 14-16: Deployment ─────────────────────────────────────────────────────────
 
+def _evict_pool_by_host_port(host: str, port: int):
+    """Close any pooled session whose resolved host:port matches the target."""
+    if not ctx.sessions:
+        return
+    to_evict = []
+    for dname in list(ctx.sessions.keys()):
+        info = _resolve_device_connection(dname)
+        if info and info["host"] == host and info["port"] == port:
+            to_evict.append(dname)
+    for dname in to_evict:
+        try:
+            _r, _w = ctx.sessions[dname]
+            _w.close()
+        except Exception:
+            pass
+        del ctx.sessions[dname]
+        ctx.log(f"<span style='color:#8b949e'>[Copilot] Released pool session for {dname} (deploy needs exclusive console access)</span>\n")
+
+
 def deploy_config_telnet(host: str, port: int, username: str, password: str, enable_pw: str, config_text: str) -> str:
     """Deploy a configuration to a network device via Telnet. Returns the send log."""
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> deploy_config_telnet({host}:{port})</span>\n")
+    _evict_pool_by_host_port(host, port)
     try:
         from network_manager.network.sender import Sender
         log_lines = []
@@ -708,6 +914,7 @@ def deploy_config_telnet(host: str, port: int, username: str, password: str, ena
 def deploy_config_ssh(host: str, port: int, username: str, password: str, enable_pw: str, config_text: str) -> str:
     """Deploy a configuration to a network device via SSH. Returns the send log."""
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> deploy_config_ssh({host}:{port})</span>\n")
+    _evict_pool_by_host_port(host, port)
     try:
         from network_manager.network.sender import Sender
         log_lines = []
@@ -734,9 +941,38 @@ def deploy_to_device(device_name: str, config_text: str) -> str:
             "Deploy blocked: use generate_device_config or match get_saved_config for this device, "
             "or enable 'Allow raw config deploy' in Copilot."
         )
+
+    # ── Hostname mismatch guardrail ───────────────────────────────────
+    # Prevent dumb models from sending R1's config to SW1, etc.
+    import re as _re
+    _hostname_match = _re.search(r"(?m)^\s*hostname\s+(\S+)", config_text)
+    if _hostname_match:
+        _cfg_hostname = _hostname_match.group(1).strip()
+        if _cfg_hostname.lower() != device_name.lower():
+            return (
+                f"DEPLOY BLOCKED — hostname mismatch! The config contains 'hostname {_cfg_hostname}' "
+                f"but you are trying to deploy to device '{device_name}'. "
+                f"You must deploy this config to '{_cfg_hostname}', not '{device_name}'. "
+                f"Call deploy_to_device(device_name='{_cfg_hostname}', config_text=...) instead."
+            )
     info = _resolve_device_connection(device_name)
     if not info:
         return f"Error: no host/credentials for '{device_name}'."
+
+    # ── Close pooled session before deploy ─────────────────────────────
+    # GNS3 console ports are single-client: the pool's open Telnet
+    # connection would block the Sender's fresh connection from working.
+    _evicted = False
+    if ctx.sessions and device_name in ctx.sessions:
+        try:
+            _r, _w = ctx.sessions[device_name]
+            _w.close()
+        except Exception:
+            pass
+        del ctx.sessions[device_name]
+        _evicted = True
+        ctx.log(f"<span style='color:#8b949e'>[Copilot] Temporarily released pool session for {device_name} (deploy needs exclusive console access)</span>\n")
+
     try:
         from network_manager.network.sender import Sender
         log_lines = []
@@ -868,7 +1104,7 @@ def verify_device(device_name: str, verify_commands: str = '["show ip interface 
     """Run verification show commands on a device by name (uses Telnet + saved credentials). verify_commands is a JSON array of strings."""
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> verify_device({device_name})</span>\n")
     try:
-        cmds = json.loads(verify_commands) if isinstance(verify_commands, str) else verify_commands
+        cmds = _parse_json_arg(verify_commands)
         info = _resolve_device_connection(device_name)
         if not info:
             return json.dumps({"error": f"no connection info for '{device_name}'"}, indent=2)
@@ -903,7 +1139,7 @@ def verify_deployment(
     """Run verification show commands on a host:port (new Telnet session). Prefer verify_device(device_name) when possible."""
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> verify_deployment({host}:{port})</span>\n")
     try:
-        cmds = json.loads(verify_commands) if isinstance(verify_commands, str) else verify_commands
+        cmds = _parse_json_arg(verify_commands)
 
         def log_fn(msg):
             ctx.log(f"<span style='color:#C9D1D9'>{msg}</span>\n")
@@ -982,6 +1218,7 @@ ALL_TOOLS = [
     query_logs,
     # Config generation
     generate_device_config,
+    generate_and_deploy_device_config,
     detect_topology,
     suggest_configs,
     # Deployment
@@ -1018,8 +1255,12 @@ def _build_openai_tools():
         # Get docstring
         docstring = inspect.getdoc(fn) or ""
         
-        # Use full docstring as description so the model understands all parameters
-        description = docstring if docstring else f"Call {fn.__name__}"
+        # Only use the top description (before Args:) for the main tool description
+        # to prevent massively bloated schemas that cause API 500 errors.
+        if "Args:" in docstring:
+            description = docstring.split("Args:")[0].strip()
+        else:
+            description = docstring.strip() if docstring else f"Call {fn.__name__}"
         
         # Parse Args section for per-parameter descriptions
         param_docs = {}
@@ -1146,16 +1387,12 @@ You have access to these tool functions. **Prefer device_name-based tools** over
 - `get_send_history(device_name)` - deployment log
 - `query_logs(severity, limit)` - activity logs
 
-**Config Generation (uses the SAME engine as the Guided Setup wizard):**
-- `generate_device_config(hostname, device_role, ...)` - build IOS config via ConfigEngine (block-formatted, with trunk encapsulation, portfast, speed/duplex, VLAN database syntax for core switches)
+**Config Generation & Deployment:**
+- `generate_and_deploy_device_config(hostname, device_role, ...)` - **PREFERRED** atomic tool. Builds IOS config via ConfigEngine and deploys it immediately to the device. Safest way to configure a device without mix-ups.
+- `generate_device_config(hostname, device_role, ...)` - build IOS config via ConfigEngine without deploying
+- `deploy_to_device(device_name, config_text)` - deploy a config string to a device using saved credentials
 - `detect_topology()` - analyze device roles and topology pattern
 - `suggest_configs()` - auto-generate config plans for all devices
-
-**Deployment:**
-- `deploy_to_device(device_name, config_text)` - **preferred**; uses saved credentials
-- `deploy_config_telnet(...)` / `deploy_config_ssh(...)` - advanced: explicit host/port
-- `verify_device(device_name, verify_commands)` - **preferred** verification by name
-- `verify_deployment(host, port, ...)` - optional credentials for Telnet verify
 
 **Network Intelligence (your superpower):**
 - `audit_network()` - scan ALL device configs for security issues, inconsistencies, mismatched routing protocols, missing trunks, etc. Returns structured findings.
@@ -1215,7 +1452,7 @@ Unlike the Guided Setup wizard (which configures one device at a time), you can 
 8. **If you must ask something**: Ask **one** clear question, in everyday words.
 9. **Chain tools intelligently**: If a task requires multiple steps, execute them in sequence.
 10. **Explain actions for beginners**: Before calling tools, one short line - not jargon stacks.
-11. **Use generate_device_config for ALL config generation**: Never write raw IOS by hand. Always use the ConfigEngine tool.
+11. **Use generate_and_deploy_device_config for ALL configurations**: Never write raw IOS by hand. Always use the combined tool to generate and deploy safely in one step.
 12. **Think network-wide**: A change to one device almost always requires changes to other devices. Always consider the full topology.
 
 # CONVERSATION STYLE
@@ -1283,6 +1520,7 @@ class CopilotWorker(QThread):
             ctx.sessions = {}
         ctx.log_fn = lambda msg: self.terminal_log_signal.emit(msg)
         ctx.audit_fn = audit_fn
+        ctx.workspace_resolved = self.workspace_resolved  # live GNS3 ports for tool functions
 
     def queue_message(self, text: str):
         """Called from the GUI thread to queue a user message."""

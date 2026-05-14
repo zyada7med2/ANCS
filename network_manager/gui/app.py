@@ -2606,10 +2606,14 @@ class App(QMainWindow):
                     protocol = str(cprot).lower()
 
             if meta.get("gns3_node"):
-                if not host:
-                    host = (meta.get("console_host") or "").strip()
-                if not port_str:
-                    port_str = str(meta.get("console_port") or "").strip()
+                # GNS3 console ports change on every project restart —
+                # ALWAYS prefer the live metadata over stale credentials.
+                gns3_host = (meta.get("console_host") or "").strip()
+                gns3_port = str(meta.get("console_port") or "").strip()
+                if gns3_host:
+                    host = gns3_host
+                if gns3_port:
+                    port_str = gns3_port
 
             if not host and dip:
                 host = dip

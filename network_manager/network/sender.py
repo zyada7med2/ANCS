@@ -574,7 +574,12 @@ class Sender:
         try:
             return asyncio.run(
                 Sender._run_show_commands_telnet_async(
-                    log_fn, host, port, username, password, enable_pw, commands, timeout
+                    log_fn, host, port,
+                    commands=commands,
+                    username=username,
+                    password=password,
+                    enable_pw=enable_pw,
+                    timeout=timeout,
                 )
             )
         except Exception as e:
