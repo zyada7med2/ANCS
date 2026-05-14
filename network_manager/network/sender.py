@@ -282,7 +282,8 @@ class Sender:
         async def read_available(timeout_sec=1.0):
             """Read whatever is available with timeout"""
             try:
-                return await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
+                raw = await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
+                return raw if isinstance(raw, str) else str(raw) if raw else ""
             except asyncio.TimeoutError:
                 return ""
 
@@ -292,7 +293,8 @@ class Sender:
             deadline = asyncio.get_event_loop().time() + timeout_sec
             while asyncio.get_event_loop().time() < deadline:
                 try:
-                    chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
+                    raw = await asyncio.wait_for(reader.read(4096), timeout=0.5)
+                    chunk = raw if isinstance(raw, str) else str(raw) if raw else ""
                     if chunk:
                         buf += chunk
                         if re.search(session_config.prompt_pattern_exec, buf):
@@ -465,7 +467,8 @@ class Sender:
 
         async def read_available(timeout_sec: float = 1.0) -> str:
             try:
-                return await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
+                raw = await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
+                return raw if isinstance(raw, str) else str(raw) if raw else ""
             except asyncio.TimeoutError:
                 return ""
 
@@ -474,7 +477,8 @@ class Sender:
             deadline = asyncio.get_event_loop().time() + timeout_sec
             while asyncio.get_event_loop().time() < deadline:
                 try:
-                    chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
+                    raw = await asyncio.wait_for(reader.read(4096), timeout=0.5)
+                    chunk = raw if isinstance(raw, str) else str(raw) if raw else ""
                     if chunk:
                         buf += chunk
                         stripped = buf.rstrip()
@@ -507,12 +511,16 @@ class Sender:
                     await write_line(password)
                     await asyncio.sleep(0.3)
             else:
+                # No recognizable prompt — send credentials with reads between
+                # to avoid garbled output (e.g. "ERuMnpnownenable")
                 if username:
                     await write_line(username)
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.3)
+                    await read_available(0.5)
                 if password:
                     await write_line(password)
-                    await asyncio.sleep(0.2)
+                    await asyncio.sleep(0.3)
+                    await read_available(0.5)
 
             # Use session_config if provided, otherwise fall back to Cisco defaults
             if session_config and session_config.privilege_command:
@@ -598,7 +606,8 @@ class Sender:
             deadline = asyncio.get_event_loop().time() + timeout_sec
             while asyncio.get_event_loop().time() < deadline:
                 try:
-                    chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
+                    raw = await asyncio.wait_for(reader.read(4096), timeout=0.5)
+                    chunk = raw if isinstance(raw, str) else str(raw) if raw else ""
                     if chunk:
                         buf += chunk
                         stripped = buf.rstrip()
@@ -610,7 +619,8 @@ class Sender:
 
         async def read_available(timeout_sec: float = 1.0) -> str:
             try:
-                return await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
+                raw = await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
+                return raw if isinstance(raw, str) else str(raw) if raw else ""
             except asyncio.TimeoutError:
                 return ""
 

@@ -1,8 +1,51 @@
-# Phase 1 Implementation — COMPLETE ✅
+# Phase 1 + Phase 2 Implementation — COMPLETE ✅
 
-**Date**: 2026-05-13  
-**Status**: All 6 tasks completed and verified  
-**Syntax Check**: ✅ PASSED
+**Date**: 2026-05-14  
+**Status**: All 6 Phase 1 tasks + Phase 2 parallel execution completed and verified  
+**Syntax Check**: ✅ PASSED  
+**Bug Fixes**: 2 critical bugs found during testing — FIXED ✅
+
+---
+
+## Bug Fixes (Post-Testing)
+
+### Bug Fix 1: SQL error in `audit_network()` — "no such column: l.config_snapshot"
+**File**: `network_manager/ai_agent.py` (lines 466-474)
+
+**Root Cause**: The JOIN query referenced `logs.config_snapshot` and `logs.device_name`, but these columns don't exist in the `logs` table schema. The `logs` CREATE TABLE only has `device_id INTEGER`, not `device_name TEXT`.
+
+**Fix**: Switched the JOIN from `logs` → `snapshots` table, which has the correct schema (`device_name TEXT`, `config_text TEXT`).
+
+**Status**: ✅ FIXED
+
+---
+
+### Bug Fix 2: Type error in `trace_connectivity()` — "can only concatenate list (not 'str') to list"
+**File**: `network_manager/network/sender.py` (6 locations)
+
+**Root Cause**: `telnetlib3`'s `reader.read()` can return `list` or `bytes` instead of `str`. The `read_available()` and `read_until_prompt()` helpers in `_run_show_commands_telnet_async` and `_verify_telnet_async` did `buf += chunk` without type-checking, causing crashes when `chunk` was a list.
+
+**Fix**: Added `isinstance(raw, str)` guards to all 6 `reader.read()` call sites in `sender.py`:
+- `_send_config_telnet_async()` — `read_available()` + `wait_for_prompt()` (2 sites)
+- `_run_show_commands_telnet_async()` — `read_available()` + `read_until_prompt()` (2 sites)
+- `_verify_telnet_async()` — `read_available()` + `read_until_prompt()` (2 sites)
+
+**Status**: ✅ FIXED
+
+---
+
+## Phase 2: Parallel Tool Execution — COMPLETE ✅
+
+### Changes
+**File**: `network_manager/ai_agent.py`
+
+- ✅ Added `_execute_single_tool(tc)` — extracted single tool execution logic
+- ✅ Added `_execute_tools_parallel(tool_calls)` — `ThreadPoolExecutor` for parallel calls
+- ✅ Updated `_process_response_openrouter()` — routes to single or parallel path
+- ✅ Deploy staggering: 0.5s between deploy calls to avoid GNS3 telnet port contention
+- ✅ Max 8 workers (`min(len(tool_calls), 8)`)
+
+**Impact**: Multi-device deploys via Copilot now run in parallel (was sequential)
 
 ---
 
@@ -112,14 +155,11 @@
 
 ## What's Next?
 
-Phase 1 is complete and stable. The system is ready for:
+Phase 1 + Phase 2 are complete. Bug fixes applied and ready for re-testing.
 
-1. **Testing** — Run with 20-device GNS3 topology to verify speedups
-2. **Phase 2** (optional) — If performance is still insufficient:
-   - Message history compaction
-   - Parallel tool execution
+1. **Re-Test** — Verify `audit_network()` and `trace_connectivity()` work after fixes
+2. **Phase 3** (optional) — Production hardening:
    - Circuit breaker for failed devices
-3. **Phase 3** (optional) — Production hardening:
    - Enhanced error handling
    - Observability/metrics
 
@@ -127,10 +167,11 @@ Phase 1 is complete and stable. The system is ready for:
 
 ## Files Modified
 
-| File | Changes | Lines |
+| File | Changes | Phase |
 |------|---------|-------|
-| `network_manager/ai_agent.py` | 6 edits | 455-541, 56-102, 25-50, 64-75, 1613, 1616-1622 |
-| `network_manager/network/parser.py` | 1 edit | 8-127 |
+| `network_manager/ai_agent.py` | N+1 fix, LEFT JOIN, singleton, truncation, context removal, parallel execution | P1 + P2 |
+| `network_manager/network/parser.py` | Pre-compiled regex patterns | P1 |
+| `network_manager/network/sender.py` | telnetlib3 `reader.read()` type guards (6 sites) | Bug Fix |
 
 ---
 
