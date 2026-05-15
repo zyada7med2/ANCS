@@ -457,32 +457,70 @@ def query_logs(severity: str = "all", limit: int = 20) -> str:
 
 # ── 11-13: Config Generation ─────────────────────────────────────────────────
 
-def _parse_json_arg(val: str) -> list:
-    """Robustly parse JSON/Python lists from LLM outputs (handles markdown blocks and single quotes)."""
-    if not isinstance(val, str):
-        return val if val is not None else []
-    
-    val = val.strip()
-    if not val:
-        return []
-        
-    # Strip markdown code blocks if the model wrapped it
-    import re
-    val = re.sub(r'^```(?:json|python)?\s*\n', '', val)
-    val = re.sub(r'\n```$', '', val)
-    val = val.strip()
+def _parse_json_arg(val: str, arg_name: str = "argument") -> list:
+    """Robustly parse JSON/Python lists from LLM outputs.
 
-    import json
-    import ast
-    try:
-        return json.loads(val)
-    except Exception:
-        pass
-        
-    try:
-        return ast.literal_eval(val)
-    except Exception:
-        raise ValueError(f"Could not parse array. Please provide a valid JSON or Python list. Got: {val[:100]}...")
+    Handles markdown code fences, single-quoted Python literals, and
+    already-parsed list/dict values passed directly by the model.
+
+    Also validates that every item in the resulting list is a dict —
+    the ConfigEngine render methods always call .get() on list items,
+    so a bare string or int inside the list causes
+    ``'str' object has no attribute 'get'``.
+    """
+    # Already parsed by the OpenAI SDK (happens when the model passes a real list)
+    if isinstance(val, list):
+        result = val
+    elif isinstance(val, dict):
+        result = [val]
+    elif val is None or val == "":
+        return []
+    else:
+        # String path: strip markdown fences, then JSON / ast parse
+        import re
+        s = val.strip()
+        s = re.sub(r'^```(?:json|python)?\s*\n', '', s)
+        s = re.sub(r'\n```\s*$', '', s)
+        s = s.strip()
+        if not s or s in ("[]", "null", "None"):
+            return []
+
+        import json, ast
+        parsed = None
+        try:
+            parsed = json.loads(s)
+        except Exception:
+            pass
+        if parsed is None:
+            try:
+                parsed = ast.literal_eval(s)
+            except Exception:
+                raise ValueError(
+                    f"Bad {arg_name}: could not parse as JSON or Python literal. "
+                    f"Expected a list of dicts. Got: {s[:120]}"
+                )
+        result = parsed if isinstance(parsed, list) else [parsed]
+
+    # ── Validate items are dicts ──────────────────────────────────────────
+    bad = [i for i, item in enumerate(result) if not isinstance(item, dict)]
+    if bad:
+        samples = [repr(result[i])[:80] for i in bad[:3]]
+        raise ValueError(
+            f"Bad {arg_name}: every item must be a dict (object), but item(s) at "
+            f"index {bad[:3]} are not. Got: {', '.join(samples)}. "
+            f"Example of correct format for {arg_name}: "
+            + {
+                "vlans": '[{{"id": "10", "name": "Staff", "ports": "Ethernet0/0"}}]',
+                "routing_entries": '[{{"vlan": "10", "ip": "192.168.10.1", "mask": "255.255.255.0"}}]',
+                "dhcp_pools": '[{{"pool": "Staff", "network": "192.168.10.0", "mask": "255.255.255.0", "gateway": "192.168.10.1"}}]',
+                "uplinks": '[{{"ports": "Ethernet3/3", "mode": "trunk", "allowed vlans": "all"}}]',
+                "static_routes": '[{{"network": "0.0.0.0", "mask": "0.0.0.0", "next-hop": "10.0.0.1"}}]',
+                "transit_links": '[{{"local_interface": "FastEthernet0/1", "ip": "10.0.0.1", "mask": "255.255.255.252", "protocol": "ospf"}}]',
+                "acl_rules": '[{{"acl #": "101", "action": "deny", "source": "192.168.10.0", "wildcard": "0.0.0.255"}}]',
+            }.get(arg_name, '[{"key": "value"}]')
+        )
+
+    return result
 
 
 def generate_device_config(
@@ -495,7 +533,7 @@ def generate_device_config(
     static_routes: str = "[]",
     acl_rules: str = "[]",
     router_interface: str = "",
-    routing_protocol: str = "rip",
+    routing_protocol: str = "none",
     wan_interface: str = "",
     wan_ip: str = "",
     wan_mask: str = "255.255.255.252",
@@ -507,6 +545,19 @@ def generate_device_config(
     trunk encapsulation, portfast, speed/duplex, VLAN database syntax for core switches,
     uplink port exclusion from access VLAN assignments, and proper DHCP excluded ranges.
 
+    ROUTING PROTOCOL GUIDANCE (analyze the topology before choosing):
+    - device_role='core'    → ALWAYS routing_protocol='none'. Core switches route between VLANs
+                              via SVIs locally — they never need a dynamic routing protocol.
+                              Use static_routes to point to the upstream router for external traffic.
+    - device_role='access'  → ALWAYS routing_protocol='none'. Pure Layer 2, no routing.
+    - device_role='router'  → Choose based on the network:
+        • 'rip'   — Small/simple labs (≤5 routers, ≤15 hops). Easiest to set up.
+        • 'ospf'  — Medium-to-large networks, multi-vendor, or when you need fast convergence.
+        • 'eigrp' — All-Cisco environments where fast convergence matters.
+        • 'none'  — Single-router topologies or static-only designs.
+      Analyze the topology first: count the routers, check if it's all-Cisco, and pick accordingly.
+      ALL routers in the same network MUST use the SAME protocol unless redistribution is configured.
+
     Args:
         hostname: Device hostname
         device_role: 'router', 'core', or 'access'
@@ -517,7 +568,7 @@ def generate_device_config(
         static_routes: Array of {"network": "0.0.0.0", "mask": "0.0.0.0", "next-hop": "10.0.0.1", "description": "Default"}
         acl_rules: Array of {"acl #": "101", "action": "deny", "source": "192.168.10.0", "wildcard": "0.0.0.255", "destination": "192.168.30.0", "destination_wildcard": "0.0.0.255", "remark": "Block Guest from Servers"}
         router_interface: Physical interface for router subinterfaces (e.g. FastEthernet0/0)
-        routing_protocol: 'rip', 'ospf', 'eigrp', or 'none'
+        routing_protocol: 'ospf', 'eigrp', 'rip', or 'none' (default). ALWAYS specify this explicitly.
         wan_interface: WAN-facing interface (e.g. FastEthernet0/1)
         wan_ip: WAN IP address or 'dhcp'
         wan_mask: WAN subnet mask
@@ -527,13 +578,13 @@ def generate_device_config(
     """
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> generate_device_config(hostname={hostname}, role={device_role})</span>\n")
     try:
-        _vlans = _parse_json_arg(vlans)
-        _routing = _parse_json_arg(routing_entries)
-        _dhcp = _parse_json_arg(dhcp_pools)
-        _uplinks = _parse_json_arg(uplinks)
-        _static = _parse_json_arg(static_routes)
-        _acl = _parse_json_arg(acl_rules)
-        _transit = _parse_json_arg(transit_links)
+        _vlans   = _parse_json_arg(vlans,           "vlans")
+        _routing = _parse_json_arg(routing_entries,  "routing_entries")
+        _dhcp    = _parse_json_arg(dhcp_pools,       "dhcp_pools")
+        _uplinks = _parse_json_arg(uplinks,          "uplinks")
+        _static  = _parse_json_arg(static_routes,    "static_routes")
+        _acl     = _parse_json_arg(acl_rules,        "acl_rules")
+        _transit = _parse_json_arg(transit_links,    "transit_links")
     except ValueError as e:
         return f"Parse error: {e}"
 
@@ -580,17 +631,25 @@ def generate_and_deploy_device_config(
     static_routes: str = "[]",
     acl_rules: str = "[]",
     router_interface: str = "",
-    routing_protocol: str = "rip",
+    routing_protocol: str = "none",
     wan_interface: str = "",
     wan_ip: str = "",
     wan_mask: str = "255.255.255.252",
     transit_links: str = "[]",
 ) -> str:
     """Generate AND immediately deploy a Cisco IOS config in one atomic step.
-    
+
     This is the PREFERRED way to configure a device! It prevents errors that happen
     when generating and deploying in separate steps.
-    
+
+    ROUTING PROTOCOL GUIDANCE (analyze the topology before choosing):
+    - device_role='core'    → ALWAYS 'none'. SVIs handle inter-VLAN routing. Use static_routes for external.
+    - device_role='access'  → ALWAYS 'none'. Pure Layer 2.
+    - device_role='router'  → Pick based on topology size and vendor mix:
+        • 'rip' for small labs (≤5 routers), 'ospf' for medium/multi-vendor,
+          'eigrp' for all-Cisco, 'none' for single-router/static-only.
+        All routers MUST use the same protocol.
+
     Args:
         hostname: Device hostname (MUST match the target device name exactly)
         device_role: 'router', 'core', or 'access'
@@ -601,7 +660,7 @@ def generate_and_deploy_device_config(
         static_routes: Array of {"network": "0.0.0.0", "mask": "0.0.0.0", "next-hop": "10.0.0.1", "description": "Default"}
         acl_rules: Array of {"acl #": "101", "action": "deny", "source": "192.168.10.0", "wildcard": "0.0.0.255", "destination": "192.168.30.0", "destination_wildcard": "0.0.0.255", "remark": "Block Guest from Servers"}
         router_interface: Physical interface for router subinterfaces (e.g. FastEthernet0/0)
-        routing_protocol: 'rip', 'ospf', 'eigrp', or 'none'
+        routing_protocol: 'ospf', 'eigrp', 'rip', or 'none' (default). ALWAYS specify this explicitly.
         wan_interface: WAN-facing interface (e.g. FastEthernet0/1)
         wan_ip: WAN IP address or 'dhcp'
         wan_mask: WAN subnet mask
@@ -1339,11 +1398,11 @@ OPENAI_TOOLS = _build_openai_tools()
 # ═══════════════════════════════════════════════════════════════════════════════
 
 SYSTEM_PROMPT = """# IDENTITY
-You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded inside the **ANCS (Auto Network Configuration System)** desktop application. You are powered by AI and operate as an intelligent assistant that can explore, analyze, configure, deploy, and troubleshoot network devices.
+You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded inside the **ANCS (Auto Network Configuration System)** desktop application. You explore, analyze, configure, deploy, and troubleshoot network devices.
 
 # ABOUT ANCS
-ANCS is a Python/PySide6 desktop app for managing Cisco network devices. Features:
-- **Device Management**: Router, Switch, Core Switch (router acting as L3 switch)
+ANCS is a Python/PySide6 desktop app for managing network devices. Features:
+- **Device Management**: Router, Switch, Core Switch (L3 switch)
 - **Guided Setup Wizard**: Step-by-step config generator (Identity, VLANs, Routing, DHCP, ACLs)
 - **GNS3 Integration**: Auto-import devices from GNS3 via REST API (default http://localhost:3080)
 - **Config Deployment**: Send configs via Telnet or SSH with per-block delays
@@ -1351,121 +1410,173 @@ ANCS is a Python/PySide6 desktop app for managing Cisco network devices. Feature
 
 # ENVIRONMENT
 - Devices run inside **GNS3** (emulator), NOT physical hardware
-- **Older Cisco IOS images** (c3725, c3640, c7200, vIOS) - classic CLI syntax
+- **Older Cisco IOS images** (c3725, c3640, c7200, vIOS) — classic CLI syntax
 - **Telnet** is the primary connection method (GNS3 console ports, 5000+)
 - `terminal length 0` is pre-configured on connected sessions
 
+## Device Roles — understand these before configuring anything
+- **Router** (`device_role='router'`): Routes between networks. Runs dynamic protocols (RIP/OSPF/EIGRP) to exchange routes with peer routers. Does router-on-a-stick for inter-VLAN routing (subinterfaces on the LAN-facing interface). Connects to WAN/ISP. Runs DHCP pools for the VLANs it gateways.
+- **Core switch / L3 switch** (`device_role='core'`): A switch that can ALSO route between VLANs via SVIs. It does NOT run dynamic routing protocols — SVIs handle inter-VLAN routing automatically. Uses a static default route to reach the upstream router for external traffic. May run DHCP if it is the gateway for the VLANs.
+- **Access switch** (`device_role='access'`): Pure Layer 2. Assigns ports to VLANs, trunks up to core/router. No routing. No DHCP. No SVIs. No routing protocol. Ever.
+
 # PROJECT SNAPSHOT (CRITICAL)
-Your very first message in every conversation contains a **full project snapshot** - a JSON object with:
-- Every device in the workspace: name, role (router/core/access), and all generated IOS config templates
-- Deploy status: which devices have been deployed and when
+Your very first message contains a **full project snapshot** — a JSON object with:
+- Every device: name, role, all generated IOS config templates
+- Deploy status: which devices deployed and when
 - GNS3 project info and console ports
 
-**You MUST use this snapshot as your primary knowledge source.** When the user asks about their network:
-- Look at the snapshot FIRST - you already know what configs exist, what routing protocols are used, what VLANs are defined, what IPs are assigned.
-- Cross-reference configs across ALL devices when troubleshooting (e.g., if R1 uses OSPF but R2 uses RIP, you can spot the mismatch immediately from the snapshot).
-- Only use tools for **LIVE state** that the snapshot cannot tell you (e.g., actual interface status, routing table, ping results). The snapshot tells you what was CONFIGURED and DEPLOYED, tools tell you what is RUNNING NOW.
-- **Never say you do not know what is configured** - the snapshot contains all template configs. Read them.
+**Use this snapshot as your primary knowledge source:**
+- Look at the snapshot FIRST — you already know what configs exist, what routing protocols are used, what VLANs are defined, what IPs are assigned.
+- Cross-reference configs across ALL devices (e.g., R1 uses OSPF but R2 uses RIP → mismatch).
+- Only use tools for **LIVE state** the snapshot cannot tell you (interface status, routing table, ping).
+- **Never say you don't know what is configured** — the snapshot has all template configs.
 
-# YOUR TOOLS (ground truth for live state)
-You have access to these tool functions. **Prefer device_name-based tools** over pasting IP/port.
+# YOUR TOOLS
+**Prefer device_name-based tools** over pasting IP/port.
 
 **GNS3 Lab Discovery:**
-- `list_gns3_projects()` - list all GNS3 projects
-- `list_gns3_nodes(project_id)` - optional; empty project_id uses the active ANCS GNS3 project when set
-- `get_node_ports(project_id, node_id)` - get interfaces
-- `get_topology_links(project_id)` - get cable connections
+- `list_gns3_projects()`, `list_gns3_nodes(project_id)`, `get_node_ports(project_id, node_id)`, `get_topology_links(project_id)`
 
 **Device Terminal (live state):**
-- `run_command_on_device(command)` - primary Copilot console (pooled session when available)
-- `run_cli_on_device(device_name, command)` - run a command on any device by name (Telnet)
+- `run_command_on_device(command)` — pooled session
+- `run_cli_on_device(device_name, command)` — any device by name
 
 **Database:**
-- `list_all_devices()` - all ANCS devices
-- `get_device_credentials(device_name)` - saved login info
-- `get_saved_config(device_name)` - last saved config
-- `get_send_history(device_name)` - deployment log
-- `query_logs(severity, limit)` - activity logs
+- `list_all_devices()`, `get_device_credentials(device_name)`, `get_saved_config(device_name)`, `get_send_history(device_name)`, `query_logs(severity, limit)`
 
 **Config Generation & Deployment:**
-- `generate_and_deploy_device_config(hostname, device_role, ...)` - **PREFERRED** atomic tool. Builds IOS config via ConfigEngine and deploys it immediately to the device. Safest way to configure a device without mix-ups.
-- `generate_device_config(hostname, device_role, ...)` - build IOS config via ConfigEngine without deploying
-- `deploy_to_device(device_name, config_text)` - deploy a config string to a device using saved credentials
-- `detect_topology()` - analyze device roles and topology pattern
-- `suggest_configs()` - auto-generate config plans for all devices
+- `generate_and_deploy_device_config(hostname, device_role, ...)` — **PREFERRED**. Builds config locally via ConfigEngine and deploys it atomically.
+- `generate_device_config(hostname, device_role, ...)` — generate without deploying
+- `deploy_to_device(device_name, config_text)` — deploy a saved/existing config
+- `detect_topology()` — analyze device roles and topology pattern
+- `suggest_configs()` — auto-generate config plans for all devices
 
-**Network Intelligence (your superpower):**
-- `audit_network()` - scan ALL device configs for security issues, inconsistencies, mismatched routing protocols, missing trunks, etc. Returns structured findings.
-- `trace_connectivity(source_device, destination_ip)` - run ping, routing table, ARP, and interface checks from a device to diagnose reachability.
+**Network Intelligence:**
+- `audit_network()` — scan ALL configs for security issues, inconsistencies, protocol mismatches
+- `trace_connectivity(source_device, destination_ip)` — hop-by-hop reachability diagnosis
 
 **Utilities:**
-- `calculate_subnet(ip, prefix)` - subnet calculations
-- `get_ancs_help(topic)` - help on ANCS features and networking concepts
+- `calculate_subnet(ip, prefix)`, `get_ancs_help(topic)`
 
-# CONFIG GENERATION (CRITICAL)
-Your `generate_device_config` tool uses the **exact same ConfigEngine** as the Guided Setup wizard. This means:
-- Core switches get `vlan database` syntax (correct for c3640/c3725 images)
-- Trunk ports get `switchport trunk encapsulation dot1q`
-- Access ports on access switches get `spanning-tree portfast`
-- FastEthernet/Ethernet interfaces get `speed 100` and `duplex full`
-- Uplink ports are automatically excluded from VLAN access port assignments
-- DHCP pools include proper excluded-address ranges (not just the gateway)
-- OSPF, EIGRP, and RIP are all supported with redistribution
-- Output is block-formatted with `! BLOCK N:` headers for the Sender's per-block delays
+# CONFIG GENERATION (ABSOLUTE RULE — NO EXCEPTIONS)
+Config generation runs **100% locally** via the ConfigEngine. Your job is ONLY to supply correct parameters.
 
-**When generating configs, you MUST use `generate_device_config` — do NOT write raw IOS commands yourself.** The ConfigEngine handles all the IOS quirks.
+**NEVER write IOS commands in your response.** Not one line. Not even as an "example".
+1. Call `generate_and_deploy_device_config(...)` with correct parameters.
+2. Report the result.
+3. That's it.
 
-# NETWORK-WIDE THINKING (YOUR UNIQUE ADVANTAGE)
-Unlike the Guided Setup wizard (which configures one device at a time), you can see the ENTIRE network simultaneously. Use this power:
+Writing IOS yourself wastes tokens, risks timeouts, and bypasses the ConfigEngine's IOS quirk handling.
 
-1. **Cross-device changes**: When asked to "add VLAN 40", update ALL relevant devices:
-   - Add VLAN definition on every switch
-   - Add to trunk allowed lists
-   - Create SVI on the core switch or subinterface on the router
-   - Add DHCP pool if the VLAN needs IP assignment
-   
-2. **Consistency checks**: Before deploying, verify the change is consistent across the network.
-   - Trunks between SW1 and CoreSW must carry the same VLANs
-   - All devices in an OSPF domain must be in the same area
-   
-3. **Impact analysis**: Before making changes, explain what will be affected.
-   - "Adding this ACL will block Guest users from accessing the Server VLAN on R1, CoreSW, and both access switches."
+## Parameter Checklist (check before every tool call)
+**Router**: hostname, device_role='router', router_interface (REQUIRED — the LAN-facing physical interface for subinterfaces, e.g. FastEthernet0/0), vlans, routing_entries (one per VLAN with unique gateway IP), routing_protocol (analyze topology — see guide below), dhcp_pools, wan_interface, wan_ip
+**Core switch**: hostname, device_role='core', vlans, uplinks (REQUIRED — trunk ports to routers and access switches), routing_entries (SVIs — one per VLAN with unique IP, different from the router's), routing_protocol='none' (ALWAYS), static_routes (default route pointing to upstream router)
+**Access switch**: hostname, device_role='access', vlans, uplinks (REQUIRED — trunk ports to core/router). No routing_entries, no dhcp, no routing_protocol.
 
-4. **Proactive auditing**: When you first connect, run `audit_network()` mentally against the snapshot. Flag any issues upfront.
+# NETWORK DESIGN PRINCIPLES (apply these to every configuration task)
+
+## IP Addressing
+- Each device on a VLAN gets a **unique** host address. Never assign the same IP to two devices.
+- The **gateway IP** (typically .1) belongs to whichever device does routing for that VLAN:
+  - If a router does router-on-a-stick → the router's subinterface gets .1
+  - If a core switch routes via SVIs → the core switch's SVI gets .1
+- Other L3 devices on the same VLAN use .2, .3, etc.
+- Plan subnets before configuring: e.g. VLAN 10 = 192.168.10.0/24, VLAN 20 = 192.168.20.0/24.
+
+## DHCP Placement
+- DHCP pools go on the device that is the **default gateway** for that VLAN — and ONLY on that device.
+- If a router does router-on-a-stick → DHCP on that router.
+- If a core switch does inter-VLAN routing via SVIs → DHCP on the core switch.
+- Access switches NEVER run DHCP.
+- If multiple routers exist, only ONE should serve DHCP per subnet to avoid IP conflicts.
+
+## Trunk Design
+- Both ends of a trunk must be configured as trunk with the same encapsulation (dot1q).
+- Trunk allowed VLANs should list only the VLANs actually in use — avoid "all" when possible.
+- Uplink ports must NOT also be assigned as access ports to a VLAN.
+
+## Cross-Device Consistency
+When asked to "add VLAN 40", update ALL relevant devices:
+- Add VLAN definition on every switch (core + access)
+- Add to trunk allowed lists on both ends
+- Create SVI on core switch OR subinterface on router (whoever is the gateway)
+- Add DHCP pool on the gateway device
+Before deploying, verify trunks match, all routers use the same protocol, and IPs don't collide.
+
+## Deployment Order (always follow this)
+1. **Core switches first** — VLANs, trunks, SVIs, static routes
+2. **Routers next** — subinterfaces, routing protocol, DHCP, WAN
+3. **Access switches last** — VLANs, trunks, access ports
+This ensures trunk/routing infrastructure is ready before endpoints are assigned.
+
+## Error Recovery
+- If a deploy fails on one device, **log the error and continue** with remaining devices.
+- Report all failures at the end with clear per-device status (✅/❌).
+- If `generate_device_config` returns an error, do NOT try to write IOS manually — report the error.
+- Never silently swallow errors.
 
 # GROUNDING (CRITICAL)
 - **Configs** come from the project snapshot (what was generated/deployed).
-- **Live state** must come from **tool outputs** (GNS3 JSON, DB, or CLI show text). Do not invent interface names, IPs, or states.
+- **Live state** must come from **tool outputs** (GNS3 JSON, DB, CLI). Do not invent interface names, IPs, or states.
 - When summarizing tool output, you may paraphrase; when stating status, tie it to what a tool returned.
 
-# AUDIENCE (IMPORTANT)
-**Primary users are beginners** - they may not know Cisco jargon, CLI commands, or what console vs Telnet means. Your job is to **reduce fear and confusion**, not to sound like a certification exam.
+# AUDIENCE
+**Primary users are beginners.** They may not know Cisco jargon. Your job is to **reduce fear and confusion**, not sound like a certification exam.
 
 # RULES
-1. **Snapshot-first**: Check the project snapshot before calling any tools. You already know the configs.
-2. **Live-verify with tools**: Use `run_cli_on_device` or `verify_device` to check actual device state when needed.
-3. **Cross-reference**: When troubleshooting, compare configs across ALL devices in the snapshot.
-4. **Ask before deploying**: Never deploy a config without the user explicitly asking.
-5. **Markdown output**: Use clear headings, **bold**, short lists. Avoid huge tables unless the user asked for detail.
-6. **Plain language first**: Lead with a **simple verdict**. Put commands like `show ip interface brief` in **backticks** with a short plain-English gloss.
-7. **Do not end with vague technical questions.** Prefer running safe checks yourself and reporting results.
-8. **If you must ask something**: Ask **one** clear question, in everyday words.
-9. **Chain tools intelligently**: If a task requires multiple steps, execute them in sequence.
-10. **Explain actions for beginners**: Before calling tools, one short line - not jargon stacks.
-11. **Use generate_and_deploy_device_config for ALL configurations**: Never write raw IOS by hand. Always use the combined tool to generate and deploy safely in one step.
-12. **Think network-wide**: A change to one device almost always requires changes to other devices. Always consider the full topology.
+1. **Snapshot-first**: Check the project snapshot before calling tools.
+2. **Live-verify with tools**: Use `run_cli_on_device` to check actual device state when needed.
+3. **Cross-reference**: When troubleshooting, compare configs across ALL devices.
+4. **Deploy when asked**: If the user says "configure my devices", "deploy", or "set up the network" — that is permission. Do it. Only ask for confirmation when the request is ambiguous or could be destructive (e.g., overwriting a working config).
+5. **Markdown output**: Clear headings, **bold**, short lists. No huge tables unless requested.
+6. **Plain language first**: Lead with a simple verdict. CLI commands in backticks with plain-English gloss.
+7. **Don't end with vague questions.** Run safe checks yourself and report results.
+8. **If you must ask**: One clear question, in everyday words.
+9. **Chain tools intelligently**: Multiple steps → execute in sequence.
+10. **Explain for beginners**: One short line before calling tools — not jargon stacks.
+11. **NEVER WRITE IOS IN YOUR RESPONSE**: Call `generate_and_deploy_device_config` with the right parameters. Let the app generate the config.
+12. **Think network-wide**: A change to one device almost always requires changes to others.
+13. **Large tasks = multiple tool calls**: 5 devices → 5 separate tool calls, one per device. Keeps each turn short, avoids timeouts.
+14. **Deployment report**: After configuring multiple devices, summarize with a per-device status table: device | role | status (✅/❌) | notes. Then list any issues found and suggested next steps.
 
 # CONVERSATION STYLE
-- **Answer-first**: Give the understandable summary before optional detail.
-- **No engineer voice**: Friendly, patient, concise. You are a tutor, not a grader.
-- When greeting: summarize what you see in the project snapshot (how many devices, what is configured, what is deployed, any obvious issues like mismatched routing protocols).
-- Do **not** open the chat by asking what would you like to do. Respond directly to what they asked.
+- **Answer-first**: Understandable summary before optional detail.
+- **Friendly, patient, concise.** You are a tutor, not a grader.
+- When greeting: summarize the project snapshot (devices, what's configured, what's deployed, any issues).
+- Do **not** open with "what would you like to do?" — respond to what they asked.
 
-# CISCO IOS QUICK REFERENCE (for model grounding)
-Common commands: show running-config, show ip interface brief, show ip route, show vlan brief, show interfaces trunk, show spanning-tree, ping X.X.X.X
-Config mode: configure terminal → hostname X → interface X → ip address X M → no shutdown → end
-VLAN database (older IOS): vlan database → vlan 10 name Staff → exit
-Trunk: interface X → switchport trunk encapsulation dot1q → switchport mode trunk
+# CISCO IOS QUICK REFERENCE
+**Show commands** (read-only, safe to run anytime):
+show running-config, show ip interface brief, show ip route, show vlan brief (or show vlan-switch on core), show interfaces trunk, show spanning-tree, show ip ospf neighbor, show ip eigrp neighbors, show cdp neighbors, show ip dhcp binding, show ip dhcp pool, show access-lists, ping X.X.X.X
+
+**Config mode**: configure terminal → hostname X → interface X → ip address X M → no shutdown → end
+**VLAN database** (older IOS): vlan database → vlan 10 name Staff → exit
+**Trunk**: interface X → switchport trunk encapsulation dot1q → switchport mode trunk
+
+# ROUTING PROTOCOL DECISION GUIDE (think like a network engineer)
+
+## Switches — NEVER get a routing protocol
+- **Core (L3 switch)**: routing_protocol='none', ALWAYS. SVIs route between VLANs locally.
+  Give it a static default route (`static_routes`) pointing to the upstream router for external traffic.
+  OSPF/RIP/EIGRP are for routers learning external routes — not for inter-VLAN switching.
+- **Access switch**: routing_protocol='none', ALWAYS. Pure Layer 2.
+
+## Routers — analyze the topology, then choose
+Do NOT blindly pick one protocol. Look at the network first:
+- **How many routers?** 1-5 routers in a simple lab → 'rip' is fine and simplest.
+  6+ routers or complex topology → 'ospf' or 'eigrp'.
+- **Vendor mix?** All Cisco images → 'eigrp' is optimal (fast convergence, low overhead).
+  Mixed vendors or standards-based requirement → 'ospf'.
+- **Single router with no peers?** → 'none' (static routes only).
+- **Consistency is mandatory**: ALL routers in the same domain MUST run the SAME protocol.
+  If R1 uses OSPF, R2 and R3 must also use OSPF. Mismatched protocols = routes don't exchange.
+
+## Quick Decision Flowchart
+1. Is it a switch (core/access)? → 'none'. Done.
+2. Is it the only router? → 'none' + static routes. Done.
+3. Count the routers: ≤5 and simple? → 'rip'. Larger/complex? → 'ospf' or 'eigrp'.
+4. All Cisco? → prefer 'eigrp'. Mixed? → 'ospf'.
+5. Apply the SAME choice to ALL routers.
 """
 
 
@@ -1804,7 +1915,7 @@ class CopilotWorker(QThread):
                         "content": _truncate_tool_result(results.get(tc.id, "Tool execution error")),
                     })
 
-            # Get next response with retry logic for rate limits
+            # Get next response with retry logic for rate limits / timeouts
             for attempt in range(3):
                 try:
                     response = self._client.chat.completions.create(
@@ -1823,6 +1934,27 @@ class CopilotWorker(QThread):
                         time.sleep(wait)
                     else:
                         raise
+                except openai.APITimeoutError:
+                    # Hapuppy's Cloudflare proxy enforces a 120 s read timeout.
+                    # The model took too long to generate a response for this turn.
+                    raise RuntimeError(
+                        "⏱️ **Request timed out** — the model took too long to respond on this turn.\n\n"
+                        "This usually happens when you ask for a very large output (e.g. full VLAN + "
+                        "routing configs for many devices) in a single message.\n\n"
+                        "**Try breaking the task into smaller steps**, for example:\n"
+                        "- *'Generate and deploy VLANs only first'*\n"
+                        "- *'Now add routing'*\n"
+                        "- *'Now add DHCP'*"
+                    )
+                except openai.APIStatusError as exc:
+                    if exc.status_code == 524:
+                        raise RuntimeError(
+                            "⏱️ **Gateway timeout (524)** — Hapuppy's Cloudflare proxy dropped the "
+                            "connection after 120 s because the model was still generating.\n\n"
+                            "**Break the task into smaller steps** to keep each response short enough "
+                            "to complete within the 120-second window."
+                        )
+                    raise
 
         # Extract final text
         final_text = ""
@@ -1978,10 +2110,15 @@ class CopilotWorker(QThread):
                 base_url = "https://beta.hapuppy.com/v1" if self.provider == "hapuppy" else "https://openrouter.ai/api/v1"
                 headers = {"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"} if self.provider == "openrouter" else {}
 
+                # Set timeout to 115 s — just under Hapuppy/Cloudflare's 120 s proxy
+                # read-timeout window.  This makes Python raise openai.APITimeoutError
+                # cleanly instead of waiting for a Cloudflare 524 response.
+                client_timeout = 115.0 if self.provider == "hapuppy" else 180.0
                 self._client = openai.OpenAI(
                     api_key=self.api_key,
                     base_url=base_url,
                     default_headers=headers,
+                    timeout=client_timeout,
                 )
                 if not self._messages:
                     self._messages = [
@@ -2053,6 +2190,21 @@ class CopilotWorker(QThread):
                             )
                         reply = self._process_response(response)
                         self.chat_response_signal.emit(reply)
+                    except openai.APITimeoutError:
+                        self.chat_response_signal.emit(
+                            "⏱️ **Request timed out** — the model took longer than 115 seconds to respond.\n\n"
+                            "This happens when you ask for a very large output (many configs) in one go. "
+                            "**Break the task into smaller steps** — e.g. generate VLANs first, then routing, then DHCP."
+                        )
+                    except openai.APIStatusError as exc:
+                        if exc.status_code == 524:
+                            self.chat_response_signal.emit(
+                                "⏱️ **Gateway timeout (524)** — Hapuppy's Cloudflare proxy dropped the connection "
+                                "after 120 s because the model was still generating a very long response.\n\n"
+                                "**Try breaking the task into smaller steps** — one device or one config section at a time."
+                            )
+                        else:
+                            self.chat_response_signal.emit(f"**API Error {exc.status_code}:** {exc.message}")
                     except Exception as e:
                         self.chat_response_signal.emit(f"**Error:** {e}")
                 else:

@@ -662,6 +662,16 @@ class App(QMainWindow):
             app.setStyleSheet(GLASS_STYLE)
         self.setStyleSheet(GLASS_STYLE)
 
+        # Set application & window icon (taskbar + title bar)
+        for _icon_candidate in ("ancs_logo.ico", "logo_icon.png"):
+            _icon_path = _gui_path(_icon_candidate)
+            if os.path.exists(_icon_path):
+                _app_icon = QIcon(_icon_path)
+                self.setWindowIcon(_app_icon)
+                if app is not None:
+                    app.setWindowIcon(_app_icon)
+                break
+
         # State
         self.device_types = {"router": RouterModel, "switch": SwitchModel, "core switch": CoreSwitchModel}
         
