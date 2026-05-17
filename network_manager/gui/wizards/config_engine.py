@@ -52,6 +52,7 @@ class ConfigEngine:
         transit_links: list | None = None,
         connected_links: list | None = None,
         vendor_id: str = "cisco_ios",
+        stp_root: str = "",
     ):
         self.device_role = device_role          # "router" | "core" | "access"
         self.hostname = hostname
@@ -79,6 +80,7 @@ class ConfigEngine:
         self.is_boundary_router = is_boundary_router
         self.transit_links = transit_links or []
         self.connected_links = connected_links or []
+        self.stp_root = stp_root
 
     # ══════════════════════════ Public API ══════════════════════════════════
 
@@ -163,7 +165,11 @@ class ConfigEngine:
         return self.profile.render_identity_block(self.identity_data, self.hostname)
 
     def _render_vlan_block(self) -> str:
-        return self.profile.render_vlan_block(self.device_role, self.vlans, self.uplinks)
+        # Pass stp_root to profile if supported, otherwise just pass standard args
+        try:
+            return self.profile.render_vlan_block(self.device_role, self.vlans, self.uplinks, self.stp_root)
+        except TypeError:
+            return self.profile.render_vlan_block(self.device_role, self.vlans, self.uplinks)
 
     def _render_uplink_block(self) -> str:
         return self.profile.render_uplink_block(self.uplinks)

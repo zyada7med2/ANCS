@@ -57,7 +57,7 @@ class CiscoIOSProfile(VendorProfile):
         ]
         return "\n".join(lines)
 
-    def render_vlan_block(self, device_role: str, vlans: list, uplinks: list) -> str:
+    def render_vlan_block(self, device_role: str, vlans: list, uplinks: list, stp_root: str = "") -> str:
         if device_role == "router" or not vlans:
             return ""
 
@@ -91,6 +91,12 @@ class CiscoIOSProfile(VendorProfile):
                                   f" switchport access vlan {v.get('id')}", " spanning-tree portfast",
                                   " no shutdown", "exit"]
             lines += ["!", "end"]
+
+        # Add STP Root Bridge Configuration
+        if stp_root in ("primary", "secondary"):
+            vlan_ids = ",".join(str(v.get('id')) for v in vlans if v.get('id'))
+            if vlan_ids:
+                lines.insert(-2, f" spanning-tree vlan {vlan_ids} root {stp_root}")
 
         return "\n".join(lines)
 
@@ -166,8 +172,12 @@ class CiscoIOSProfile(VendorProfile):
         lines = ["configure terminal", "ip routing"]
         for e in routing_entries:
             vlan, ip, mask = e.get("vlan"), e.get("ip"), e.get("mask", "255.255.255.0")
+            hsrp_ip = e.get("hsrp_virtual_ip", "")
             if vlan and ip:
-                lines += [f"interface Vlan{vlan}", f" ip address {ip} {mask}", " no shutdown", "exit"]
+                lines += [f"interface Vlan{vlan}", f" ip address {ip} {mask}"]
+                if hsrp_ip:
+                    lines += [f" standby 1 ip {hsrp_ip}", " standby 1 preempt"]
+                lines += [" no shutdown", "exit"]
         lines += ["!", "end"]
         return "\n".join(lines)
 
@@ -182,9 +192,14 @@ class CiscoIOSProfile(VendorProfile):
         for e in routing_entries:
             vlan, ip, mask = e.get("vlan"), e.get("ip"), e.get("mask", "255.255.255.0")
             if vlan and ip:
-                lines += [f"interface {router_interface}.{vlan}",
-                          f" encapsulation dot1Q {vlan}", f" ip address {ip} {mask}",
-                          " no shutdown", "exit"]
+                iface = f"{router_interface}.{vlan}"
+                lines += [f"interface {iface}", f" encapsulation dot1Q {vlan}"]
+                hsrp_ip = e.get("hsrp_virtual_ip", "")
+                if hsrp_ip:
+                    lines += [f" ip address {ip} {mask}", f" standby 1 ip {hsrp_ip}", " standby 1 preempt"]
+                else:
+                    lines.append(f" ip address {ip} {mask}")
+                lines += [" no shutdown", "exit"]
         lines += ["!", "end"]
         return "\n".join(lines)
 
