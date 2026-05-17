@@ -2819,6 +2819,109 @@ class App(QMainWindow):
         btn_config.setDefault(False)
         btn_config.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         header_row.addWidget(btn_config)
+
+        btn_export = QPushButton("📥")
+        btn_export.setToolTip("Export chat history")
+        btn_export.setFixedSize(36, 36)
+        btn_export.setStyleSheet("""
+            QPushButton { background: transparent; border: 1px solid #30363D;
+                border-radius: 18px; font-size: 18px; }
+            QPushButton:hover { background: #21262D; border-color: #3fb950; }
+        """)
+        btn_export.setAutoDefault(False)
+        btn_export.setDefault(False)
+        btn_export.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+
+        def _export_chat():
+            from PySide6.QtWidgets import QFileDialog
+            from datetime import datetime
+            import re as _re
+
+            if not hasattr(self, '_copilot_chat_history') or len(self._copilot_chat_history) <= 1:
+                QMessageBox.information(dlg, "Export", "No chat history to export yet.")
+                return
+
+            timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+            default_name = f"copilot_chat_{timestamp}"
+
+            path, selected_filter = QFileDialog.getSaveFileName(
+                dlg, "Export Chat History", default_name,
+                "Markdown (*.md);;JSON (*.json)",
+            )
+            if not path:
+                return
+
+            try:
+                if path.endswith(".json"):
+                    # JSON export — structured
+                    export_data = {
+                        "session": {
+                            "exported_at": datetime.now().isoformat(),
+                            "provider": cfg.get("agent_provider", ""),
+                            "model": cfg.get("agent_model", ""),
+                            "device_count": len(self.devices),
+                        },
+                        "messages": [],
+                    }
+                    for entry in self._copilot_chat_history:
+                        if "<style>" in entry:
+                            continue
+                        clean = _re.sub(r'<[^>]+>', '', entry).strip()
+                        if not clean:
+                            continue
+                        if "class='user-msg'" in entry:
+                            role = "user"
+                        elif "class='ai-msg'" in entry:
+                            role = "assistant"
+                        elif "class='system-msg'" in entry:
+                            role = "system"
+                        else:
+                            role = "unknown"
+                        export_data["messages"].append({"role": role, "content": clean})
+
+                    # Include session log path if available
+                    if self._copilot_worker and hasattr(self._copilot_worker, 'session_log_path'):
+                        export_data["session"]["log_file"] = self._copilot_worker.session_log_path
+
+                    with open(path, "w", encoding="utf-8") as f:
+                        json.dump(export_data, f, indent=2, ensure_ascii=False)
+                else:
+                    # Markdown export — human-readable
+                    lines = [
+                        f"# ANCS Copilot Chat Export",
+                        f"",
+                        f"**Exported:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                        f"**Provider:** {cfg.get('agent_provider', 'N/A')}",
+                        f"**Model:** {cfg.get('agent_model', 'N/A')}",
+                        f"**Devices:** {len(self.devices)}",
+                        f"",
+                        f"---",
+                        f"",
+                    ]
+                    for entry in self._copilot_chat_history:
+                        if "<style>" in entry:
+                            continue
+                        clean = _re.sub(r'<[^>]+>', '', entry).strip()
+                        if not clean:
+                            continue
+                        if "class='user-msg'" in entry:
+                            lines.append(f"### 🧑 You\n{clean}\n")
+                        elif "class='ai-msg'" in entry:
+                            lines.append(f"### 🤖 Copilot\n{clean}\n")
+                        elif "class='system-msg'" in entry:
+                            lines.append(f"*{clean}*\n")
+                        else:
+                            lines.append(f"{clean}\n")
+
+                    with open(path, "w", encoding="utf-8") as f:
+                        f.write("\n".join(lines))
+
+                QMessageBox.information(dlg, "Export", f"Chat exported to:\n{path}")
+            except Exception as ex:
+                QMessageBox.critical(dlg, "Export Error", f"Failed to export: {ex}")
+
+        btn_export.clicked.connect(_export_chat)
+        header_row.addWidget(btn_export)
         layout.addLayout(header_row)
 
         # ── Scope info (agent sees all devices — no focus picker) ──────────

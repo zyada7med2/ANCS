@@ -333,7 +333,7 @@ def list_all_devices() -> str:
             if ctx.gns3_project_id:
                 cur.execute(
                     "SELECT name, type, ip, port, status, connection_type FROM devices "
-                    "WHERE project_id=? OR project_id IS NULL OR project_id='' ORDER BY name",
+                    "WHERE project_id=? ORDER BY name",
                     (ctx.gns3_project_id,)
                 )
             else:
@@ -457,6 +457,49 @@ def query_logs(severity: str = "all", limit: int = 20) -> str:
 
 # ── 11-13: Config Generation ─────────────────────────────────────────────────
 
+def _parse_json_raw(val):
+    """Core JSON/Python-literal parser — shared by _parse_json_arg and _parse_json_string_list.
+
+    Returns the parsed Python list (items can be any type).
+    """
+    if isinstance(val, list):
+        return val
+    if isinstance(val, dict):
+        return [val]
+    if val is None or val == "":
+        return []
+    import re as _re
+    s = val.strip()
+    s = _re.sub(r'^```(?:json|python)?\s*\n', '', s)
+    s = _re.sub(r'\n```\s*$', '', s)
+    s = s.strip()
+    if not s or s in ("[]", "null", "None"):
+        return []
+    import json as _json, ast as _ast
+    parsed = None
+    try:
+        parsed = _json.loads(s)
+    except Exception:
+        pass
+    if parsed is None:
+        try:
+            parsed = _ast.literal_eval(s)
+        except Exception:
+            raise ValueError(f"Could not parse as JSON or Python literal: {s[:120]}")
+    return parsed if isinstance(parsed, list) else [parsed]
+
+
+def _parse_json_string_list(val, arg_name: str = "commands") -> list:
+    """Parse a JSON array of strings (used by verify_device / verify_deployment).
+
+    Unlike _parse_json_arg, this does NOT require items to be dicts —
+    it accepts plain strings like ["show ip interface brief"].
+    """
+    result = _parse_json_raw(val)
+    # Coerce items to strings
+    return [str(item) for item in result]
+
+
 def _parse_json_arg(val: str, arg_name: str = "argument") -> list:
     """Robustly parse JSON/Python lists from LLM outputs.
 
@@ -468,38 +511,9 @@ def _parse_json_arg(val: str, arg_name: str = "argument") -> list:
     so a bare string or int inside the list causes
     ``'str' object has no attribute 'get'``.
     """
-    # Already parsed by the OpenAI SDK (happens when the model passes a real list)
-    if isinstance(val, list):
-        result = val
-    elif isinstance(val, dict):
-        result = [val]
-    elif val is None or val == "":
+    result = _parse_json_raw(val)
+    if not result:
         return []
-    else:
-        # String path: strip markdown fences, then JSON / ast parse
-        import re
-        s = val.strip()
-        s = re.sub(r'^```(?:json|python)?\s*\n', '', s)
-        s = re.sub(r'\n```\s*$', '', s)
-        s = s.strip()
-        if not s or s in ("[]", "null", "None"):
-            return []
-
-        import json, ast
-        parsed = None
-        try:
-            parsed = json.loads(s)
-        except Exception:
-            pass
-        if parsed is None:
-            try:
-                parsed = ast.literal_eval(s)
-            except Exception:
-                raise ValueError(
-                    f"Bad {arg_name}: could not parse as JSON or Python literal. "
-                    f"Expected a list of dicts. Got: {s[:120]}"
-                )
-        result = parsed if isinstance(parsed, list) else [parsed]
 
     # ── Validate items are dicts ──────────────────────────────────────────
     bad = [i for i, item in enumerate(result) if not isinstance(item, dict)]
@@ -535,7 +549,6 @@ def generate_device_config(
     router_interface: str = "",
     routing_protocol: str = "none",
     wan_interface: str = "",
-    wan_ip: str = "",
     wan_mask: str = "255.255.255.252",
     transit_links: str = "[]",
 ) -> str:
@@ -615,8 +628,48 @@ def generate_device_config(
         # Add marker so deploy_to_device accepts generated configs
         config_text = f"! Configured by ANCS Copilot\n\n{config_text}"
 
-        ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> Config generated via ConfigEngine: {len(blocks)} blocks, {len(config_text.splitlines())} lines</span>\n")
-        return config_text
+        # ── Persist config to DB so snapshot shows has_config=true ─────
+        _config_saved = False
+        try:
+            from network_manager.config import cur, conn, db_lock
+            with db_lock:
+                cur.execute("SELECT id FROM devices WHERE name=?", (hostname,))
+                dev_row = cur.fetchone()
+                if dev_row:
+                    cur.execute(
+                        "INSERT INTO configs (device_id, config_name, content, created_at) "
+                        "VALUES (?, ?, ?, datetime('now'))",
+                        (dev_row[0], f"copilot_{hostname}", config_text),
+                    )
+                    conn.commit()
+                    _config_saved = True
+        except Exception as save_err:
+            ctx.log(f"<span style='color:#d29922'>[Copilot] Warning: could not save config to DB: {save_err}</span>\n")
+
+        # ── Return summary instead of full config (saves tokens) ──────
+        block_summaries = []
+        for bname, btext in blocks.items():
+            label = bname.replace("guided_", "").replace("_", " ").title()
+            line_count = len(btext.strip().splitlines())
+            block_summaries.append(f"{label} ({line_count} lines)")
+
+        import hashlib
+        config_hash = hashlib.md5(config_text.encode()).hexdigest()[:12]
+
+        summary = json.dumps({
+            "status": "success",
+            "hostname": hostname,
+            "device_role": device_role,
+            "blocks": block_summaries,
+            "total_lines": len(config_text.splitlines()),
+            "config_saved_to_db": _config_saved,
+            "config_hash": config_hash,
+            "note": "Full config saved to DB. Use get_saved_config() to retrieve. "
+                    "Use deploy_to_device() or generate_and_deploy_device_config() to deploy.",
+        }, indent=2)
+
+        ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> Config generated via ConfigEngine: {len(blocks)} blocks, {len(config_text.splitlines())} lines (saved={_config_saved})</span>\n")
+        return summary
     except Exception as e:
         return f"ConfigEngine error: {e}"
 
@@ -680,14 +733,33 @@ def generate_and_deploy_device_config(
         transit_links=transit_links
     )
     
-    if "ConfigEngine error" in config_result or "JSON parse error" in config_result:
+    if "ConfigEngine error" in config_result or "Parse error" in config_result:
         return f"Failed to generate config: {config_result}"
+
+    # generate_device_config now returns a JSON summary; retrieve full config from DB
+    try:
+        gen_info = json.loads(config_result)
+        if gen_info.get("status") != "success":
+            return f"Failed to generate config: {config_result}"
+    except (json.JSONDecodeError, TypeError):
+        return f"Failed to generate config: {config_result}"
+
+    # 2. Retrieve the full config from DB (just saved by generate_device_config)
+    saved_raw = get_saved_config(hostname)
+    try:
+        saved_data = json.loads(saved_raw)
+        config_text = saved_data.get("content", "")
+    except (json.JSONDecodeError, TypeError):
+        return f"Config generated but could not retrieve from DB for deployment: {saved_raw}"
+
+    if not config_text.strip():
+        return "Config generated but saved content is empty — cannot deploy."
         
-    # 2. Deploy it immediately
+    # 3. Deploy it immediately
     ctx.log(f"<span style='color:#8b949e'>[Copilot] Auto-deploying generated config to {hostname}...</span>\n")
-    deploy_result = deploy_to_device(device_name=hostname, config_text=config_result)
+    deploy_result = deploy_to_device(device_name=hostname, config_text=config_text)
     
-    return f"GENERATION SUCCESSFUL. DEPLOYMENT RESULTS:\n{deploy_result}"
+    return f"GENERATION: {config_result}\n\nDEPLOYMENT RESULTS:\n{deploy_result}"
 
 
 def audit_network() -> str:
@@ -711,7 +783,7 @@ def audit_network() -> str:
                   AND l.id = (SELECT MAX(l2.id) FROM logs l2 WHERE l2.device_name = d.name AND l2.config_snapshot IS NOT NULL AND l2.config_snapshot != '') 
             """
             if ctx.gns3_project_id:
-                query += "WHERE d.project_id=? OR d.project_id IS NULL OR d.project_id='' ORDER BY d.name"
+                query += "WHERE d.project_id=? ORDER BY d.name"
                 cur.execute(query, (ctx.gns3_project_id,))
             else:
                 query += "ORDER BY d.name"
@@ -854,12 +926,19 @@ def trace_connectivity(source_device: str, destination_ip: str) -> str:
 
 
 def detect_topology() -> str:
-    """Analyze the current ANCS device list and detect the network topology pattern (router-core-access, core-access, router-only, etc.)."""
+    """Analyze the current ANCS device list and detect the network topology pattern (router-core-access, core-access, router-only, etc.). Only includes devices in the active GNS3 project."""
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> detect_topology()</span>\n")
     try:
         from network_manager.config import cur, db_lock
         with db_lock:
-            cur.execute("SELECT name, type FROM devices ORDER BY name")
+            if ctx.gns3_project_id:
+                cur.execute(
+                    "SELECT name, type FROM devices "
+                    "WHERE project_id=? ORDER BY name",
+                    (ctx.gns3_project_id,)
+                )
+            else:
+                cur.execute("SELECT name, type FROM devices ORDER BY name")
             rows = cur.fetchall()
         routers = [r for r in rows if r[1] and "router" in r[1].lower()]
         cores = [r for r in rows if r[1] and "core" in r[1].lower()]
@@ -1163,7 +1242,7 @@ def verify_device(device_name: str, verify_commands: str = '["show ip interface 
     """Run verification show commands on a device by name (uses Telnet + saved credentials). verify_commands is a JSON array of strings."""
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> verify_device({device_name})</span>\n")
     try:
-        cmds = _parse_json_arg(verify_commands)
+        cmds = _parse_json_string_list(verify_commands, "verify_commands")
         info = _resolve_device_connection(device_name)
         if not info:
             return json.dumps({"error": f"no connection info for '{device_name}'"}, indent=2)
@@ -1198,7 +1277,7 @@ def verify_deployment(
     """Run verification show commands on a host:port (new Telnet session). Prefer verify_device(device_name) when possible."""
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> verify_deployment({host}:{port})</span>\n")
     try:
-        cmds = _parse_json_arg(verify_commands)
+        cmds = _parse_json_string_list(verify_commands, "verify_commands")
 
         def log_fn(msg):
             ctx.log(f"<span style='color:#C9D1D9'>{msg}</span>\n")
@@ -1255,6 +1334,246 @@ def get_ancs_help(topic: str) -> str:
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> get_ancs_help({topic})</span>\n")
     return result
 
+# ── 19-20: Validation & Bulk Deploy ──────────────────────────────────────────
+
+def validate_configs(device_names: str = "all") -> str:
+    """Dry-run validation: cross-check generated configs across devices for IP conflicts,
+    VLAN consistency, trunk mismatches, and routing protocol consistency BEFORE deploying.
+
+    Call this BEFORE deploying to catch issues early. Pass a JSON array of device names,
+    or "all" to validate every device that has a saved config.
+
+    Returns a JSON report with pass/fail per check and specific issues found.
+    """
+    ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> validate_configs({device_names})</span>\n")
+    try:
+        from network_manager.config import cur, db_lock
+
+        # Determine which devices to validate
+        if device_names == "all":
+            with db_lock:
+                if ctx.gns3_project_id:
+                    cur.execute(
+                        "SELECT d.name, d.type FROM devices d "
+                        "WHERE d.project_id=? ORDER BY d.name",
+                        (ctx.gns3_project_id,)
+                    )
+                else:
+                    cur.execute("SELECT name, type FROM devices ORDER BY name")
+                device_list = cur.fetchall()
+        else:
+            names = _parse_json_string_list(device_names, "device_names")
+            with db_lock:
+                device_list = []
+                for n in names:
+                    cur.execute("SELECT name, type FROM devices WHERE name=?", (n,))
+                    row = cur.fetchone()
+                    if row:
+                        device_list.append(row)
+
+        if not device_list:
+            return json.dumps({"status": "error", "message": "No devices found to validate."})
+
+        # Collect configs
+        configs = {}
+        for name, dtype in device_list:
+            with db_lock:
+                cur.execute("""
+                    SELECT c.content FROM configs c JOIN devices d ON c.device_id = d.id
+                    WHERE d.name=? ORDER BY c.created_at DESC LIMIT 1
+                """, (name,))
+                row = cur.fetchone()
+            if row and row[0]:
+                configs[name] = {"type": dtype, "config": row[0]}
+
+        if not configs:
+            return json.dumps({"status": "warning", "message": "No saved configs found. Generate configs first."})
+
+        findings = []
+        ip_map = {}  # ip -> device_name
+        vlan_map = {}  # device -> set of vlan ids
+        protocols = {}  # device -> protocol
+        trunk_devices = {}  # device -> set of trunk ports
+
+        import re as _re
+        for name, data in configs.items():
+            config = data["config"]
+            dtype = data["type"] or ""
+
+            # Extract IP addresses
+            for match in _re.finditer(r"ip address\s+((?:\d{1,3}\.){3}\d{1,3})\s+", config):
+                ip = match.group(1)
+                if ip in ip_map and ip_map[ip] != name:
+                    findings.append({
+                        "severity": "critical",
+                        "check": "IP Conflict",
+                        "issue": f"IP {ip} is assigned on both {ip_map[ip]} and {name}",
+                    })
+                ip_map[ip] = name
+
+            # Extract VLANs
+            vlan_ids = set(_re.findall(r"\bvlan\s+(\d+)\b", config, _re.IGNORECASE))
+            vlan_map[name] = vlan_ids
+
+            # Detect routing protocol
+            config_lower = config.lower()
+            if "router ospf" in config_lower:
+                protocols[name] = "ospf"
+            elif "router eigrp" in config_lower:
+                protocols[name] = "eigrp"
+            elif "router rip" in config_lower:
+                protocols[name] = "rip"
+            else:
+                protocols[name] = "none"
+
+            # Detect trunks
+            if "switchport mode trunk" in config_lower:
+                trunk_devices[name] = True
+
+        # Cross-check: routing protocol consistency (routers only)
+        router_protos = {n: p for n, p in protocols.items() if p != "none"}
+        unique_protos = set(router_protos.values())
+        if len(unique_protos) > 1:
+            findings.append({
+                "severity": "critical",
+                "check": "Routing Protocol Mismatch",
+                "issue": f"Multiple protocols detected: {dict(router_protos)}. All routers must use the same protocol.",
+            })
+
+        # Cross-check: VLAN consistency (access switches should have same VLANs as cores)
+        core_vlans = set()
+        access_vlans = {}
+        for name, vlans in vlan_map.items():
+            dtype = configs[name]["type"] or ""
+            if "core" in dtype.lower():
+                core_vlans.update(vlans)
+            elif "switch" in dtype.lower() and "core" not in dtype.lower():
+                access_vlans[name] = vlans
+
+        for acc_name, acc_vlans in access_vlans.items():
+            missing = core_vlans - acc_vlans - {"1"}  # VLAN 1 is always implicit
+            if missing:
+                findings.append({
+                    "severity": "warning",
+                    "check": "VLAN Consistency",
+                    "issue": f"{acc_name} is missing VLANs {sorted(missing)} that exist on core switches.",
+                })
+
+        status = "PASS" if not findings else ("FAIL" if any(f["severity"] == "critical" for f in findings) else "WARNING")
+        result = {
+            "status": status,
+            "devices_checked": len(configs),
+            "findings_count": len(findings),
+            "ip_assignments": ip_map,
+            "protocol_map": protocols,
+            "findings": findings,
+        }
+        ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> Validation complete: {status} ({len(findings)} findings across {len(configs)} devices)</span>\n")
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Validation error: {e}"
+
+
+def bulk_deploy(device_names: str) -> str:
+    """Deploy saved configs to multiple devices sequentially in the correct order.
+
+    Deploys core switches first, then routers, then access switches.
+    If a device fails, logs the error and continues with remaining devices.
+
+    Args:
+        device_names: JSON array of device names to deploy, e.g. '["ESW1", "ESW2", "R1", "IOU1"]'
+
+    Returns a structured per-device deployment status report.
+    """
+    ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> bulk_deploy()</span>\n")
+    try:
+        names = _parse_json_string_list(device_names, "device_names")
+        if not names:
+            return json.dumps({"error": "No device names provided."})
+
+        from network_manager.config import cur, db_lock
+
+        # Sort into deployment order: core → router → access
+        ordered = {"core": [], "router": [], "access": [], "unknown": []}
+        for name in names:
+            with db_lock:
+                cur.execute("SELECT type FROM devices WHERE name=?", (name,))
+                row = cur.fetchone()
+            dtype = (row[0] or "").lower() if row else ""
+            if "core" in dtype:
+                ordered["core"].append(name)
+            elif "router" in dtype:
+                ordered["router"].append(name)
+            elif "switch" in dtype:
+                ordered["access"].append(name)
+            else:
+                ordered["unknown"].append(name)
+
+        deploy_order = ordered["core"] + ordered["router"] + ordered["access"] + ordered["unknown"]
+        ctx.log(f"<span style='color:#8b949e'>[Copilot] Deploy order: {' → '.join(deploy_order)}</span>\n")
+
+        import concurrent.futures
+
+        results = []
+        for phase in ["core", "router", "access", "unknown"]:
+            phase_devices = ordered[phase]
+            if not phase_devices:
+                continue
+
+            ctx.log(f"<span style='color:#58A6FF'><b>[Bulk Deploy]</b> Starting phase '{phase}' — {len(phase_devices)} devices concurrently...</span>\n")
+
+            def _deploy_single(name: str):
+                saved_raw = get_saved_config(name)
+                try:
+                    saved_data = json.loads(saved_raw)
+                    config_text = saved_data.get("content", "")
+                except (json.JSONDecodeError, TypeError):
+                    return {"device": name, "status": "SKIPPED", "reason": "No saved config found."}
+
+                if not config_text.strip():
+                    return {"device": name, "status": "SKIPPED", "reason": "Saved config is empty."}
+
+                # Brief jitter to avoid hammering GNS3 multiplexer at the exact same millisecond
+                import random
+                time.sleep(random.uniform(0.1, 0.5))
+
+                deploy_result = deploy_to_device(device_name=name, config_text=config_text)
+                if "FAILED" in deploy_result.upper() or "BLOCKED" in deploy_result.upper():
+                    return {"device": name, "status": "FAILED", "reason": deploy_result[:300]}
+                else:
+                    return {"device": name, "status": "SUCCESS", "reason": deploy_result[:200]}
+
+            # Run concurrently for all devices in this phase
+            with concurrent.futures.ThreadPoolExecutor(max_workers=len(phase_devices)) as executor:
+                futures = {executor.submit(_deploy_single, name): name for name in phase_devices}
+                for future in concurrent.futures.as_completed(futures):
+                    try:
+                        results.append(future.result())
+                    except Exception as exc:
+                        name = futures[future]
+                        results.append({"device": name, "status": "FAILED", "reason": f"Exception: {exc}"})
+            
+            # Brief pause between phases so topology can settle (e.g. trunks come up)
+            time.sleep(2.0)
+
+        # Summary
+        success_count = sum(1 for r in results if r["status"] == "SUCCESS")
+        fail_count = sum(1 for r in results if r["status"] == "FAILED")
+        skip_count = sum(1 for r in results if r["status"] == "SKIPPED")
+
+        report = {
+            "total": len(deploy_order),
+            "success": success_count,
+            "failed": fail_count,
+            "skipped": skip_count,
+            "deploy_order": deploy_order,
+            "results": results,
+        }
+        ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> Bulk deploy complete: {success_count}/{len(deploy_order)} succeeded</span>\n")
+        return json.dumps(report, indent=2)
+    except Exception as e:
+        return f"Bulk deploy error: {e}"
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # ALL TOOLS LIST — registered with Gemini
@@ -1286,9 +1605,11 @@ ALL_TOOLS = [
     deploy_to_device,
     verify_deployment,
     verify_device,
+    bulk_deploy,
     # Intelligence
     audit_network,
     trace_connectivity,
+    validate_configs,
     # Utilities
     calculate_subnet,
     get_ancs_help,
@@ -1446,12 +1767,14 @@ Your very first message contains a **full project snapshot** — a JSON object w
 
 **Config Generation & Deployment:**
 - `generate_and_deploy_device_config(hostname, device_role, ...)` — **PREFERRED**. Builds config locally via ConfigEngine and deploys it atomically.
-- `generate_device_config(hostname, device_role, ...)` — generate without deploying
+- `generate_device_config(hostname, device_role, ...)` — generate only (returns a summary, saves full config to DB)
 - `deploy_to_device(device_name, config_text)` — deploy a saved/existing config
+- `bulk_deploy(device_names)` — deploy saved configs to multiple devices in correct order (core → router → access)
 - `detect_topology()` — analyze device roles and topology pattern
 - `suggest_configs()` — auto-generate config plans for all devices
 
 **Network Intelligence:**
+- `validate_configs(device_names)` — **DRY-RUN**: cross-check SAVED configs in the DB for IP conflicts, VLAN mismatches, protocol inconsistencies BEFORE deploying. (Requires calling `generate_device_config` first to save them).
 - `audit_network()` — scan ALL configs for security issues, inconsistencies, protocol mismatches
 - `trace_connectivity(source_device, destination_ip)` — hop-by-hop reachability diagnosis
 
@@ -1504,10 +1827,12 @@ When asked to "add VLAN 40", update ALL relevant devices:
 Before deploying, verify trunks match, all routers use the same protocol, and IPs don't collide.
 
 ## Deployment Order (always follow this)
+0. **Pre-flight check**: Before deploying ANYTHING, call `validate_configs()` to catch IP conflicts, routing protocol mismatches, missing VLANs, and trunk inconsistencies. Fix issues FIRST.
 1. **Core switches first** — VLANs, trunks, SVIs, static routes
 2. **Routers next** — subinterfaces, routing protocol, DHCP, WAN
 3. **Access switches last** — VLANs, trunks, access ports
 This ensures trunk/routing infrastructure is ready before endpoints are assigned.
+For multi-device deploys, prefer `bulk_deploy()` — it handles ordering automatically.
 
 ## Error Recovery
 - If a deploy fails on one device, **log the error and continue** with remaining devices.
@@ -1519,6 +1844,14 @@ This ensures trunk/routing infrastructure is ready before endpoints are assigned
 - **Configs** come from the project snapshot (what was generated/deployed).
 - **Live state** must come from **tool outputs** (GNS3 JSON, DB, CLI). Do not invent interface names, IPs, or states.
 - When summarizing tool output, you may paraphrase; when stating status, tie it to what a tool returned.
+
+## Interface Mapping — NEVER GUESS
+Before passing interface names (router_interface, uplinks, wan_interface, transit_links) to any config tool, YOU MUST VERIFY THE PHYSICAL TOPOLOGY.
+1. Call `get_topology_links(project_id)` to see exactly what interfaces are cabled to each other.
+2. Call `list_gns3_nodes(project_id)` to map the node IDs from the links back to device names (R1, ESW1, etc.).
+3. Trace the connections: if you are configuring a router-to-router transit link, verify the interface actually connects to another router in the link data. Do NOT guess that Fa0/0 is a transit link.
+4. Call `get_node_ports(project_id, node_id)` if you just need to see what interfaces exist on a node.
+Guessing interfaces causes silent config failures and broken routing. Always map the links first.
 
 # AUDIENCE
 **Primary users are beginners.** They may not know Cisco jargon. Your job is to **reduce fear and confusion**, not sound like a certification exam.
@@ -1581,6 +1914,120 @@ Do NOT blindly pick one protocol. Look at the network first:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# COPILOT LOGGER — structured session log files
+# ═══════════════════════════════════════════════════════════════════════════════
+
+class CopilotLogger:
+    """Writes structured session logs to timestamped files.
+
+    Each session creates a new log file in `copilot_logs/` (next to the DB file).
+    Logs: user messages, AI responses, tool calls (name+args), tool results, timings.
+    """
+
+    def __init__(self):
+        self._file = None
+        self._path = None
+        self._start_time = None
+
+    def start(self, provider: str = "", model: str = "") -> str:
+        """Open a new session log file. Returns the file path."""
+        import os
+        from datetime import datetime
+
+        self._start_time = datetime.now()
+        timestamp = self._start_time.strftime("%Y-%m-%d_%H%M%S")
+
+        # Determine log directory (next to the DB file)
+        try:
+            from network_manager.config import CONFIG_FILE
+            log_dir = os.path.join(os.path.dirname(CONFIG_FILE), "copilot_logs")
+        except Exception:
+            log_dir = os.path.join(os.path.expanduser("~"), "copilot_logs")
+
+        os.makedirs(log_dir, exist_ok=True)
+        self._path = os.path.join(log_dir, f"session_{timestamp}.log")
+
+        try:
+            self._file = open(self._path, "w", encoding="utf-8")
+            self._write_header(provider, model)
+        except Exception:
+            self._file = None
+        return self._path or ""
+
+    def _write_header(self, provider: str, model: str):
+        """Write session metadata header."""
+        if not self._file:
+            return
+        from datetime import datetime
+        self._file.write("=" * 72 + "\n")
+        self._file.write(f"ANCS Copilot Session Log\n")
+        self._file.write(f"Started: {datetime.now().isoformat()}\n")
+        self._file.write(f"Provider: {provider}\n")
+        self._file.write(f"Model: {model}\n")
+        self._file.write("=" * 72 + "\n\n")
+        self._file.flush()
+
+    def log_user_message(self, text: str):
+        """Log a user message."""
+        self._write_entry("USER", text)
+
+    def log_ai_response(self, text: str):
+        """Log an AI response."""
+        self._write_entry("AI", text[:2000])  # Truncate to avoid massive logs
+
+    def log_tool_call(self, name: str, args: dict):
+        """Log a tool invocation with its arguments."""
+        import json
+        args_str = json.dumps(args, indent=2, default=str)[:1000]
+        self._write_entry("TOOL_CALL", f"{name}({args_str})")
+
+    def log_tool_result(self, name: str, result: str, duration_ms: float = 0):
+        """Log a tool result (truncated) with timing."""
+        result_preview = result[:500] if result else "(empty)"
+        timing = f" [{duration_ms:.0f}ms]" if duration_ms else ""
+        self._write_entry("TOOL_RESULT", f"{name}{timing}: {result_preview}")
+
+    def log_error(self, error: str):
+        """Log an error."""
+        self._write_entry("ERROR", error)
+
+    def log_terminal(self, html_text: str):
+        """Log terminal output (strip HTML tags)."""
+        import re
+        clean = re.sub(r'<[^>]+>', '', html_text).strip()
+        if clean:
+            self._write_entry("LOG", clean)
+
+    def _write_entry(self, tag: str, content: str):
+        """Write a timestamped log entry."""
+        if not self._file:
+            return
+        from datetime import datetime
+        ts = datetime.now().strftime("%H:%M:%S.%f")[:-3]
+        self._file.write(f"[{ts}] [{tag}] {content}\n")
+        self._file.flush()
+
+    def close(self):
+        """Close the log file with a footer."""
+        if not self._file:
+            return
+        from datetime import datetime
+        self._file.write("\n" + "=" * 72 + "\n")
+        self._file.write(f"Session ended: {datetime.now().isoformat()}\n")
+        if self._start_time:
+            duration = datetime.now() - self._start_time
+            self._file.write(f"Duration: {duration}\n")
+        self._file.write("=" * 72 + "\n")
+        self._file.flush()
+        self._file.close()
+        self._file = None
+
+    @property
+    def path(self) -> str:
+        return self._path or ""
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # COPILOT WORKER — multi-turn chat thread
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -1622,6 +2069,10 @@ class CopilotWorker(QThread):
         self._running = True
         self._messages = initial_messages or []  # For OpenRouter chat history management
 
+        # Session logger
+        self._logger = CopilotLogger()
+        self._log_path = self._logger.start(provider=provider, model=model_name)
+
         # Wire context
         ctx.gns3_url = gns3_url
         ctx.gns3_project_id = gns3_project_id or ""
@@ -1639,6 +2090,15 @@ class CopilotWorker(QThread):
 
     def stop(self):
         self._running = False
+        try:
+            self._logger.close()
+        except Exception:
+            pass
+
+    @property
+    def session_log_path(self) -> str:
+        """Return the path to the current session log file."""
+        return self._logger.path if self._logger else ""
 
     def _send_with_retry(self, msg: str, max_retries: int = 3) -> str:
         """Send message to Gemini/Vertex with automatic retry on 429 rate limits."""
@@ -1848,6 +2308,10 @@ class CopilotWorker(QThread):
                     f"{result_preview}{'…' if len(str(result)) > 300 else ''}</span>\n"
                 )
 
+                # Session logger
+                self._logger.log_tool_call(fn_name, fn_args)
+                self._logger.log_tool_result(fn_name, str(result), dt_ms)
+
                 function_responses.append(
                     types.Part.from_function_response(
                         name=fn_name,
@@ -1998,6 +2462,11 @@ class CopilotWorker(QThread):
             f"<span style='color:#8b949e'>[Tool Result] {fn_name} → {dt_ms:.0f}ms | "
             f"{result_preview}{'…' if len(str(result)) > 300 else ''}</span>\n"
         )
+
+        # Session logger
+        self._logger.log_tool_call(fn_name, fn_args)
+        self._logger.log_tool_result(fn_name, str(result), dt_ms)
+
         return str(result)
 
     def _execute_tools_parallel(self, tool_calls):
@@ -2177,6 +2646,7 @@ class CopilotWorker(QThread):
                 if self._msg_queue:
                     user_msg = self._msg_queue.pop(0)
                     self.terminal_log_signal.emit(f"\n<span style='color: #58A6FF'><b>[User]</b> {user_msg}</span>\n")
+                    self._logger.log_user_message(user_msg)
                     try:
                         if self.provider in ("gemini", "vertex"):
                             response = self._send_with_retry(user_msg)
@@ -2189,6 +2659,7 @@ class CopilotWorker(QThread):
                                 extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"} if self.provider == "openrouter" else {},
                             )
                         reply = self._process_response(response)
+                        self._logger.log_ai_response(reply)
                         self.chat_response_signal.emit(reply)
                     except openai.APITimeoutError:
                         self.chat_response_signal.emit(

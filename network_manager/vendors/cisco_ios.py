@@ -91,6 +91,7 @@ class CiscoIOSProfile(VendorProfile):
                                   f" switchport access vlan {v.get('id')}", " spanning-tree portfast",
                                   " no shutdown", "exit"]
             lines += ["!", "end"]
+
         return "\n".join(lines)
 
     def render_uplink_block(self, uplinks: list) -> str:
@@ -131,8 +132,33 @@ class CiscoIOSProfile(VendorProfile):
         router_interface: str, is_boundary_router: bool,
         transit_links: list,
     ) -> str:
+        # Boundary routers: only transit links
         if is_boundary_router:
             return self._render_transit_links_block(transit_links)
+
+        parts = []
+
+        # Router-on-a-stick subinterfaces (for inter-VLAN routing)
+        if device_role == "router" and routing_entries and router_interface:
+            parts.append(self._render_router_on_stick_block(router_interface, routing_entries))
+
+        # Transit links between routers (R1↔R2↔R3) — always render when provided
+        if device_role == "router" and transit_links:
+            valid_transit = []
+            for t in transit_links:
+                # Prevent interface conflict: if this is the parent interface for subinterfaces,
+                # it cannot ALSO be a transit link with an IP address.
+                if routing_entries and router_interface and t.get("local_interface") == router_interface:
+                    continue
+                valid_transit.append(t)
+            
+            if valid_transit:
+                parts.append(self._render_transit_links_block(valid_transit))
+
+        if device_role == "router" and parts:
+            return "\n".join(p for p in parts if p.strip())
+
+        # Core switch SVIs
         if not routing_entries:
             return ""
         if device_role == "router":
@@ -236,6 +262,14 @@ class CiscoIOSProfile(VendorProfile):
             return "\n".join(lines)
 
         networks = self._collect_protocol_networks(routing_entries)
+
+        # Also include transit link networks in routing protocol advertisements
+        for link in (transit_links or []):
+            lip = link.get("ip", "")
+            lmask = link.get("mask", "255.255.255.252")
+            if lip and lmask:
+                networks.append((lip, lmask))
+
         if not networks and not is_redistribution_router:
             return ""
 
