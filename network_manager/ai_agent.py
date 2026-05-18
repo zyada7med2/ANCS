@@ -92,16 +92,18 @@ def _resolve_device_connection(device_name: str) -> dict | None:
     # ── Fallback: SQLite database ─────────────────────────────────────
     if result is None:
         try:
-            from network_manager.config import cur, db_lock
+            from network_manager.config import conn, db_lock
             with db_lock:
-                cur.execute(
+                _cur = conn.cursor()
+                _cur.execute(
                     "SELECT d.ip, d.port, "
                     "c.host, c.port, c.username, c.password, c.enable_password, c.protocol "
                     "FROM devices d LEFT JOIN credentials c ON c.device_name = d.name "
                     "WHERE d.name=?",
                     (device_name,),
                 )
-                row = cur.fetchone()
+                row = _cur.fetchone()
+                _cur.close()
         except Exception:
             return None
         if not row:
@@ -343,18 +345,20 @@ async def _async_exec_rw(reader, writer, command: str) -> str:
 def list_all_devices() -> str:
     """List devices in the current project, enriched with live GNS3 status and ports."""
     try:
-        from network_manager.config import cur, db_lock
+        from network_manager.config import conn, db_lock
         with db_lock:
+            _cur = conn.cursor()
             # Only select devices belonging to the current project or manually added ones (project_id is NULL/empty)
             if ctx.gns3_project_id:
-                cur.execute(
+                _cur.execute(
                     "SELECT name, type, ip, port, status, connection_type FROM devices "
                     "WHERE project_id=? ORDER BY name",
                     (ctx.gns3_project_id,)
                 )
             else:
-                cur.execute("SELECT name, type, ip, port, status, connection_type FROM devices ORDER BY name")
-            rows = cur.fetchall()
+                _cur.execute("SELECT name, type, ip, port, status, connection_type FROM devices ORDER BY name")
+            rows = _cur.fetchall()
+            _cur.close()
 
         # Build base list from DB
         result = []
@@ -420,14 +424,16 @@ def get_device_credentials(device_name: str) -> str:
 def get_saved_config(device_name: str) -> str:
     """Get the last saved configuration for a device from the ANCS database."""
     try:
-        from network_manager.config import cur, db_lock
+        from network_manager.config import conn, db_lock
         with db_lock:
-            cur.execute("""
+            _cur = conn.cursor()
+            _cur.execute("""
                 SELECT c.config_name, c.content, c.created_at
                 FROM configs c JOIN devices d ON c.device_id = d.id
                 WHERE d.name=? ORDER BY c.created_at DESC LIMIT 1
             """, (device_name,))
-            row = cur.fetchone()
+            row = _cur.fetchone()
+            _cur.close()
         if not row:
             return f"No saved config for '{device_name}'"
         ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> get_saved_config({device_name})</span>\n")
@@ -439,14 +445,16 @@ def get_saved_config(device_name: str) -> str:
 def get_send_history(device_name: str) -> str:
     """Get the deployment/send history log for a device. Returns recent log entries."""
     try:
-        from network_manager.config import cur, db_lock
+        from network_manager.config import conn, db_lock
         with db_lock:
-            cur.execute("""
+            _cur = conn.cursor()
+            _cur.execute("""
                 SELECT action, details, config_snapshot, timestamp
                 FROM logs
                 WHERE device_name=? ORDER BY timestamp DESC LIMIT 10
             """, (device_name,))
-            rows = cur.fetchall()
+            rows = _cur.fetchall()
+            _cur.close()
         result = [{"action": r[0], "details": r[1], "config_snapshot": (r[2] or "")[:200], "timestamp": r[3]} for r in rows]
         ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> get_send_history({device_name}) → {len(result)} entries</span>\n")
         return json.dumps(result, indent=2)
@@ -457,13 +465,15 @@ def get_send_history(device_name: str) -> str:
 def query_logs(severity: str = "all", limit: int = 20) -> str:
     """Query the ANCS activity logs. Severity can be 'info', 'warning', 'error', or 'all'. Returns recent log entries."""
     try:
-        from network_manager.config import cur, db_lock
+        from network_manager.config import conn, db_lock
         with db_lock:
+            _cur = conn.cursor()
             if severity == "all":
-                cur.execute("SELECT action, details, severity, created_at FROM logs ORDER BY created_at DESC LIMIT ?", (limit,))
+                _cur.execute("SELECT action, details, severity, created_at FROM logs ORDER BY created_at DESC LIMIT ?", (limit,))
             else:
-                cur.execute("SELECT action, details, severity, created_at FROM logs WHERE severity=? ORDER BY created_at DESC LIMIT ?", (severity, limit))
-            rows = cur.fetchall()
+                _cur.execute("SELECT action, details, severity, created_at FROM logs WHERE severity=? ORDER BY created_at DESC LIMIT ?", (severity, limit))
+            rows = _cur.fetchall()
+            _cur.close()
         result = [{"action": r[0], "details": r[1], "severity": r[2], "timestamp": r[3]} for r in rows]
         ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> query_logs(severity={severity}) → {len(result)} entries</span>\n")
         return json.dumps(result, indent=2)
@@ -651,18 +661,20 @@ def generate_device_config(
         # ── Persist config to DB so snapshot shows has_config=true ─────
         _config_saved = False
         try:
-            from network_manager.config import cur, conn, db_lock
+            from network_manager.config import conn, db_lock
             with db_lock:
-                cur.execute("SELECT id FROM devices WHERE name=?", (hostname,))
-                dev_row = cur.fetchone()
+                _cur = conn.cursor()
+                _cur.execute("SELECT id FROM devices WHERE name=?", (hostname,))
+                dev_row = _cur.fetchone()
                 if dev_row:
-                    cur.execute(
+                    _cur.execute(
                         "INSERT INTO configs (device_id, config_name, content, created_at) "
                         "VALUES (?, ?, ?, datetime('now'))",
                         (dev_row[0], f"copilot_{hostname}", config_text),
                     )
                     conn.commit()
                     _config_saved = True
+                _cur.close()
         except Exception as save_err:
             ctx.log(f"<span style='color:#d29922'>[Copilot] Warning: could not save config to DB: {save_err}</span>\n")
 
@@ -767,10 +779,11 @@ def audit_network() -> str:
     """
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> audit_network()</span>\n")
     try:
-        from network_manager.config import cur, db_lock
+        from network_manager.config import conn, db_lock
 
         # Fetch devices in the current project (or unassigned), along with their latest deployed config from logs
         with db_lock:
+            _cur = conn.cursor()
             query = """
                 SELECT d.name, d.type, l.config_snapshot 
                 FROM devices d 
@@ -779,11 +792,12 @@ def audit_network() -> str:
             """
             if ctx.gns3_project_id:
                 query += "WHERE d.project_id=? ORDER BY d.name"
-                cur.execute(query, (ctx.gns3_project_id,))
+                _cur.execute(query, (ctx.gns3_project_id,))
             else:
                 query += "ORDER BY d.name"
-                cur.execute(query)
-            devices_with_configs = cur.fetchall()
+                _cur.execute(query)
+            devices_with_configs = _cur.fetchall()
+            _cur.close()
 
         if not devices_with_configs:
             return json.dumps({"status": "empty", "message": "No devices in workspace."})
@@ -924,17 +938,19 @@ def detect_topology() -> str:
     """Analyze the current ANCS device list and detect the network topology pattern (router-core-access, core-access, router-only, etc.). Only includes devices in the active GNS3 project."""
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> detect_topology()</span>\n")
     try:
-        from network_manager.config import cur, db_lock
+        from network_manager.config import conn, db_lock
         with db_lock:
+            _cur = conn.cursor()
             if ctx.gns3_project_id:
-                cur.execute(
+                _cur.execute(
                     "SELECT name, type FROM devices "
                     "WHERE project_id=? ORDER BY name",
                     (ctx.gns3_project_id,)
                 )
             else:
-                cur.execute("SELECT name, type FROM devices ORDER BY name")
-            rows = cur.fetchall()
+                _cur.execute("SELECT name, type FROM devices ORDER BY name")
+            rows = _cur.fetchall()
+            _cur.close()
         routers = [r for r in rows if r[1] and "router" in r[1].lower()]
         cores = [r for r in rows if r[1] and "core" in r[1].lower()]
         switches = [r for r in rows if r[1] and "switch" in r[1].lower() and "core" not in r[1].lower()]
@@ -1015,7 +1031,10 @@ def _evict_pool_by_host_port(host: str, port: int):
     for dname in to_evict:
         try:
             _r, _w = ctx.sessions[dname]
-            _w.close()
+            w_obj = _w._w if hasattr(_w, "_w") else _w
+            sock = w_obj.get_extra_info('socket')
+            if sock:
+                sock.close()
         except Exception:
             pass
         del ctx.sessions[dname]
@@ -1099,7 +1118,10 @@ def deploy_to_device(device_name: str, config_text: str) -> str:
     if ctx.sessions and device_name in ctx.sessions:
         try:
             _r, _w = ctx.sessions[device_name]
-            _w.close()
+            w_obj = _w._w if hasattr(_w, "_w") else _w
+            sock = w_obj.get_extra_info('socket')
+            if sock:
+                sock.close()
         except Exception:
             pass
         del ctx.sessions[device_name]
@@ -1204,7 +1226,10 @@ def run_cli_on_device(device_name: str, command: str) -> str:
             ctx.log(f"<span style='color:#d29922'>[Copilot] Pooled session for {device_name} is dead — evicting and using fresh connection</span>\n")
         # Evict dead session
         try:
-            writer.close()
+            w_obj = writer._w if hasattr(writer, "_w") else writer
+            sock = w_obj.get_extra_info('socket')
+            if sock:
+                sock.close()
         except Exception:
             pass
         del ctx.sessions[device_name]
@@ -1430,29 +1455,33 @@ def validate_configs(device_names: str = "all") -> str:
     """
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> validate_configs({device_names})</span>\n")
     try:
-        from network_manager.config import cur, db_lock
+        from network_manager.config import conn, db_lock
 
         # Determine which devices to validate
         if device_names == "all":
             with db_lock:
+                _cur = conn.cursor()
                 if ctx.gns3_project_id:
-                    cur.execute(
+                    _cur.execute(
                         "SELECT d.name, d.type FROM devices d "
                         "WHERE d.project_id=? ORDER BY d.name",
                         (ctx.gns3_project_id,)
                     )
                 else:
-                    cur.execute("SELECT name, type FROM devices ORDER BY name")
-                device_list = cur.fetchall()
+                    _cur.execute("SELECT name, type FROM devices ORDER BY name")
+                device_list = _cur.fetchall()
+                _cur.close()
         else:
             names = _parse_json_string_list(device_names, "device_names")
             with db_lock:
+                _cur = conn.cursor()
                 device_list = []
                 for n in names:
-                    cur.execute("SELECT name, type FROM devices WHERE name=?", (n,))
-                    row = cur.fetchone()
+                    _cur.execute("SELECT name, type FROM devices WHERE name=?", (n,))
+                    row = _cur.fetchone()
                     if row:
                         device_list.append(row)
+                _cur.close()
 
         if not device_list:
             return json.dumps({"status": "error", "message": "No devices found to validate."})
@@ -1461,11 +1490,13 @@ def validate_configs(device_names: str = "all") -> str:
         configs = {}
         for name, dtype in device_list:
             with db_lock:
-                cur.execute("""
+                _cur = conn.cursor()
+                _cur.execute("""
                     SELECT c.content FROM configs c JOIN devices d ON c.device_id = d.id
                     WHERE d.name=? ORDER BY c.created_at DESC LIMIT 1
                 """, (name,))
-                row = cur.fetchone()
+                row = _cur.fetchone()
+                _cur.close()
             if row and row[0]:
                 configs[name] = {"type": dtype, "config": row[0]}
 
@@ -1574,14 +1605,16 @@ def bulk_deploy(device_names: str) -> str:
         if not names:
             return json.dumps({"error": "No device names provided."})
 
-        from network_manager.config import cur, db_lock
+        from network_manager.config import conn, db_lock
 
         # Sort into deployment order: core → router → access
         ordered = {"core": [], "router": [], "access": [], "unknown": []}
         for name in names:
             with db_lock:
-                cur.execute("SELECT type FROM devices WHERE name=?", (name,))
-                row = cur.fetchone()
+                _cur = conn.cursor()
+                _cur.execute("SELECT type FROM devices WHERE name=?", (name,))
+                row = _cur.fetchone()
+                _cur.close()
             dtype = (row[0] or "").lower() if row else ""
             if "core" in dtype:
                 ordered["core"].append(name)
@@ -2114,7 +2147,7 @@ class CopilotWorker(QThread):
         open simultaneously.  We stagger each device by 1.5 s and verify the
         session is actually alive before storing it in the pool.
         """
-        import telnetlib3
+        import asyncio
 
         device_idx = 0
         for ep in self.workspace_resolved:
@@ -2139,8 +2172,12 @@ class CopilotWorker(QThread):
                     continue
                 except Exception:
                     # Session stale or dead, cleanup and proceed to reconnect
-                    try: ctx.sessions[name][1].close()
-                    except: pass
+                    try:
+                        _ww = ctx.sessions[name][1]
+                        _wo = _ww._w if hasattr(_ww, "_w") else _ww
+                        _sk = _wo.get_extra_info('socket')
+                        if _sk: _sk.close()
+                    except Exception: pass
                     del ctx.sessions[name]
 
             # ── Stagger: let GNS3 breathe between connections ──────────
@@ -2157,13 +2194,28 @@ class CopilotWorker(QThread):
                     f"<span style='color:#8b949e'>[Copilot] Pool session: {name} ({host}:{port})...</span>\n"
                 )
                 reader, writer = await asyncio.wait_for(
-                    telnetlib3.open_connection(host, port), timeout=10
+                    asyncio.open_connection(host, port), timeout=10
                 )
             except Exception as e:
                 self.terminal_log_signal.emit(
                     f"<span style='color:#d73a49'>[Copilot] Pool skip {name}: {e}</span>\n"
                 )
                 continue
+
+            # Wrap raw streams: str-based API + strip Telnet IAC from GNS3
+            from network_manager.network.sender import _strip_telnet_iac
+            class _StrReader:
+                def __init__(self, r): self._r = r
+                async def read(self, n):
+                    data = await self._r.read(n)
+                    if not data: return ""
+                    return _strip_telnet_iac(data).decode("utf-8", errors="ignore")
+            class _StrWriter:
+                def __init__(self, w): self._w = w
+                def write(self, s): self._w.write(s.encode("utf-8") if isinstance(s, str) else s)
+                def close(self): self._w.close()
+            reader = _StrReader(reader)
+            writer = _StrWriter(writer)
 
             # Closures need to capture the *current* reader, not the loop var
             _reader = reader
@@ -2244,7 +2296,10 @@ class CopilotWorker(QThread):
                     f"<span style='color:#d29922'>[Copilot] Pool ⚠ {name}: connected but no prompt detected — skipping</span>\n"
                 )
                 try:
-                    writer.close()
+                    w_obj = writer._w if hasattr(writer, "_w") else writer
+                    sock = w_obj.get_extra_info('socket')
+                    if sock:
+                        sock.close()
                 except Exception:
                     pass
 
@@ -2679,19 +2734,35 @@ class CopilotWorker(QThread):
 
         except Exception as e:
             import traceback
+            tb = traceback.format_exc()
             traceback.print_exc()
+            try:
+                crash_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "crash.log")
+                with open(crash_path, "a", encoding="utf-8") as f:
+                    f.write(f"\n{'='*80}\n{time.strftime('%Y-%m-%d %H:%M:%S')} CopilotWorker.run() crash:\n{tb}\n{'='*80}\n")
+                print(f"\n\n*** CRASH LOGGED TO {crash_path} ***\n\n", flush=True)
+            except Exception:
+                pass
             self.finished_signal.emit(f"Copilot error: {e}", False)
         finally:
             for _n, pair in list((ctx.sessions or {}).items()):
                 try:
                     if pair and len(pair) > 1 and pair[1]:
-                        pair[1].close()
+                        _w = pair[1]
+                        w_obj = _w._w if hasattr(_w, "_w") else _w
+                        sock = w_obj.get_extra_info('socket')
+                        if sock:
+                            sock.close()
                 except Exception:
                     pass
             try:
                 ctx.sessions = {}
                 if ctx.telnet_writer:
-                    ctx.telnet_writer.close()
+                    _w = ctx.telnet_writer
+                    w_obj = _w._w if hasattr(_w, "_w") else _w
+                    sock = w_obj.get_extra_info('socket')
+                    if sock:
+                        sock.close()
                     ctx.telnet_writer = None
                     ctx.telnet_reader = None
             except Exception:

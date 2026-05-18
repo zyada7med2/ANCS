@@ -42,6 +42,17 @@ if __name__ == "__main__":
     if current_dir not in sys.path:
         sys.path.insert(0, current_dir)
 
+    import traceback, logging
+    logging.basicConfig(
+        filename=os.path.join(current_dir, "crash.log"),
+        level=logging.ERROR,
+        format="%(asctime)s %(message)s",
+    )
+    sys.excepthook = lambda *args: (
+        logging.error("".join(traceback.format_exception(*args))),
+        sys.__excepthook__(*args),
+    )
+
     from network_manager.main import main
     main()
 

@@ -25,6 +25,94 @@ except Exception:
     telnetlib3 = None
 
 
+# ── Raw TCP wrappers (bypass Telnet option negotiation) ──────────────
+# GNS3 console ports are TCP proxies to device serial lines.  telnetlib3's
+# default Telnet option negotiation (TTYPE, NAWS, …) leaks IAC bytes through
+# GNS3's console handler, producing garbage like "}T" and "punknown" on the
+# device CLI.  These thin wrappers present the same str-based read/write API
+# that the rest of this module expects, but use raw asyncio TCP underneath.
+# The reader also strips incoming IAC sequences that GNS3/Dynamips sends as
+# a Telnet server, so they never pollute prompt detection or log output.
+
+_IAC = 0xFF
+_SB  = 0xFA
+_SE  = 0xF0
+
+def _strip_telnet_iac(data: bytes) -> bytes:
+    """Remove Telnet IAC command sequences from raw bytes.
+
+    Handles: IAC + 2-byte commands (WILL/WONT/DO/DONT),
+             IAC + sub-negotiation (SB … SE),
+             IAC IAC → single 0xFF literal.
+    """
+    out = bytearray()
+    i = 0
+    n = len(data)
+    while i < n:
+        if data[i] == _IAC and i + 1 < n:
+            nxt = data[i + 1]
+            if nxt == _IAC:
+                out.append(_IAC)
+                i += 2
+            elif nxt == _SB:
+                # Skip until IAC SE
+                i += 2
+                while i < n:
+                    if data[i] == _IAC and i + 1 < n and data[i + 1] == _SE:
+                        i += 2
+                        break
+                    i += 1
+                else:
+                    pass  # unterminated SB — just consume
+            elif 0xFB <= nxt <= 0xFE:
+                # WILL / WONT / DO / DONT + 1 option byte
+                i += 3
+            else:
+                # Other IAC command (2 bytes)
+                i += 2
+        else:
+            out.append(data[i])
+            i += 1
+    return bytes(out)
+
+
+class _RawReader:
+    """Async reader that decodes raw TCP bytes to str, stripping Telnet IAC."""
+    __slots__ = ("_reader",)
+
+    def __init__(self, reader: asyncio.StreamReader):
+        self._reader = reader
+
+    async def read(self, n: int) -> str:
+        data = await self._reader.read(n)
+        if not data:
+            return ""
+        cleaned = _strip_telnet_iac(data)
+        return cleaned.decode("utf-8", errors="ignore")
+
+
+class _RawWriter:
+    """Writer that encodes str to bytes for raw TCP (same API as telnetlib3 writer)."""
+    __slots__ = ("_writer",)
+
+    def __init__(self, writer: asyncio.StreamWriter):
+        self._writer = writer
+
+    def write(self, data: str) -> None:
+        self._writer.write(data.encode("utf-8") if isinstance(data, str) else data)
+
+    def close(self) -> None:
+        self._writer.close()
+
+
+async def _open_raw_connection(host: str, port: int, timeout: float = 10):
+    """Open a raw TCP connection (no Telnet negotiation). Returns (_RawReader, _RawWriter)."""
+    raw_r, raw_w = await asyncio.wait_for(
+        asyncio.open_connection(host, port), timeout=timeout
+    )
+    return _RawReader(raw_r), _RawWriter(raw_w)
+
+
 class Sender:
     @staticmethod
     def split_into_blocks(text):
@@ -274,16 +362,12 @@ class Sender:
         """Async implementation of telnet send using telnetlib3"""
         if session_config is None:
             session_config = Sender._get_default_session_config()
-        reader, writer = await asyncio.wait_for(
-            telnetlib3.open_connection(host, port),
-            timeout=timeout
-        )
+        reader, writer = await _open_raw_connection(host, port, timeout)
 
         async def read_available(timeout_sec=1.0):
             """Read whatever is available with timeout"""
             try:
-                raw = await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
-                return raw if isinstance(raw, str) else str(raw) if raw else ""
+                return await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
             except asyncio.TimeoutError:
                 return ""
 
@@ -293,8 +377,7 @@ class Sender:
             deadline = asyncio.get_event_loop().time() + timeout_sec
             while asyncio.get_event_loop().time() < deadline:
                 try:
-                    raw = await asyncio.wait_for(reader.read(4096), timeout=0.5)
-                    chunk = raw if isinstance(raw, str) else str(raw) if raw else ""
+                    chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
                     if chunk:
                         buf += chunk
                         if re.search(session_config.prompt_pattern_exec, buf):
@@ -313,7 +396,7 @@ class Sender:
 
         try:
             await asyncio.sleep(0.4)
-            
+
             # Best-effort login - read initial prompt (wake past GNS3 "Press RETURN" if needed)
             initial = await read_available(2.0)
             initial = await Sender._telnet_wake_gns3_console(writer, read_available, log_fn, initial)
@@ -424,18 +507,23 @@ class Sender:
 
     @staticmethod
     def send_telnet(log_fn, host, port, username, password, enable_pw, text, timeout=10, block_delay=3.0, session_config: SessionConfig = None):
-        """Send configuration via telnet using async telnetlib3"""
+        """Send configuration via telnet (raw TCP to GNS3 console)"""
         if session_config is None:
             session_config = Sender._get_default_session_config()
-        if telnetlib3 is None:
-            log_fn("[telnet] telnetlib3 not installed")
-            return False
         try:
             log_fn(f"[telnet] connecting to {host}:{port} ...")
-            # Run the async function in a new event loop
-            return asyncio.run(
-                Sender._send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout, block_delay, session_config)
-            )
+            coro = Sender._send_telnet_async(log_fn, host, port, username, password, enable_pw, text, timeout, block_delay, session_config)
+
+            # Check if we're in the main event loop's thread
+            try:
+                loop = asyncio.get_running_loop()
+                # We're in an async context — can't run_until_complete
+                # This shouldn't happen in normal deployment flow
+                log_fn(f"[telnet] ERROR: called from async context")
+                return False
+            except RuntimeError:
+                # No running loop — safe to use asyncio.run()
+                return asyncio.run(coro)
         except Exception as e:
             log_fn(f"[telnet] error: {e}")
             return False
@@ -456,10 +544,7 @@ class Sender:
         One Telnet session: wake/login/enable, terminal length 0, then each show command.
         Returns {command: output}. Used by the AI agent for device_name-based CLI.
         """
-        reader, writer = await asyncio.wait_for(
-            telnetlib3.open_connection(host, port),
-            timeout=timeout,
-        )
+        reader, writer = await _open_raw_connection(host, port, timeout)
 
         async def write_line(line: str):
             writer.write(line + "\r\n")
@@ -467,8 +552,7 @@ class Sender:
 
         async def read_available(timeout_sec: float = 1.0) -> str:
             try:
-                raw = await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
-                return raw if isinstance(raw, str) else str(raw) if raw else ""
+                return await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
             except asyncio.TimeoutError:
                 return ""
 
@@ -477,8 +561,7 @@ class Sender:
             deadline = asyncio.get_event_loop().time() + timeout_sec
             while asyncio.get_event_loop().time() < deadline:
                 try:
-                    raw = await asyncio.wait_for(reader.read(4096), timeout=0.5)
-                    chunk = raw if isinstance(raw, str) else str(raw) if raw else ""
+                    chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
                     if chunk:
                         buf += chunk
                         stripped = buf.rstrip()
@@ -568,20 +651,20 @@ class Sender:
         commands: list[str],
         timeout: int = 10,
     ) -> dict[str, str]:
-        if telnetlib3 is None:
-            log_fn("[run_show] telnetlib3 not installed")
-            return {"_error": "telnetlib3 not installed"}
         try:
-            return asyncio.run(
-                Sender._run_show_commands_telnet_async(
-                    log_fn, host, port,
-                    commands=commands,
-                    username=username,
-                    password=password,
-                    enable_pw=enable_pw,
-                    timeout=timeout,
-                )
+            coro = Sender._run_show_commands_telnet_async(
+                log_fn, host, port,
+                commands=commands,
+                username=username,
+                password=password,
+                enable_pw=enable_pw,
+                timeout=timeout,
             )
+            try:
+                asyncio.get_running_loop()
+                return {"_error": "called from async context"}
+            except RuntimeError:
+                return asyncio.run(coro)
         except Exception as e:
             log_fn(f"[run_show] error: {e}")
             return {"_error": str(e)}
@@ -598,9 +681,7 @@ class Sender:
         Open a new Telnet connection, run each show command, and capture output.
         Returns {command: raw_output_text}.
         """
-        reader, writer = await asyncio.wait_for(
-            telnetlib3.open_connection(host, port), timeout=timeout
-        )
+        reader, writer = await _open_raw_connection(host, port, timeout)
 
         async def write_line(line: str):
             writer.write(line + "\r\n")
@@ -611,8 +692,7 @@ class Sender:
             deadline = asyncio.get_event_loop().time() + timeout_sec
             while asyncio.get_event_loop().time() < deadline:
                 try:
-                    raw = await asyncio.wait_for(reader.read(4096), timeout=0.5)
-                    chunk = raw if isinstance(raw, str) else str(raw) if raw else ""
+                    chunk = await asyncio.wait_for(reader.read(4096), timeout=0.5)
                     if chunk:
                         buf += chunk
                         stripped = buf.rstrip()
@@ -624,8 +704,7 @@ class Sender:
 
         async def read_available(timeout_sec: float = 1.0) -> str:
             try:
-                raw = await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
-                return raw if isinstance(raw, str) else str(raw) if raw else ""
+                return await asyncio.wait_for(reader.read(4096), timeout=timeout_sec)
             except asyncio.TimeoutError:
                 return ""
 
@@ -671,16 +750,16 @@ class Sender:
         """
         if session_config is None:
             session_config = Sender._get_default_session_config()
-        if telnetlib3 is None:
-            log_fn("[verify] telnetlib3 not installed — skipping verification")
-            return {}
         try:
-            return asyncio.run(
-                Sender._verify_telnet_async(
-                    log_fn, host, port, commands,
-                    username, password, enable_pw, timeout, session_config
-                )
+            coro = Sender._verify_telnet_async(
+                log_fn, host, port, commands,
+                username, password, enable_pw, timeout, session_config
             )
+            try:
+                asyncio.get_running_loop()
+                return {}
+            except RuntimeError:
+                return asyncio.run(coro)
         except Exception as exc:
             log_fn(f"[verify] failed: {exc}")
             return {}
