@@ -333,13 +333,13 @@ with open(dialog_path, encoding="utf-8") as f:
 test("DeployReviewDialog class", "class DeployReviewDialog" in dialog_source)
 test("IOSSyntaxHighlighter class", "class IOSSyntaxHighlighter" in dialog_source)
 test("request_deploy_approval function", "def request_deploy_approval(" in dialog_source)
-test("Thread-safe: BlockingQueuedConnection", "BlockingQueuedConnection" in dialog_source)
+test("Thread-safe: Signal/Slot bridge", "_ReviewBridge" in dialog_source and "threading.Event" in dialog_source)
 test("Approve button", "Approve" in dialog_source)
 test("Reject button", "Reject" in dialog_source)
 test("IOS no commands highlighted red", "#f85149" in dialog_source)
 test("HITL gate in generate_and_deploy", "request_deploy_approval" in source)
 test("Rejected deployment message", "REJECTED by user" in source)
-test("Graceful fallback", "HITL dialog unavailable" in source)
+test("Graceful fallback with traceback", "HITL dialog FAILED" in source)
 
 
 # ==============================================================

@@ -10,17 +10,18 @@ Usage from ai_agent.py:
         device_name="R1",
         device_role="router",
         commands=["router ospf 1", "network 10.0.0.0 0.0.0.255 area 0", ...],
-        parent=None
     )
 """
 
+import re
+import threading
+
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton,
-    QPlainTextEdit, QFrame, QSizePolicy
+    QPlainTextEdit, QFrame, QApplication,
 )
-from PySide6.QtCore import Qt, Signal, QMetaObject, Q_ARG
+from PySide6.QtCore import Qt, Signal, Slot, QObject, QThread
 from PySide6.QtGui import QFont, QColor, QSyntaxHighlighter, QTextCharFormat
-import re
 
 
 class IOSSyntaxHighlighter(QSyntaxHighlighter):
@@ -187,15 +188,65 @@ class DeployReviewDialog(QDialog):
         return self._final_commands
 
 
-# Thread-safe helper for use from the CopilotWorker thread
-_pending_review = {"result": None}
+# ═══════════════════════════════════════════════════════════════════
+# Thread-safe bridge for invoking the dialog from the CopilotWorker
+# ═══════════════════════════════════════════════════════════════════
+
+class _ReviewBridge(QObject):
+    """
+    Bridge object that enables the CopilotWorker thread to show a modal
+    dialog on the main (GUI) thread and block until the user responds.
+
+    How it works:
+    1. CopilotWorker calls request_deploy_approval() from its thread
+    2. The bridge emits _trigger signal (parameterless to avoid PySide6 type issues)
+    3. Signal is delivered via QueuedConnection to the main thread's event loop
+    4. _show_dialog() runs on the main thread, shows the modal, stores result
+    5. threading.Event unblocks the worker thread
+    """
+    _trigger = Signal()
+
+    def __init__(self):
+        super().__init__()
+        self._device_name = ""
+        self._device_role = ""
+        self._commands = []
+        self._result = None
+        self._done = threading.Event()
+        # Connect signal → slot. QueuedConnection delivers to receiver's thread.
+        self._trigger.connect(self._show_dialog, Qt.ConnectionType.QueuedConnection)
+
+    @Slot()
+    def _show_dialog(self):
+        """Runs on the main thread — safe to create and exec a QDialog."""
+        try:
+            dialog = DeployReviewDialog(
+                self._device_name, self._device_role, self._commands
+            )
+            dialog.exec()
+            self._result = (dialog.approved, dialog.final_commands)
+        except Exception as e:
+            self._result = None
+        finally:
+            self._done.set()
 
 
-def _show_dialog_on_main_thread(device_name: str, device_role: str, commands: list[str]):
-    """Show the dialog on the main thread and store the result."""
-    dialog = DeployReviewDialog(device_name, device_role, commands)
-    dialog.exec()
-    _pending_review["result"] = (dialog.approved, dialog.final_commands)
+# Singleton bridge, lazily initialized
+_bridge = None
+_bridge_lock = threading.Lock()
+
+
+def _get_bridge() -> _ReviewBridge:
+    """Get or create the singleton bridge, moved to the main thread."""
+    global _bridge
+    with _bridge_lock:
+        if _bridge is None:
+            _bridge = _ReviewBridge()
+            # Move bridge to the main thread so its slot runs there
+            app = QApplication.instance()
+            if app:
+                _bridge.moveToThread(app.thread())
+        return _bridge
 
 
 def request_deploy_approval(
@@ -205,27 +256,38 @@ def request_deploy_approval(
 ) -> tuple[bool, list[str]]:
     """Request user approval for a deployment via a modal dialog.
 
-    This is thread-safe — can be called from the CopilotWorker thread.
-    The dialog will be shown on the main (GUI) thread.
+    Thread-safe — designed to be called from the CopilotWorker thread.
+    The dialog runs on the main GUI thread; the worker blocks until
+    the user clicks Approve or Reject.
 
     Returns:
         (approved: bool, final_commands: list[str])
-        If rejected, final_commands will be the original commands.
+        If dialog fails, returns (False, original_commands).
     """
-    from PySide6.QtWidgets import QApplication
-
-    _pending_review["result"] = None
-
-    # Schedule dialog on main thread
     app = QApplication.instance()
-    if app:
-        QMetaObject.invokeMethod(
-            app,
-            lambda: _show_dialog_on_main_thread(device_name, device_role, commands),
-            Qt.ConnectionType.BlockingQueuedConnection,
-        )
+    if not app:
+        raise RuntimeError("No QApplication instance — cannot show HITL dialog")
 
-    result = _pending_review.get("result")
-    if result is None:
+    # If already on main thread (shouldn't happen, but handle it), show directly
+    if QThread.currentThread() == app.thread():
+        dialog = DeployReviewDialog(device_name, device_role, commands)
+        dialog.exec()
+        return (dialog.approved, dialog.final_commands)
+
+    # Cross-thread: use the bridge
+    bridge = _get_bridge()
+    bridge._device_name = device_name
+    bridge._device_role = device_role
+    bridge._commands = list(commands)  # copy to be safe
+    bridge._result = None
+    bridge._done.clear()
+
+    # Emit signal — delivered to main thread via QueuedConnection
+    bridge._trigger.emit()
+
+    # Block worker thread until the dialog closes (5 min timeout)
+    bridge._done.wait(timeout=300)
+
+    if bridge._result is None:
         return (False, commands)
-    return result
+    return bridge._result

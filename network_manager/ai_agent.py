@@ -825,7 +825,11 @@ def generate_and_deploy_device_config(
         ctx.log(f"<span style='color:#3fb950'>[Copilot] ✔ Deployment APPROVED by user for {hostname}</span>\n")
     except Exception as e:
         # If the dialog fails (e.g., no GUI thread), fall back to auto-deploy
-        ctx.log(f"<span style='color:#d29922'>[Copilot] HITL dialog unavailable ({e}), auto-deploying...</span>\n")
+        import traceback
+        tb = traceback.format_exc()
+        ctx.log(f"<span style='color:#f85149'>[Copilot] HITL dialog FAILED: {e}</span>\n")
+        ctx.log(f"<span style='color:#8b949e'>[Copilot] Traceback: {tb[:500]}</span>\n")
+        ctx.log(f"<span style='color:#d29922'>[Copilot] Falling back to auto-deploy...</span>\n")
 
     # 4. Deploy it
     ctx.log(f"<span style='color:#8b949e'>[Copilot] Deploying approved config to {hostname}...</span>\n")
