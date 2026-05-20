@@ -409,22 +409,39 @@ def list_all_devices() -> str:
 
         # Filter out stopped/ghost devices — they pollute the agent's context
         # and their "duplicate port" warnings hijack attention
-        active_devices = [d for d in result if d.get("status") in ("started", "unknown", None)]
-        stopped_devices = [d for d in result if d.get("status") not in ("started", "unknown", None)]
+        #
+        # Ghost detection: a device is a ghost if:
+        # 1. It's "stopped" in GNS3, OR
+        # 2. It has "unknown" status (= stale DB row, not in current GNS3 project)
+        #    AND has a "duplicate port" warning (= sharing a port with a real device)
+        active_devices = []
+        ghost_devices = []
+        for d in result:
+            status = d.get("status", "unknown")
+            has_dup_warning = "warning" in d and "duplicate port" in d.get("warning", "").lower()
+            is_stopped = status == "stopped"
+            is_stale_ghost = status == "unknown" and has_dup_warning
+            # Also ghost if "unknown" and NOT found in live GNS3 nodes
+            is_orphan_db = status == "unknown" and (d["name"] or "").lower() not in gns3_nodes
 
-        # Also remove warning fields from active devices if the conflicting device is stopped
-        stopped_names = {d["name"].lower() for d in stopped_devices}
+            if is_stopped or is_stale_ghost or is_orphan_db:
+                ghost_devices.append(d)
+            else:
+                active_devices.append(d)
+
+        # Remove false "duplicate port" warnings from active devices
+        # when the conflicting device is a ghost
+        ghost_names = {d["name"].lower() for d in ghost_devices}
         for dev in active_devices:
             if "warning" in dev:
-                # Check if the "shared with" device is stopped — if so, no real conflict
                 warning_text = dev["warning"].lower()
-                for sn in stopped_names:
-                    if sn in warning_text:
+                for gn in ghost_names:
+                    if gn in warning_text:
                         del dev["warning"]
                         break
 
         ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> list_all_devices → {len(active_devices)} active devices"
-                f"{f' ({len(stopped_devices)} stopped/hidden)' if stopped_devices else ''}"
+                f"{f' ({len(ghost_devices)} stopped/hidden)' if ghost_devices else ''}"
                 f" (filtered to current project)</span>\n")
         return json.dumps(active_devices, indent=2)
     except Exception as e:
