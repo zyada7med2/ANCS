@@ -818,7 +818,9 @@ def generate_and_deploy_device_config(
             ctx.log(f"<span style='color:#f85149'>[Copilot] ✖ Deployment REJECTED by user for {hostname}</span>\n")
             return (f"GENERATION: {config_result}\n\n"
                     f"DEPLOYMENT: ❌ REJECTED by user. Config was generated and saved to DB "
-                    f"but NOT deployed. User can deploy later with deploy_to_device().")
+                    f"but NOT deployed. User can deploy later with deploy_to_device().\n\n"
+                    f"IMPORTANT: Do NOT call this tool again. The user explicitly rejected "
+                    f"this deployment. Acknowledge the rejection and move on.")
 
         # User may have edited the commands
         config_text = "\n".join(final_commands)
@@ -2237,6 +2239,7 @@ Guessing interfaces causes silent config failures.
 15. **Live state beats static validation.** `validate_configs` returning PASS does NOT mean the network works. Always verify critical changes with live pings or `show` commands. Trust hierarchy: live pings > show commands > running-config > DB configs.
 16. **`terminal length 0` first.** Always run `terminal length 0` as the first command in any new session to prevent `--More--` truncation.
 17. **`router_interface` = Router-on-a-Stick ONLY.** When calling `generate_device_config` for a router with routed ports (no subinterfaces), leave `router_interface` EMPTY. Setting it generates unwanted subinterfaces that conflict with direct IP assignments.
+18. **Respect HITL deployment rejections.** When `generate_and_deploy_device_config` returns "REJECTED by user", the user explicitly declined the deployment via the review dialog. Do NOT re-call the tool or retry. Acknowledge the rejection, tell the user the config is saved in the DB, and ask what they want to do instead.
 
 # AUDIENCE
 Primary users are beginners. Reduce fear and confusion. Be a tutor, not a grader.
