@@ -407,8 +407,26 @@ def list_all_devices() -> str:
             elif dev.get("port"):
                 seen_ports[port_key] = dev["name"]
 
-        ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> list_all_devices → {len(result)} devices (filtered to current project)</span>\n")
-        return json.dumps(result, indent=2)
+        # Filter out stopped/ghost devices — they pollute the agent's context
+        # and their "duplicate port" warnings hijack attention
+        active_devices = [d for d in result if d.get("status") in ("started", "unknown", None)]
+        stopped_devices = [d for d in result if d.get("status") not in ("started", "unknown", None)]
+
+        # Also remove warning fields from active devices if the conflicting device is stopped
+        stopped_names = {d["name"].lower() for d in stopped_devices}
+        for dev in active_devices:
+            if "warning" in dev:
+                # Check if the "shared with" device is stopped — if so, no real conflict
+                warning_text = dev["warning"].lower()
+                for sn in stopped_names:
+                    if sn in warning_text:
+                        del dev["warning"]
+                        break
+
+        ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> list_all_devices → {len(active_devices)} active devices"
+                f"{f' ({len(stopped_devices)} stopped/hidden)' if stopped_devices else ''}"
+                f" (filtered to current project)</span>\n")
+        return json.dumps(active_devices, indent=2)
     except Exception as e:
         return f"Error: {e}"
 
@@ -1229,7 +1247,13 @@ def run_cli_on_device(device_name: str, command: str) -> str:
             try:
                 out = ctx.event_loop.run_until_complete(_async_exec_rw(reader, writer, command))
                 ctx.log(f"<span style='color:#C9D1D9'>{out}</span>\n")
-                return out.strip()
+                stripped = out.strip()
+                # CLI error detection — flag common IOS errors
+                for err_pattern in ['% Invalid input', '% Incomplete command', '% Ambiguous command', '% Unknown command']:
+                    if err_pattern in stripped:
+                        ctx.log(f"<span style='color:#d73a49'><b>⚠️ CLI ERROR:</b> {err_pattern} detected in output</span>\n")
+                        return f"⚠️ CLI ERROR: {err_pattern}\n\n{stripped}"
+                return stripped
             except Exception as e:
                 ctx.log(f"<span style='color:#d29922'>[Copilot] Pooled session for {device_name} failed: {e} — falling back to fresh connection</span>\n")
         else:
@@ -1265,7 +1289,13 @@ def run_cli_on_device(device_name: str, command: str) -> str:
     )
     if out.get("_error"):
         return f"Error: {out['_error']}"
-    return (out.get(command.strip()) or next(iter(out.values()), "")).strip()
+    result = (out.get(command.strip()) or next(iter(out.values()), "")).strip()
+    # CLI error detection — flag common IOS errors (fresh connection path)
+    for err_pattern in ['% Invalid input', '% Incomplete command', '% Ambiguous command', '% Unknown command']:
+        if err_pattern in result:
+            ctx.log(f"<span style='color:#d73a49'><b>⚠️ CLI ERROR:</b> {err_pattern} detected in output</span>\n")
+            return f"⚠️ CLI ERROR: {err_pattern}\n\n{result}"
+    return result
 
 
 def verify_device(device_name: str, verify_commands: str = '["show ip interface brief"]') -> str:
@@ -1930,6 +1960,15 @@ Guessing interfaces causes silent config failures.
 9. **Think network-wide**: A change to one device almost always requires changes to others.
 10. **Deployment report**: After configuring multiple devices, summarize with a per-device status table.
 
+## TROUBLESHOOTING DISCIPLINE (CRITICAL)
+11. **Layer 1 first, ALWAYS.** Run `show ip interface brief` BEFORE debugging routing protocols. If Status is not "up/up", STOP — the issue is physical/admin, not routing.
+12. **Read the CLI prompt.** Before sending any command, check the last prompt (`R1#`, `R1(config)#`, `R1(config-router)#`). If you're in the wrong mode, send `end` first. NEVER retry a command with a syntax tweak without checking the prompt mode.
+13. **Check BOTH ends.** When troubleshooting a link, ALWAYS check the interface and config on BOTH devices, not just the failing one.
+14. **No blind retries.** If a command or ping fails, you are BANNED from retrying it immediately. You MUST first: (a) form a hypothesis, (b) run a diagnostic command to test it, (c) apply a fix, THEN retry.
+15. **Live state beats static validation.** `validate_configs` returning PASS does NOT mean the network works. Always verify critical changes with live pings or `show` commands. Trust hierarchy: live pings > show commands > running-config > DB configs.
+16. **`terminal length 0` first.** Always run `terminal length 0` as the first command in any new session to prevent `--More--` truncation.
+17. **`router_interface` = Router-on-a-Stick ONLY.** When calling `generate_device_config` for a router with routed ports (no subinterfaces), leave `router_interface` EMPTY. Setting it generates unwanted subinterfaces that conflict with direct IP assignments.
+
 # AUDIENCE
 Primary users are beginners. Reduce fear and confusion. Be a tutor, not a grader.
 
@@ -2322,7 +2361,13 @@ class CopilotWorker(QThread):
                 for candidate in response.candidates:
                     if candidate.content and candidate.content.parts:
                         for part in candidate.content.parts:
-                            if hasattr(part, 'function_call') and part.function_call:
+                            # Stream thinking to Logs tab (Gemini 3.5 Flash)
+                            if getattr(part, 'thought', False) and hasattr(part, 'text') and part.text:
+                                thought_preview = part.text[:500]
+                                self.terminal_log_signal.emit(
+                                    f"<span style='color: #d2a8ff'>💭 [Thinking] {thought_preview}</span>\n"
+                                )
+                            elif hasattr(part, 'function_call') and part.function_call:
                                 function_calls.append(part.function_call)
 
             if not function_calls:
@@ -2377,17 +2422,19 @@ class CopilotWorker(QThread):
 
             response = self._chat.send_message(function_responses)
 
-        # Extract text
+        # Extract text (skip thought parts — those were already streamed to Logs)
         final_text = ""
-        try:
-            final_text = response.text or ""
-        except Exception:
-            pass
-        if not final_text and response.candidates:
+        if response.candidates:
             for candidate in response.candidates:
                 if candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
-                        if hasattr(part, 'text') and part.text:
+                        # Stream any remaining thoughts from final response
+                        if getattr(part, 'thought', False) and hasattr(part, 'text') and part.text:
+                            thought_preview = part.text[:500]
+                            self.terminal_log_signal.emit(
+                                f"<span style='color: #d2a8ff'>💭 [Thinking] {thought_preview}</span>\n"
+                            )
+                        elif hasattr(part, 'text') and part.text:
                             final_text += part.text
 
         return final_text or "I completed the requested actions. Check the Execution Logs for details."
@@ -2665,6 +2712,10 @@ class CopilotWorker(QThread):
                                 tools=ALL_TOOLS,
                                 temperature=0.2,
                                 system_instruction=SYSTEM_PROMPT,
+                                thinking_config=types.ThinkingConfig(
+                                    include_thoughts=True,
+                                    thinking_level="medium",
+                                ),
                             )
                         )
                         self.terminal_log_signal.emit(f"<span style='color: #3fb950'>[Copilot] Model loaded: {mn} ✓</span>\n")
