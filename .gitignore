@@ -47,3 +47,8 @@ build/
 dist/
 *.spec
 
+
+network_manager.db-shm
+network_manager.db-wal
+*.JPG
+

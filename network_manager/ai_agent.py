@@ -316,6 +316,7 @@ async def _async_exec(command: str) -> str:
 
 async def _async_exec_rw(reader, writer, command: str) -> str:
     """Send a command on an arbitrary Telnet reader/writer pair (session pool)."""
+    import re
     try:
         await asyncio.wait_for(reader.read(65535), timeout=0.1)
     except asyncio.TimeoutError:
@@ -326,13 +327,22 @@ async def _async_exec_rw(reader, writer, command: str) -> str:
     writer.write(command + "\r\n")
     await asyncio.sleep(1.2)
     buf = ""
-    deadline = ctx.event_loop.time() + 4.0
+    deadline = ctx.event_loop.time() + 6.0
+    _confirm_sent = False
     while ctx.event_loop.time() < deadline:
         try:
             chunk = await asyncio.wait_for(reader.read(65535), timeout=0.5)
             if chunk:
                 buf += chunk
                 stripped = buf.rstrip()
+                # Check for interactive confirmation prompts like [yes/no], [confirm], [y/n]
+                if not _confirm_sent and re.search(
+                    r'\[(yes|no|y/n|confirm)\]\s*:?\s*$', stripped, re.IGNORECASE
+                ):
+                    writer.write("yes\r\n")
+                    _confirm_sent = True
+                    await asyncio.sleep(1.0)
+                    continue
                 if stripped and stripped[-1] in (">", "#"):
                     break
         except asyncio.TimeoutError:
@@ -2619,8 +2629,20 @@ class CopilotWorker(QThread):
                 if self.provider == "vertex":
                     self.terminal_log_signal.emit("<span style='color: #8b949e'>[Copilot] Initializing Vertex AI with ADC...</span>\n")
                     try:
-                        # Use Application Default Credentials (already set up via gcloud)
-                        self._client = genai.Client(vertexai=True)
+                        import os
+                        location = "global"
+                        try:
+                            from network_manager.config import CONFIG_FILE
+                            if os.path.exists(CONFIG_FILE):
+                                with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                                    cfg_data = json.load(f)
+                                    location = cfg_data.get("gemini_location", "us-central1")
+                        except Exception:
+                            pass
+                        
+                        project_id = self.api_key.strip() if self.api_key else None
+                        self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Project: {project_id} | Location: {location}</span>\n")
+                        self._client = genai.Client(vertexai=True, project=project_id, location=location)
                         self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Vertex AI client initialized</span>\n")
                     except Exception as e:
                         self.terminal_log_signal.emit(f"<span style='color: #d73a49'>[Copilot] Vertex AI init failed: {e}</span>\n")
