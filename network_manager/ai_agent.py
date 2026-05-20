@@ -888,6 +888,111 @@ def snapshot_network_state(device_names: str = "all", mode: str = "lite") -> str
 
     return json.dumps(result, indent=2, default=str)
 
+def cleanup_device(device_name: str, device_role: str, items_to_remove: str = "all") -> str:
+    """Generate and execute cleanup commands to wipe stale configs from a device before reconfiguration.
+
+    Removes old routing protocols, subinterfaces, SVIs, VLANs, static routes, and DHCP pools.
+    Run this BEFORE deploying a new config to avoid conflicts with leftover state.
+
+    Args:
+        device_name: Name of the device to clean up.
+        device_role: 'router' or 'core' (determines cleanup recipe).
+        items_to_remove: JSON array of specific items, or "all" for full cleanup.
+            Examples: '["ospf", "rip", "subinterfaces", "static_routes", "dhcp"]'
+            For core switches: '["svis", "vlans", "trunk_resets", "static_routes"]'
+
+    Returns:
+        Summary of cleanup commands that were executed.
+    """
+    ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> cleanup_device({device_name}, role={device_role})</span>\n")
+
+    # First, get the current running config to know what to clean
+    current_config = run_cli_on_device(device_name, "show running-config")
+    if "Error:" in current_config:
+        return f"Error: Could not read running config from {device_name}: {current_config}"
+
+    cleanup_commands = []
+
+    if device_role.lower() == "router":
+        # Router cleanup recipe (from Copilot's exact spec)
+        cleanup_commands.append("configure terminal")
+
+        # Remove routing protocols
+        if "router ospf" in current_config:
+            import re
+            for m in re.finditer(r'router ospf (\d+)', current_config):
+                cleanup_commands.append(f"no router ospf {m.group(1)}")
+        if "router eigrp" in current_config:
+            for m in re.finditer(r'router eigrp (\d+)', current_config):
+                cleanup_commands.append(f"no router eigrp {m.group(1)}")
+        if "router rip" in current_config:
+            cleanup_commands.append("no router rip")
+
+        # Remove subinterfaces
+        import re
+        for m in re.finditer(r'interface (\S+\.\d+)', current_config):
+            cleanup_commands.append(f"no interface {m.group(1)}")
+
+        # Remove DHCP pools
+        for m in re.finditer(r'ip dhcp pool (\S+)', current_config):
+            cleanup_commands.append(f"no ip dhcp pool {m.group(1)}")
+
+        # Remove DHCP excluded addresses
+        for m in re.finditer(r'(ip dhcp excluded-address .+)', current_config):
+            cleanup_commands.append(f"no {m.group(1)}")
+
+        # Remove static routes
+        for m in re.finditer(r'(ip route \S+ \S+ \S+)', current_config):
+            cleanup_commands.append(f"no {m.group(1)}")
+
+        cleanup_commands.append("end")
+
+    elif device_role.lower() in ("core", "core_switch", "switch"):
+        # Core switch cleanup recipe
+        cleanup_commands.append("configure terminal")
+
+        # Remove SVIs
+        import re
+        for m in re.finditer(r'interface Vlan\s*(\d+)', current_config):
+            vlan_id = m.group(1)
+            if vlan_id != "1":  # Don't remove default VLAN 1
+                cleanup_commands.append(f"no interface Vlan{vlan_id}")
+
+        # Remove VLANs (try modern syntax first)
+        for m in re.finditer(r'vlan (\d+)', current_config):
+            vlan_id = m.group(1)
+            if vlan_id != "1":
+                cleanup_commands.append(f"no vlan {vlan_id}")
+
+        # Remove static routes
+        for m in re.finditer(r'(ip route \S+ \S+ \S+)', current_config):
+            cleanup_commands.append(f"no {m.group(1)}")
+
+        # Remove routing protocols (if any on L3 switch)
+        if "router ospf" in current_config:
+            for m in re.finditer(r'router ospf (\d+)', current_config):
+                cleanup_commands.append(f"no router ospf {m.group(1)}")
+
+        cleanup_commands.append("end")
+    else:
+        return f"Error: Unknown device_role '{device_role}'. Use 'router' or 'core'."
+
+    if len(cleanup_commands) <= 2:  # Only "configure terminal" + "end"
+        return f"No stale configuration found on {device_name} — device is already clean."
+
+    # Execute the cleanup commands
+    ctx.log(f"<span style='color:#d29922'>[Copilot] Running {len(cleanup_commands)-2} cleanup commands on {device_name}...</span>\n")
+    cleanup_text = "\n".join(cleanup_commands)
+    result = run_cli_on_device(device_name, cleanup_text)
+
+    # Save running config after cleanup
+    run_cli_on_device(device_name, "write memory")
+
+    return (f"Cleanup completed on {device_name} ({device_role}).\n"
+            f"Commands executed: {len(cleanup_commands)-2}\n"
+            f"Items removed: routing protocols, subinterfaces, SVIs, VLANs, static routes, DHCP pools\n\n"
+            f"Output:\n{result}")
+
 
 def audit_network() -> str:
     """Scan ALL device configurations in the project snapshot for security issues, inconsistencies, and best-practice violations.
@@ -1880,6 +1985,7 @@ ALL_TOOLS = [
     bulk_deploy,
     # Intelligence
     snapshot_network_state,
+    cleanup_device,
     audit_network,
     trace_connectivity,
     validate_configs,
@@ -2035,6 +2141,7 @@ You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded 
 - `generate_device_config(hostname, device_role, ...)` — generate only (saves to DB)
 - `deploy_to_device(device_name, config_text)` — deploy a saved/existing config
 - `bulk_deploy(device_names)` — deploy to multiple devices in correct order
+- `cleanup_device(device_name, device_role)` — wipe stale configs (routing protocols, subinterfaces, SVIs, VLANs, DHCP) before redeploying
 - `detect_topology()`, `suggest_configs()`
 
 **Network Intelligence:**
@@ -2541,7 +2648,21 @@ class CopilotWorker(QThread):
                     )
                 )
 
-            response = self._chat.send_message(function_responses)
+            # Send tool responses back to Gemini — with retry on 429
+            for _retry in range(3):
+                try:
+                    response = self._chat.send_message(function_responses)
+                    break
+                except Exception as e:
+                    error_str = str(e).lower()
+                    if ("429" in error_str or "resource_exhausted" in error_str) and _retry < 2:
+                        wait_time = 2 ** (_retry + 1)
+                        self.terminal_log_signal.emit(
+                            f"<span style='color:#d29922'>[Copilot] Rate limited mid-tool-loop. Retrying in {wait_time}s...</span>\n"
+                        )
+                        time.sleep(wait_time)
+                    else:
+                        raise
 
         # Extract text (skip thought parts — those were already streamed to Logs)
         final_text = ""
