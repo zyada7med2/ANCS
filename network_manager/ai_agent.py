@@ -407,8 +407,43 @@ def list_all_devices() -> str:
             elif dev.get("port"):
                 seen_ports[port_key] = dev["name"]
 
-        ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> list_all_devices → {len(result)} devices (filtered to current project)</span>\n")
-        return json.dumps(result, indent=2)
+        # Filter out stopped/ghost devices — they pollute the agent's context
+        # and their "duplicate port" warnings hijack attention
+        #
+        # Ghost detection: a device is a ghost if:
+        # 1. It's "stopped" in GNS3, OR
+        # 2. It has "unknown" status (= stale DB row, not in current GNS3 project)
+        #    AND has a "duplicate port" warning (= sharing a port with a real device)
+        active_devices = []
+        ghost_devices = []
+        for d in result:
+            status = d.get("status", "unknown")
+            has_dup_warning = "warning" in d and "duplicate port" in d.get("warning", "").lower()
+            is_stopped = status == "stopped"
+            is_stale_ghost = status == "unknown" and has_dup_warning
+            # Also ghost if "unknown" and NOT found in live GNS3 nodes
+            is_orphan_db = status == "unknown" and (d["name"] or "").lower() not in gns3_nodes
+
+            if is_stopped or is_stale_ghost or is_orphan_db:
+                ghost_devices.append(d)
+            else:
+                active_devices.append(d)
+
+        # Remove false "duplicate port" warnings from active devices
+        # when the conflicting device is a ghost
+        ghost_names = {d["name"].lower() for d in ghost_devices}
+        for dev in active_devices:
+            if "warning" in dev:
+                warning_text = dev["warning"].lower()
+                for gn in ghost_names:
+                    if gn in warning_text:
+                        del dev["warning"]
+                        break
+
+        ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> list_all_devices → {len(active_devices)} active devices"
+                f"{f' ({len(ghost_devices)} stopped/hidden)' if ghost_devices else ''}"
+                f" (filtered to current project)</span>\n")
+        return json.dumps(active_devices, indent=2)
     except Exception as e:
         return f"Error: {e}"
 
@@ -771,12 +806,235 @@ def generate_and_deploy_device_config(
 
     if not config_text.strip():
         return "Config generated but saved content is empty — cannot deploy."
-        
-    # 3. Deploy it immediately
-    ctx.log(f"<span style='color:#8b949e'>[Copilot] Auto-deploying generated config to {hostname}...</span>\n")
+
+    # 3. HITL — Show config to user for review before deploying
+    ctx.log(f"<span style='color:#d29922'>[Copilot] Requesting user approval for deployment to {hostname}...</span>\n")
+    try:
+        from network_manager.gui.deploy_review_dialog import request_deploy_approval
+        commands = [line for line in config_text.split("\n") if line.strip()]
+        approved, final_commands = request_deploy_approval(hostname, device_role, commands)
+
+        if not approved:
+            ctx.log(f"<span style='color:#f85149'>[Copilot] ✖ Deployment REJECTED by user for {hostname}</span>\n")
+            return (f"GENERATION: {config_result}\n\n"
+                    f"DEPLOYMENT: ❌ REJECTED by user. Config was generated and saved to DB "
+                    f"but NOT deployed. User can deploy later with deploy_to_device().\n\n"
+                    f"IMPORTANT: Do NOT call this tool again. The user explicitly rejected "
+                    f"this deployment. Acknowledge the rejection and move on.")
+
+        # User may have edited the commands
+        config_text = "\n".join(final_commands)
+        ctx.log(f"<span style='color:#3fb950'>[Copilot] ✔ Deployment APPROVED by user for {hostname}</span>\n")
+    except Exception as e:
+        # If the dialog fails (e.g., no GUI thread), fall back to auto-deploy
+        import traceback
+        tb = traceback.format_exc()
+        ctx.log(f"<span style='color:#f85149'>[Copilot] HITL dialog FAILED: {e}</span>\n")
+        ctx.log(f"<span style='color:#8b949e'>[Copilot] Traceback: {tb[:500]}</span>\n")
+        ctx.log(f"<span style='color:#d29922'>[Copilot] Falling back to auto-deploy...</span>\n")
+
+    # 4. Deploy it
+    ctx.log(f"<span style='color:#8b949e'>[Copilot] Deploying approved config to {hostname}...</span>\n")
     deploy_result = deploy_to_device(device_name=hostname, config_text=config_text)
-    
+
     return f"GENERATION: {config_result}\n\nDEPLOYMENT RESULTS:\n{deploy_result}"
+
+
+def snapshot_network_state(device_names: str = "all", mode: str = "lite") -> str:
+    """Capture live network state (interfaces, ARP, routing table) from devices in parallel.
+
+    This is the FASTEST way to understand the network. Returns structured JSON for
+    all requested devices in one call. Use this FIRST when troubleshooting.
+
+    Args:
+        device_names: JSON array of device names, or "all" for all active devices.
+        mode: "lite" (Golden Trio: interfaces + ARP + routes, ~5-6s) or
+              "full" (adds OSPF neighbors, VLANs, trunks, ~13-15s)
+
+    Returns:
+        JSON with per-device structured state including interfaces, arp_table,
+        routing_table, and optionally ospf_neighbors, vlan_database, trunk_ports.
+    """
+    from network_manager.network.state_snapshot import snapshot_all_devices
+
+    ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> snapshot_network_state(mode={mode})</span>\n")
+    t0 = time.time()
+
+    # Resolve which devices to snapshot
+    if device_names == "all":
+        devices_json = list_all_devices()
+        try:
+            all_devs = json.loads(devices_json)
+        except (json.JSONDecodeError, TypeError):
+            return f"Error: could not parse device list: {devices_json}"
+    else:
+        try:
+            names = json.loads(device_names) if isinstance(device_names, str) else device_names
+        except (json.JSONDecodeError, TypeError):
+            names = [device_names]
+        all_devs = []
+        for name in names:
+            info = _resolve_device_connection(name)
+            if info:
+                all_devs.append({"name": name, **info})
+            else:
+                all_devs.append({"name": name, "_skip": True})
+
+    # Resolve connection info for each device
+    snapshot_targets = []
+    skipped = []
+    for dev in all_devs:
+        if dev.get("_skip"):
+            skipped.append(dev["name"])
+            continue
+        name = dev.get("name", "")
+        # Check if it's a started device (not stopped)
+        if dev.get("status") not in ("started", "unknown", None, "ok"):
+            skipped.append(name)
+            continue
+        info = _resolve_device_connection(name)
+        if info and info.get("protocol") != "ssh":
+            snapshot_targets.append({
+                "name": name,
+                "host": info["host"],
+                "port": info["port"],
+                "username": info.get("username", ""),
+                "password": info.get("password", ""),
+                "enable_password": info.get("enable_password", ""),
+            })
+        else:
+            skipped.append(name)
+
+    if not snapshot_targets:
+        return json.dumps({"error": "No reachable devices to snapshot", "skipped": skipped})
+
+    ctx.log(f"<span style='color:#8b949e'>[Copilot] Snapshotting {len(snapshot_targets)} devices ({mode} mode)...</span>\n")
+
+    # Run the snapshot
+    def log_fn(msg):
+        ctx.log(f"<span style='color:#8b949e'>{msg}</span>\n")
+
+    result = snapshot_all_devices(
+        devices=snapshot_targets,
+        mode=mode,
+        log_fn=log_fn,
+    )
+
+    if skipped:
+        result["skipped_devices"] = skipped
+
+    elapsed = round(time.time() - t0, 1)
+    ok = result["summary"]["successful"]
+    fail = result["summary"]["failed"]
+    ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> snapshot_network_state complete: "
+            f"{ok} OK, {fail} failed, {elapsed}s total</span>\n")
+
+    return json.dumps(result, indent=2, default=str)
+
+def cleanup_device(device_name: str, device_role: str, items_to_remove: str = "all") -> str:
+    """Generate and execute cleanup commands to wipe stale configs from a device before reconfiguration.
+
+    Removes old routing protocols, subinterfaces, SVIs, VLANs, static routes, and DHCP pools.
+    Run this BEFORE deploying a new config to avoid conflicts with leftover state.
+
+    Args:
+        device_name: Name of the device to clean up.
+        device_role: 'router' or 'core' (determines cleanup recipe).
+        items_to_remove: JSON array of specific items, or "all" for full cleanup.
+            Examples: '["ospf", "rip", "subinterfaces", "static_routes", "dhcp"]'
+            For core switches: '["svis", "vlans", "trunk_resets", "static_routes"]'
+
+    Returns:
+        Summary of cleanup commands that were executed.
+    """
+    ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> cleanup_device({device_name}, role={device_role})</span>\n")
+
+    # First, get the current running config to know what to clean
+    current_config = run_cli_on_device(device_name, "show running-config")
+    if "Error:" in current_config:
+        return f"Error: Could not read running config from {device_name}: {current_config}"
+
+    cleanup_commands = []
+
+    if device_role.lower() == "router":
+        # Router cleanup recipe (from Copilot's exact spec)
+        cleanup_commands.append("configure terminal")
+
+        # Remove routing protocols
+        if "router ospf" in current_config:
+            import re
+            for m in re.finditer(r'router ospf (\d+)', current_config):
+                cleanup_commands.append(f"no router ospf {m.group(1)}")
+        if "router eigrp" in current_config:
+            for m in re.finditer(r'router eigrp (\d+)', current_config):
+                cleanup_commands.append(f"no router eigrp {m.group(1)}")
+        if "router rip" in current_config:
+            cleanup_commands.append("no router rip")
+
+        # Remove subinterfaces
+        import re
+        for m in re.finditer(r'interface (\S+\.\d+)', current_config):
+            cleanup_commands.append(f"no interface {m.group(1)}")
+
+        # Remove DHCP pools
+        for m in re.finditer(r'ip dhcp pool (\S+)', current_config):
+            cleanup_commands.append(f"no ip dhcp pool {m.group(1)}")
+
+        # Remove DHCP excluded addresses
+        for m in re.finditer(r'(ip dhcp excluded-address .+)', current_config):
+            cleanup_commands.append(f"no {m.group(1)}")
+
+        # Remove static routes
+        for m in re.finditer(r'(ip route \S+ \S+ \S+)', current_config):
+            cleanup_commands.append(f"no {m.group(1)}")
+
+        cleanup_commands.append("end")
+
+    elif device_role.lower() in ("core", "core_switch", "switch"):
+        # Core switch cleanup recipe
+        cleanup_commands.append("configure terminal")
+
+        # Remove SVIs
+        import re
+        for m in re.finditer(r'interface Vlan\s*(\d+)', current_config):
+            vlan_id = m.group(1)
+            if vlan_id != "1":  # Don't remove default VLAN 1
+                cleanup_commands.append(f"no interface Vlan{vlan_id}")
+
+        # Remove VLANs (try modern syntax first)
+        for m in re.finditer(r'vlan (\d+)', current_config):
+            vlan_id = m.group(1)
+            if vlan_id != "1":
+                cleanup_commands.append(f"no vlan {vlan_id}")
+
+        # Remove static routes
+        for m in re.finditer(r'(ip route \S+ \S+ \S+)', current_config):
+            cleanup_commands.append(f"no {m.group(1)}")
+
+        # Remove routing protocols (if any on L3 switch)
+        if "router ospf" in current_config:
+            for m in re.finditer(r'router ospf (\d+)', current_config):
+                cleanup_commands.append(f"no router ospf {m.group(1)}")
+
+        cleanup_commands.append("end")
+    else:
+        return f"Error: Unknown device_role '{device_role}'. Use 'router' or 'core'."
+
+    if len(cleanup_commands) <= 2:  # Only "configure terminal" + "end"
+        return f"No stale configuration found on {device_name} — device is already clean."
+
+    # Execute the cleanup commands
+    ctx.log(f"<span style='color:#d29922'>[Copilot] Running {len(cleanup_commands)-2} cleanup commands on {device_name}...</span>\n")
+    cleanup_text = "\n".join(cleanup_commands)
+    result = run_cli_on_device(device_name, cleanup_text)
+
+    # Save running config after cleanup
+    run_cli_on_device(device_name, "write memory")
+
+    return (f"Cleanup completed on {device_name} ({device_role}).\n"
+            f"Commands executed: {len(cleanup_commands)-2}\n"
+            f"Items removed: routing protocols, subinterfaces, SVIs, VLANs, static routes, DHCP pools\n\n"
+            f"Output:\n{result}")
 
 
 def audit_network() -> str:
@@ -1220,16 +1478,38 @@ def _probe_session_alive(reader, writer) -> bool:
 
 
 def run_cli_on_device(device_name: str, command: str) -> str:
-    """Run one Cisco IOS show/exec command on a device by name (Telnet console). Uses pooled session if available."""
-    ctx.log(f"\n<span style='color: #a371f7'><b>[Tool]</b> run_cli_on_device({device_name}): {command}</span>\n")
+    """Run one or more Cisco IOS CLI commands on a device by name (Telnet console).
+
+    Supports multi-line commands: if 'command' contains newlines, each line is
+    executed sequentially and all outputs are collected. Uses pooled session if available.
+    """
+    # Split multi-line commands (Item 1.1)
+    commands = [c.strip() for c in command.strip().split('\n') if c.strip()]
+    if not commands:
+        return "Error: empty command"
+
+    ctx.log(f"\n<span style='color: #a371f7'><b>[Tool]</b> run_cli_on_device({device_name}): {commands[0]}"
+            f"{'  (+ ' + str(len(commands)-1) + ' more)' if len(commands) > 1 else ''}</span>\n")
+
+    # --- Pooled session path ---
     if device_name in (ctx.sessions or {}) and ctx.sessions[device_name]:
         reader, writer = ctx.sessions[device_name]
-        # Health-check: make sure the pooled session is still alive
         if _probe_session_alive(reader, writer):
             try:
-                out = ctx.event_loop.run_until_complete(_async_exec_rw(reader, writer, command))
-                ctx.log(f"<span style='color:#C9D1D9'>{out}</span>\n")
-                return out.strip()
+                all_output = []
+                for cmd in commands:
+                    out = ctx.event_loop.run_until_complete(_async_exec_rw(reader, writer, cmd))
+                    ctx.log(f"<span style='color:#C9D1D9'>{out}</span>\n")
+                    stripped = out.strip()
+                    # CLI error detection
+                    for err_pattern in ['% Invalid input', '% Incomplete command', '% Ambiguous command', '% Unknown command']:
+                        if err_pattern in stripped:
+                            ctx.log(f"<span style='color:#d73a49'><b>⚠️ CLI ERROR:</b> {err_pattern} on cmd: {cmd}</span>\n")
+                            all_output.append(f"⚠️ CLI ERROR: {err_pattern}\n{stripped}")
+                            break
+                    else:
+                        all_output.append(stripped)
+                return '\n'.join(all_output)
             except Exception as e:
                 ctx.log(f"<span style='color:#d29922'>[Copilot] Pooled session for {device_name} failed: {e} — falling back to fresh connection</span>\n")
         else:
@@ -1243,6 +1523,8 @@ def run_cli_on_device(device_name: str, command: str) -> str:
         except Exception:
             pass
         del ctx.sessions[device_name]
+
+    # --- Fresh connection path ---
     info = _resolve_device_connection(device_name)
     if not info:
         return f"Error: no host/credentials for '{device_name}'."
@@ -1261,11 +1543,26 @@ def run_cli_on_device(device_name: str, command: str) -> str:
         info["username"],
         info["password"],
         info["enable_password"],
-        [command.strip()],
+        commands,  # Pass all commands (Sender handles lists)
     )
     if out.get("_error"):
         return f"Error: {out['_error']}"
-    return (out.get(command.strip()) or next(iter(out.values()), "")).strip()
+    # Collect results for all commands
+    all_results = []
+    for cmd in commands:
+        result = (out.get(cmd) or "").strip()
+        # CLI error detection
+        for err_pattern in ['% Invalid input', '% Incomplete command', '% Ambiguous command', '% Unknown command']:
+            if err_pattern in result:
+                ctx.log(f"<span style='color:#d73a49'><b>⚠️ CLI ERROR:</b> {err_pattern} on cmd: {cmd}</span>\n")
+                all_results.append(f"⚠️ CLI ERROR: {err_pattern}\n{result}")
+                break
+        else:
+            all_results.append(result)
+    # If only one command, return its result directly (backward compatible)
+    if len(all_results) == 1:
+        return all_results[0]
+    return '\n'.join(all_results)
 
 
 def verify_device(device_name: str, verify_commands: str = '["show ip interface brief"]') -> str:
@@ -1730,6 +2027,8 @@ ALL_TOOLS = [
     verify_device,
     bulk_deploy,
     # Intelligence
+    snapshot_network_state,
+    cleanup_device,
     audit_network,
     trace_connectivity,
     validate_configs,
@@ -1885,9 +2184,11 @@ You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded 
 - `generate_device_config(hostname, device_role, ...)` — generate only (saves to DB)
 - `deploy_to_device(device_name, config_text)` — deploy a saved/existing config
 - `bulk_deploy(device_names)` — deploy to multiple devices in correct order
+- `cleanup_device(device_name, device_role)` — wipe stale configs (routing protocols, subinterfaces, SVIs, VLANs, DHCP) before redeploying
 - `detect_topology()`, `suggest_configs()`
 
 **Network Intelligence:**
+- `snapshot_network_state(device_names, mode)` — **USE THIS FIRST FOR TROUBLESHOOTING**. Captures interfaces, ARP, routing tables from all devices in ~6 seconds. mode="lite" (default) or "full".
 - `validate_configs(device_names)` — dry-run cross-check for IP conflicts, VLAN mismatches, protocol issues
 - `audit_network()` — scan configs for security issues
 - `trace_connectivity(source_device, destination_ip)` — hop-by-hop diagnosis
@@ -1929,6 +2230,16 @@ Guessing interfaces causes silent config failures.
 8. **NEVER WRITE IOS IN YOUR RESPONSE**: Call tools. Let the ConfigEngine handle syntax.
 9. **Think network-wide**: A change to one device almost always requires changes to others.
 10. **Deployment report**: After configuring multiple devices, summarize with a per-device status table.
+
+## TROUBLESHOOTING DISCIPLINE (CRITICAL)
+11. **Layer 1 first, ALWAYS.** Run `show ip interface brief` BEFORE debugging routing protocols. If Status is not "up/up", STOP — the issue is physical/admin, not routing.
+12. **Read the CLI prompt.** Before sending any command, check the last prompt (`R1#`, `R1(config)#`, `R1(config-router)#`). If you're in the wrong mode, send `end` first. NEVER retry a command with a syntax tweak without checking the prompt mode.
+13. **Check BOTH ends.** When troubleshooting a link, ALWAYS check the interface and config on BOTH devices, not just the failing one.
+14. **No blind retries.** If a command or ping fails, you are BANNED from retrying it immediately. You MUST first: (a) form a hypothesis, (b) run a diagnostic command to test it, (c) apply a fix, THEN retry.
+15. **Live state beats static validation.** `validate_configs` returning PASS does NOT mean the network works. Always verify critical changes with live pings or `show` commands. Trust hierarchy: live pings > show commands > running-config > DB configs.
+16. **`terminal length 0` first.** Always run `terminal length 0` as the first command in any new session to prevent `--More--` truncation.
+17. **`router_interface` = Router-on-a-Stick ONLY.** When calling `generate_device_config` for a router with routed ports (no subinterfaces), leave `router_interface` EMPTY. Setting it generates unwanted subinterfaces that conflict with direct IP assignments.
+18. **Respect HITL deployment rejections.** When `generate_and_deploy_device_config` returns "REJECTED by user", the user explicitly declined the deployment via the review dialog. Do NOT re-call the tool or retry. Acknowledge the rejection, tell the user the config is saved in the DB, and ask what they want to do instead.
 
 # AUDIENCE
 Primary users are beginners. Reduce fear and confusion. Be a tutor, not a grader.
@@ -2322,7 +2633,13 @@ class CopilotWorker(QThread):
                 for candidate in response.candidates:
                     if candidate.content and candidate.content.parts:
                         for part in candidate.content.parts:
-                            if hasattr(part, 'function_call') and part.function_call:
+                            # Stream thinking to Logs tab (Gemini 3.5 Flash)
+                            if getattr(part, 'thought', False) and hasattr(part, 'text') and part.text:
+                                thought_preview = part.text[:500]
+                                self.terminal_log_signal.emit(
+                                    f"<span style='color: #d2a8ff'>💭 [Thinking] {thought_preview}</span>\n"
+                                )
+                            elif hasattr(part, 'function_call') and part.function_call:
                                 function_calls.append(part.function_call)
 
             if not function_calls:
@@ -2375,19 +2692,35 @@ class CopilotWorker(QThread):
                     )
                 )
 
-            response = self._chat.send_message(function_responses)
+            # Send tool responses back to Gemini — with retry on 429
+            for _retry in range(3):
+                try:
+                    response = self._chat.send_message(function_responses)
+                    break
+                except Exception as e:
+                    error_str = str(e).lower()
+                    if ("429" in error_str or "resource_exhausted" in error_str) and _retry < 2:
+                        wait_time = 2 ** (_retry + 1)
+                        self.terminal_log_signal.emit(
+                            f"<span style='color:#d29922'>[Copilot] Rate limited mid-tool-loop. Retrying in {wait_time}s...</span>\n"
+                        )
+                        time.sleep(wait_time)
+                    else:
+                        raise
 
-        # Extract text
+        # Extract text (skip thought parts — those were already streamed to Logs)
         final_text = ""
-        try:
-            final_text = response.text or ""
-        except Exception:
-            pass
-        if not final_text and response.candidates:
+        if response.candidates:
             for candidate in response.candidates:
                 if candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
-                        if hasattr(part, 'text') and part.text:
+                        # Stream any remaining thoughts from final response
+                        if getattr(part, 'thought', False) and hasattr(part, 'text') and part.text:
+                            thought_preview = part.text[:500]
+                            self.terminal_log_signal.emit(
+                                f"<span style='color: #d2a8ff'>💭 [Thinking] {thought_preview}</span>\n"
+                            )
+                        elif hasattr(part, 'text') and part.text:
                             final_text += part.text
 
         return final_text or "I completed the requested actions. Check the Execution Logs for details."
@@ -2601,6 +2934,51 @@ class CopilotWorker(QThread):
             f"<span style='color:#8b949e'>[Copilot] History trimmed: {old_len} → {len(self._messages)} messages</span>\n"
         )
 
+    def _compress_context(self):
+        """Compress old tool results in message history to save context window space.
+
+        Instead of dropping entire messages (which loses context), this:
+        1. Keeps the system prompt + original user intent pinned
+        2. Truncates large tool results (>500 chars) to their first 200 chars + summary
+        3. Only touches messages older than the last 6 exchanges
+
+        This preserves the agent's awareness of what was already tried while
+        freeing up tokens for new reasoning.
+        """
+        if len(self._messages) < 12:
+            return  # Not enough history to compress
+
+        compressed_count = 0
+        # Don't touch: [0] = system prompt, last 6 messages = recent context
+        safe_zone = max(1, len(self._messages) - 6)
+
+        for i in range(1, safe_zone):
+            msg = self._messages[i]
+            if not isinstance(msg, dict):
+                continue
+
+            role = msg.get("role", "")
+
+            # Compress old tool results
+            if role == "tool":
+                content = msg.get("content", "")
+                if len(content) > 500:
+                    # Keep first 200 chars as a summary hint
+                    msg["content"] = content[:200] + "\n...[compressed — original was " + str(len(content)) + " chars]"
+                    compressed_count += 1
+
+            # Compress old assistant messages (non-tool-call ones)
+            elif role == "assistant" and not msg.get("tool_calls"):
+                content = msg.get("content", "")
+                if content and len(content) > 800:
+                    msg["content"] = content[:300] + "\n...[compressed]"
+                    compressed_count += 1
+
+        if compressed_count > 0:
+            self.terminal_log_signal.emit(
+                f"<span style='color:#8b949e'>[Copilot] Context compressed: {compressed_count} old messages trimmed in-place</span>\n"
+            )
+
     def _process_response(self, response):
         """Dispatch to the appropriate response processor based on provider."""
         if self.provider in ("gemini", "vertex"):
@@ -2665,6 +3043,10 @@ class CopilotWorker(QThread):
                                 tools=ALL_TOOLS,
                                 temperature=0.2,
                                 system_instruction=SYSTEM_PROMPT,
+                                thinking_config=types.ThinkingConfig(
+                                    include_thoughts=True,
+                                    thinking_level="medium",
+                                ),
                             )
                         )
                         self.terminal_log_signal.emit(f"<span style='color: #3fb950'>[Copilot] Model loaded: {mn} ✓</span>\n")
@@ -2724,7 +3106,8 @@ class CopilotWorker(QThread):
                             response = self._send_with_retry(user_msg)
                         else:
                             self._messages.append({"role": "user", "content": user_msg})
-                            self._truncate_history()
+                            self._compress_context()  # Compress old tool results first
+                            self._truncate_history()   # Then trim if still too long
                             response = self._client.chat.completions.create(
                                 model=self.model_name,
                                 messages=self._messages,
