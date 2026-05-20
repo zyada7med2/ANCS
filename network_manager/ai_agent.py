@@ -797,6 +797,98 @@ def generate_and_deploy_device_config(
     return f"GENERATION: {config_result}\n\nDEPLOYMENT RESULTS:\n{deploy_result}"
 
 
+def snapshot_network_state(device_names: str = "all", mode: str = "lite") -> str:
+    """Capture live network state (interfaces, ARP, routing table) from devices in parallel.
+
+    This is the FASTEST way to understand the network. Returns structured JSON for
+    all requested devices in one call. Use this FIRST when troubleshooting.
+
+    Args:
+        device_names: JSON array of device names, or "all" for all active devices.
+        mode: "lite" (Golden Trio: interfaces + ARP + routes, ~5-6s) or
+              "full" (adds OSPF neighbors, VLANs, trunks, ~13-15s)
+
+    Returns:
+        JSON with per-device structured state including interfaces, arp_table,
+        routing_table, and optionally ospf_neighbors, vlan_database, trunk_ports.
+    """
+    from network_manager.network.state_snapshot import snapshot_all_devices
+
+    ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> snapshot_network_state(mode={mode})</span>\n")
+    t0 = time.time()
+
+    # Resolve which devices to snapshot
+    if device_names == "all":
+        devices_json = list_all_devices()
+        try:
+            all_devs = json.loads(devices_json)
+        except (json.JSONDecodeError, TypeError):
+            return f"Error: could not parse device list: {devices_json}"
+    else:
+        try:
+            names = json.loads(device_names) if isinstance(device_names, str) else device_names
+        except (json.JSONDecodeError, TypeError):
+            names = [device_names]
+        all_devs = []
+        for name in names:
+            info = _resolve_device_connection(name)
+            if info:
+                all_devs.append({"name": name, **info})
+            else:
+                all_devs.append({"name": name, "_skip": True})
+
+    # Resolve connection info for each device
+    snapshot_targets = []
+    skipped = []
+    for dev in all_devs:
+        if dev.get("_skip"):
+            skipped.append(dev["name"])
+            continue
+        name = dev.get("name", "")
+        # Check if it's a started device (not stopped)
+        if dev.get("status") not in ("started", "unknown", None, "ok"):
+            skipped.append(name)
+            continue
+        info = _resolve_device_connection(name)
+        if info and info.get("protocol") != "ssh":
+            snapshot_targets.append({
+                "name": name,
+                "host": info["host"],
+                "port": info["port"],
+                "username": info.get("username", ""),
+                "password": info.get("password", ""),
+                "enable_password": info.get("enable_password", ""),
+            })
+        else:
+            skipped.append(name)
+
+    if not snapshot_targets:
+        return json.dumps({"error": "No reachable devices to snapshot", "skipped": skipped})
+
+    ctx.log(f"<span style='color:#8b949e'>[Copilot] Snapshotting {len(snapshot_targets)} devices ({mode} mode)...</span>\n")
+
+    # Run the snapshot
+    def log_fn(msg):
+        ctx.log(f"<span style='color:#8b949e'>{msg}</span>\n")
+
+    result = snapshot_all_devices(
+        devices=snapshot_targets,
+        mode=mode,
+        log_fn=log_fn,
+    )
+
+    if skipped:
+        result["skipped_devices"] = skipped
+
+    elapsed = round(time.time() - t0, 1)
+    ok = result["summary"]["successful"]
+    fail = result["summary"]["failed"]
+    ctx.log(f"<span style='color:#3fb950'><b>[Tool]</b> snapshot_network_state complete: "
+            f"{ok} OK, {fail} failed, {elapsed}s total</span>\n")
+
+    return json.dumps(result, indent=2, default=str)
+
+
 def audit_network() -> str:
     """Scan ALL device configurations in the project snapshot for security issues, inconsistencies, and best-practice violations.
 
@@ -1787,6 +1879,7 @@ ALL_TOOLS = [
     verify_device,
     bulk_deploy,
     # Intelligence
+    snapshot_network_state,
     audit_network,
     trace_connectivity,
     validate_configs,
@@ -1945,6 +2038,7 @@ You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded 
 - `detect_topology()`, `suggest_configs()`
 
 **Network Intelligence:**
+- `snapshot_network_state(device_names, mode)` — **USE THIS FIRST FOR TROUBLESHOOTING**. Captures interfaces, ARP, routing tables from all devices in ~6 seconds. mode="lite" (default) or "full".
 - `validate_configs(device_names)` — dry-run cross-check for IP conflicts, VLAN mismatches, protocol issues
 - `audit_network()` — scan configs for security issues
 - `trace_connectivity(source_device, destination_ip)` — hop-by-hop diagnosis
