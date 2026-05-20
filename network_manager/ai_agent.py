@@ -789,11 +789,31 @@ def generate_and_deploy_device_config(
 
     if not config_text.strip():
         return "Config generated but saved content is empty — cannot deploy."
-        
-    # 3. Deploy it immediately
-    ctx.log(f"<span style='color:#8b949e'>[Copilot] Auto-deploying generated config to {hostname}...</span>\n")
+
+    # 3. HITL — Show config to user for review before deploying
+    ctx.log(f"<span style='color:#d29922'>[Copilot] Requesting user approval for deployment to {hostname}...</span>\n")
+    try:
+        from network_manager.gui.deploy_review_dialog import request_deploy_approval
+        commands = [line for line in config_text.split("\n") if line.strip()]
+        approved, final_commands = request_deploy_approval(hostname, device_role, commands)
+
+        if not approved:
+            ctx.log(f"<span style='color:#f85149'>[Copilot] ✖ Deployment REJECTED by user for {hostname}</span>\n")
+            return (f"GENERATION: {config_result}\n\n"
+                    f"DEPLOYMENT: ❌ REJECTED by user. Config was generated and saved to DB "
+                    f"but NOT deployed. User can deploy later with deploy_to_device().")
+
+        # User may have edited the commands
+        config_text = "\n".join(final_commands)
+        ctx.log(f"<span style='color:#3fb950'>[Copilot] ✔ Deployment APPROVED by user for {hostname}</span>\n")
+    except Exception as e:
+        # If the dialog fails (e.g., no GUI thread), fall back to auto-deploy
+        ctx.log(f"<span style='color:#d29922'>[Copilot] HITL dialog unavailable ({e}), auto-deploying...</span>\n")
+
+    # 4. Deploy it
+    ctx.log(f"<span style='color:#8b949e'>[Copilot] Deploying approved config to {hostname}...</span>\n")
     deploy_result = deploy_to_device(device_name=hostname, config_text=config_text)
-    
+
     return f"GENERATION: {config_result}\n\nDEPLOYMENT RESULTS:\n{deploy_result}"
 
 
@@ -2890,6 +2910,51 @@ class CopilotWorker(QThread):
             f"<span style='color:#8b949e'>[Copilot] History trimmed: {old_len} → {len(self._messages)} messages</span>\n"
         )
 
+    def _compress_context(self):
+        """Compress old tool results in message history to save context window space.
+
+        Instead of dropping entire messages (which loses context), this:
+        1. Keeps the system prompt + original user intent pinned
+        2. Truncates large tool results (>500 chars) to their first 200 chars + summary
+        3. Only touches messages older than the last 6 exchanges
+
+        This preserves the agent's awareness of what was already tried while
+        freeing up tokens for new reasoning.
+        """
+        if len(self._messages) < 12:
+            return  # Not enough history to compress
+
+        compressed_count = 0
+        # Don't touch: [0] = system prompt, last 6 messages = recent context
+        safe_zone = max(1, len(self._messages) - 6)
+
+        for i in range(1, safe_zone):
+            msg = self._messages[i]
+            if not isinstance(msg, dict):
+                continue
+
+            role = msg.get("role", "")
+
+            # Compress old tool results
+            if role == "tool":
+                content = msg.get("content", "")
+                if len(content) > 500:
+                    # Keep first 200 chars as a summary hint
+                    msg["content"] = content[:200] + "\n...[compressed — original was " + str(len(content)) + " chars]"
+                    compressed_count += 1
+
+            # Compress old assistant messages (non-tool-call ones)
+            elif role == "assistant" and not msg.get("tool_calls"):
+                content = msg.get("content", "")
+                if content and len(content) > 800:
+                    msg["content"] = content[:300] + "\n...[compressed]"
+                    compressed_count += 1
+
+        if compressed_count > 0:
+            self.terminal_log_signal.emit(
+                f"<span style='color:#8b949e'>[Copilot] Context compressed: {compressed_count} old messages trimmed in-place</span>\n"
+            )
+
     def _process_response(self, response):
         """Dispatch to the appropriate response processor based on provider."""
         if self.provider in ("gemini", "vertex"):
@@ -3017,7 +3082,8 @@ class CopilotWorker(QThread):
                             response = self._send_with_retry(user_msg)
                         else:
                             self._messages.append({"role": "user", "content": user_msg})
-                            self._truncate_history()
+                            self._compress_context()  # Compress old tool results first
+                            self._truncate_history()   # Then trim if still too long
                             response = self._client.chat.completions.create(
                                 model=self.model_name,
                                 messages=self._messages,
