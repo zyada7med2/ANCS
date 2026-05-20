@@ -1238,22 +1238,38 @@ def _probe_session_alive(reader, writer) -> bool:
 
 
 def run_cli_on_device(device_name: str, command: str) -> str:
-    """Run one Cisco IOS show/exec command on a device by name (Telnet console). Uses pooled session if available."""
-    ctx.log(f"\n<span style='color: #a371f7'><b>[Tool]</b> run_cli_on_device({device_name}): {command}</span>\n")
+    """Run one or more Cisco IOS CLI commands on a device by name (Telnet console).
+
+    Supports multi-line commands: if 'command' contains newlines, each line is
+    executed sequentially and all outputs are collected. Uses pooled session if available.
+    """
+    # Split multi-line commands (Item 1.1)
+    commands = [c.strip() for c in command.strip().split('\n') if c.strip()]
+    if not commands:
+        return "Error: empty command"
+
+    ctx.log(f"\n<span style='color: #a371f7'><b>[Tool]</b> run_cli_on_device({device_name}): {commands[0]}"
+            f"{'  (+ ' + str(len(commands)-1) + ' more)' if len(commands) > 1 else ''}</span>\n")
+
+    # --- Pooled session path ---
     if device_name in (ctx.sessions or {}) and ctx.sessions[device_name]:
         reader, writer = ctx.sessions[device_name]
-        # Health-check: make sure the pooled session is still alive
         if _probe_session_alive(reader, writer):
             try:
-                out = ctx.event_loop.run_until_complete(_async_exec_rw(reader, writer, command))
-                ctx.log(f"<span style='color:#C9D1D9'>{out}</span>\n")
-                stripped = out.strip()
-                # CLI error detection — flag common IOS errors
-                for err_pattern in ['% Invalid input', '% Incomplete command', '% Ambiguous command', '% Unknown command']:
-                    if err_pattern in stripped:
-                        ctx.log(f"<span style='color:#d73a49'><b>⚠️ CLI ERROR:</b> {err_pattern} detected in output</span>\n")
-                        return f"⚠️ CLI ERROR: {err_pattern}\n\n{stripped}"
-                return stripped
+                all_output = []
+                for cmd in commands:
+                    out = ctx.event_loop.run_until_complete(_async_exec_rw(reader, writer, cmd))
+                    ctx.log(f"<span style='color:#C9D1D9'>{out}</span>\n")
+                    stripped = out.strip()
+                    # CLI error detection
+                    for err_pattern in ['% Invalid input', '% Incomplete command', '% Ambiguous command', '% Unknown command']:
+                        if err_pattern in stripped:
+                            ctx.log(f"<span style='color:#d73a49'><b>⚠️ CLI ERROR:</b> {err_pattern} on cmd: {cmd}</span>\n")
+                            all_output.append(f"⚠️ CLI ERROR: {err_pattern}\n{stripped}")
+                            break
+                    else:
+                        all_output.append(stripped)
+                return '\n'.join(all_output)
             except Exception as e:
                 ctx.log(f"<span style='color:#d29922'>[Copilot] Pooled session for {device_name} failed: {e} — falling back to fresh connection</span>\n")
         else:
@@ -1267,6 +1283,8 @@ def run_cli_on_device(device_name: str, command: str) -> str:
         except Exception:
             pass
         del ctx.sessions[device_name]
+
+    # --- Fresh connection path ---
     info = _resolve_device_connection(device_name)
     if not info:
         return f"Error: no host/credentials for '{device_name}'."
@@ -1285,17 +1303,26 @@ def run_cli_on_device(device_name: str, command: str) -> str:
         info["username"],
         info["password"],
         info["enable_password"],
-        [command.strip()],
+        commands,  # Pass all commands (Sender handles lists)
     )
     if out.get("_error"):
         return f"Error: {out['_error']}"
-    result = (out.get(command.strip()) or next(iter(out.values()), "")).strip()
-    # CLI error detection — flag common IOS errors (fresh connection path)
-    for err_pattern in ['% Invalid input', '% Incomplete command', '% Ambiguous command', '% Unknown command']:
-        if err_pattern in result:
-            ctx.log(f"<span style='color:#d73a49'><b>⚠️ CLI ERROR:</b> {err_pattern} detected in output</span>\n")
-            return f"⚠️ CLI ERROR: {err_pattern}\n\n{result}"
-    return result
+    # Collect results for all commands
+    all_results = []
+    for cmd in commands:
+        result = (out.get(cmd) or "").strip()
+        # CLI error detection
+        for err_pattern in ['% Invalid input', '% Incomplete command', '% Ambiguous command', '% Unknown command']:
+            if err_pattern in result:
+                ctx.log(f"<span style='color:#d73a49'><b>⚠️ CLI ERROR:</b> {err_pattern} on cmd: {cmd}</span>\n")
+                all_results.append(f"⚠️ CLI ERROR: {err_pattern}\n{result}")
+                break
+        else:
+            all_results.append(result)
+    # If only one command, return its result directly (backward compatible)
+    if len(all_results) == 1:
+        return all_results[0]
+    return '\n'.join(all_results)
 
 
 def verify_device(device_name: str, verify_commands: str = '["show ip interface brief"]') -> str:
