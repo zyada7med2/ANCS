@@ -10,6 +10,7 @@ import json
 import os
 import re
 import time
+from html import unescape
 from datetime import datetime
 
 from PySide6.QtWidgets import (
@@ -39,23 +40,27 @@ except ImportError:
 # COLOR PALETTE
 # ═══════════════════════════════════════════════════════════════════════
 class _C:
-    bg_deepest    = "#0D1117"
-    bg_card       = "#161B22"
-    bg_elevated   = "#1C2128"
+    bg_deepest    = "#0B1018"
+    bg_card       = "#131A24"
+    bg_elevated   = "#1A2332"
     bg_input      = "#0D1117"
-    border        = "#30363D"
-    border_subtle = "#21262D"
-    text_pri      = "#E6EDF3"
-    text_sec      = "#C9D1D9"
-    text_muted    = "#8B949E"
+    bg_chat       = "#0F1720"
+    border        = "#1E2D3D"
+    border_subtle = "#182430"
+    text_pri      = "#E8EDF3"
+    text_sec      = "#B8C4D0"
+    text_muted    = "#6B7B8D"
     accent        = "#3B82F6"
     accent_hover  = "#2563EB"
-    purple        = "#A371F7"
-    green         = "#3FB950"
-    amber         = "#D29922"
-    red           = "#F85149"
+    accent_glow   = "rgba(59, 130, 246, 0.15)"
+    purple        = "#A78BFA"
+    purple_dim    = "rgba(167, 139, 250, 0.12)"
+    green         = "#34D399"
+    amber         = "#FBBF24"
+    red           = "#F87171"
     white         = "#FFFFFF"
-    user_bg       = "#1A2332"
+    user_bg       = "#122038"
+    user_bg2      = "#18294A"
     user_border   = "#1E3A5F"
 
 
@@ -65,15 +70,15 @@ class _C:
 def _make_icon(draw_fn, size=20, color="#C9D1D9") -> QIcon:
     """Create a QIcon by painting with the given draw function."""
     pixmap = QPixmap(size, size)
-    pixmap.fill(Qt.transparent)
+    pixmap.fill(Qt.GlobalColor.transparent)
     p = QPainter(pixmap)
-    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
     pen = QPen(QColor(color))
     pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.RoundCap)
-    pen.setJoinStyle(Qt.RoundJoin)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
     p.setPen(pen)
-    p.setBrush(Qt.NoBrush)
+    p.setBrush(Qt.BrushStyle.NoBrush)
     draw_fn(p, size)
     p.end()
     return QIcon(pixmap)
@@ -201,7 +206,7 @@ def _draw_attach(p: QPainter, s: int):
 
 
 def _draw_dot(p: QPainter, s: int, color: str = "#3FB950"):
-    p.setPen(Qt.NoPen)
+    p.setPen(Qt.PenStyle.NoPen)
     p.setBrush(QColor(color))
     c = s / 2
     p.drawEllipse(QRectF(c - 3, c - 3, 6, 6))
@@ -251,7 +256,7 @@ def _icon_btn(icon: QIcon, size=32, tooltip="", style="ghost") -> QPushButton:
     btn.setIcon(icon)
     btn.setIconSize(QSize(size - 10, size - 10))
     btn.setFixedSize(size, size)
-    btn.setCursor(Qt.PointingHandCursor)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
     if tooltip:
         btn.setToolTip(tooltip)
     if style == "ghost":
@@ -292,19 +297,49 @@ class StatusDot(QWidget):
     def __init__(self, color="#8B949E", size=10, parent=None):
         super().__init__(parent)
         self._color = color
-        self.setFixedSize(size, size)
+        self._pulse = False
+        self._pulse_phase = 0.0
+        self._pulse_timer = QTimer(self)
+        self._pulse_timer.timeout.connect(self._tick_pulse)
+        self.setFixedSize(size + 8, size + 8)  # Extra room for glow ring
 
     def set_color(self, color: str):
         self._color = color
+        self._pulse = (color == _C.green)
+        if self._pulse and not self._pulse_timer.isActive():
+            self._pulse_phase = 0.0
+            self._pulse_timer.start(50)
+        elif not self._pulse:
+            self._pulse_timer.stop()
+        self.update()
+
+    def _tick_pulse(self):
+        import math
+        self._pulse_phase += 0.12
+        if self._pulse_phase > 2 * math.pi:
+            self._pulse_phase -= 2 * math.pi
         self.update()
 
     def paintEvent(self, _e):
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        cx, cy = w / 2, h / 2
+        # Glow ring when pulsing
+        if self._pulse:
+            import math
+            alpha = int(40 + 30 * math.sin(self._pulse_phase))
+            glow_r = 4 + 2 * (0.5 + 0.5 * math.sin(self._pulse_phase))
+            glow_color = QColor(self._color)
+            glow_color.setAlpha(alpha)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(glow_color)
+            p.drawEllipse(QRectF(cx - glow_r - 1, cy - glow_r - 1, glow_r * 2 + 2, glow_r * 2 + 2))
+        # Main dot
+        p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(self._color))
-        s = min(self.width(), self.height())
-        p.drawEllipse(QRectF(1, 1, s - 2, s - 2))
+        dot_r = 3.5
+        p.drawEllipse(QRectF(cx - dot_r, cy - dot_r, dot_r * 2, dot_r * 2))
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -318,7 +353,7 @@ class ToggleSwitch(QWidget):
         self._checked = checked
         self._offset = 22.0 if checked else 2.0
         self.setFixedSize(48, 26)
-        self.setCursor(Qt.PointingHandCursor)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def isChecked(self):
         return self._checked
@@ -330,13 +365,18 @@ class ToggleSwitch(QWidget):
 
     def paintEvent(self, _e):
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         track = QColor(_C.accent) if self._checked else QColor("#374151")
         p.setBrush(track)
-        p.setPen(Qt.NoPen)
+        p.setPen(Qt.PenStyle.NoPen)
         p.drawRoundedRect(0, 0, 48, 26, 13, 13)
+        # Thumb with subtle shadow effect
+        thumb_x = int(self._offset)
+        shadow_col = QColor(0, 0, 0, 40)
+        p.setBrush(shadow_col)
+        p.drawEllipse(thumb_x + 1, 3, 22, 22)
         p.setBrush(QColor(_C.white))
-        p.drawEllipse(int(self._offset), 2, 22, 22)
+        p.drawEllipse(thumb_x, 2, 22, 22)
 
     def mousePressEvent(self, _e):
         self._checked = not self._checked
@@ -344,8 +384,8 @@ class ToggleSwitch(QWidget):
         anim.setDuration(150)
         anim.setStartValue(self._offset)
         anim.setEndValue(22.0 if self._checked else 2.0)
-        anim.setEasingCurve(QEasingCurve.InOutQuad)
-        anim.start(QPropertyAnimation.DeleteWhenStopped)
+        anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
+        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
         self.toggled.emit(self._checked)
 
     def _get_offset(self):
@@ -384,8 +424,8 @@ class ThinkingDots(QWidget):
 
     def paintEvent(self, _e):
         p = QPainter(self)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setPen(Qt.NoPen)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
         for i in range(3):
             active = i == self._phase
             sz = 10 if active else 7
@@ -426,22 +466,49 @@ class DeviceChip(QFrame):
 # ═══════════════════════════════════════════════════════════════════════
 # TOOL EXECUTION CARD
 # ═══════════════════════════════════════════════════════════════════════
+_TOOL_DISPLAY_NAMES = {
+    "run_cli_on_device": "Terminal tool",
+    "run_command_on_device": "Terminal tool",
+    "verify_device": "Verification terminal",
+    "snapshot_network_state": "Network snapshot",
+    "get_network_overview": "Network overview",
+    "list_all_devices": "Device inventory",
+    "get_topology_links": "Topology mapper",
+    "generate_device_config": "Config generator",
+    "generate_and_deploy_device_config": "Generate and deploy",
+    "deploy_to_device": "Deploy config",
+    "trace_connectivity": "Connectivity trace",
+    "audit_network": "Security audit",
+    "validate_configs": "Config validator",
+    "cleanup_device": "Cleanup tool",
+    "bulk_deploy": "Bulk deploy",
+    "calculate_subnet": "Subnet calculator",
+    "get_agent_guidelines": "Guidelines tool",
+}
+
+
+def _friendly_tool_name(tool_name: str) -> str:
+    return _TOOL_DISPLAY_NAMES.get(tool_name, tool_name.replace("_", " "))
+
+
 class ToolCard(QFrame):
     def __init__(self, tool_name: str, args_preview: str = "", parent=None):
         super().__init__(parent)
         self.tool_name = tool_name
         self._expanded = False
         self._result_text = ""
+        self._state = "running"
 
         self.setStyleSheet(f"""
             ToolCard {{
-                background: {_C.bg_deepest};
-                border: 1px solid {_C.border_subtle};
-                border-radius: 8px;
+                background: rgba(11, 16, 24, 0.8);
+                border: 1px solid {_C.border};
+                border-left: 2px solid {_C.purple};
+                border-radius: 0 8px 8px 0;
             }}
         """)
         self._main_layout = QVBoxLayout(self)
-        self._main_layout.setContentsMargins(12, 8, 12, 8)
+        self._main_layout.setContentsMargins(14, 10, 14, 10)
         self._main_layout.setSpacing(0)
 
         header = QHBoxLayout()
@@ -455,12 +522,12 @@ class ToolCard(QFrame):
         icon_lbl.setEnabled(False)
         header.addWidget(icon_lbl)
 
-        display = tool_name
+        display = _friendly_tool_name(tool_name)
         if args_preview:
-            short = args_preview[:40] + ("..." if len(args_preview) > 40 else "")
-            display = f"{tool_name}({short})"
+            short = args_preview[:52] + ("..." if len(args_preview) > 52 else "")
+            display = f"{display}  {short}"
         self._name_lbl = QLabel(display)
-        self._name_lbl.setStyleSheet(f"color: {_C.text_sec}; font-size: 12px; font-family: 'Cascadia Code', 'Consolas', monospace;")
+        self._name_lbl.setStyleSheet(f"color: {_C.purple}; font-size: 12px; font-weight: 600; font-family: 'Cascadia Code', 'Consolas', monospace;")
         header.addWidget(self._name_lbl, 1)
 
         self._status_icon = QPushButton()
@@ -472,7 +539,7 @@ class ToolCard(QFrame):
         header.addWidget(self._status_icon)
 
         self._status_lbl = QLabel("Running")
-        self._status_lbl.setStyleSheet(f"color: {_C.accent}; font-size: 11px;")
+        self._status_lbl.setStyleSheet(f"color: {_C.accent}; font-size: 11px; font-weight: 500;")
         header.addWidget(self._status_lbl)
 
         self._expand_btn = _icon_btn(Icons.expand(), 22)
@@ -482,23 +549,24 @@ class ToolCard(QFrame):
         self._main_layout.addLayout(header)
 
         self._result_browser = QTextBrowser()
-        self._result_browser.setMaximumHeight(180)
+        self._result_browser.setMaximumHeight(200)
         self._result_browser.setVisible(False)
         self._result_browser.setStyleSheet(f"""
             QTextBrowser {{
-                background: {_C.bg_card};
-                border: 1px solid {_C.border_subtle};
-                border-radius: 6px;
+                background: #0A0F18;
+                border: 1px solid {_C.border};
+                border-radius: 8px;
                 color: {_C.text_sec};
                 font-family: 'Cascadia Code', 'Consolas', monospace;
                 font-size: 11px;
-                padding: 8px;
-                margin-top: 6px;
+                padding: 10px 12px;
+                margin-top: 8px;
             }}
         """)
         self._main_layout.addWidget(self._result_browser)
 
     def set_completed(self, duration_ms: str = "", result: str = ""):
+        self._state = "completed"
         self._status_icon.setIcon(Icons.check())
         label = "Completed"
         if duration_ms:
@@ -510,6 +578,7 @@ class ToolCard(QFrame):
             self._result_browser.setPlainText(result)
 
     def set_error(self, error_text: str = ""):
+        self._state = "error"
         self._status_icon.setIcon(Icons.error())
         self._status_lbl.setText("Error")
         self._status_lbl.setStyleSheet(f"color: {_C.red}; font-size: 11px;")
@@ -523,23 +592,56 @@ class ToolCard(QFrame):
         self._expand_btn.setIcon(Icons.collapse() if self._expanded else Icons.expand())
 
 
+class ActivityNote(QFrame):
+    def __init__(self, text: str, kind: str = "status", parent=None):
+        super().__init__(parent)
+        colors = {
+            "thinking": (_C.purple, "Analyzing"),
+            "action": (_C.accent, "Using tool"),
+            "status": (_C.text_muted, "Status"),
+        }
+        color, label = colors.get(kind, colors["status"])
+        self.setStyleSheet(f"""
+            ActivityNote {{
+                background: rgba(19, 26, 36, 0.58);
+                border: 1px solid {_C.border_subtle};
+                border-radius: 8px;
+            }}
+        """)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 8, 12, 8)
+        lay.setSpacing(10)
+        lay.addWidget(StatusDot(color, 7))
+        lbl = QLabel(f"{label}: {text}")
+        lbl.setWordWrap(True)
+        lbl.setTextFormat(Qt.TextFormat.PlainText)
+        lbl.setStyleSheet(f"color: {_C.text_sec}; font-size: 12px; line-height: 1.35;")
+        lay.addWidget(lbl, 1)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # MESSAGE WIDGETS
 # ═══════════════════════════════════════════════════════════════════════
 _MD_CSS = f"""
-    body {{ color: {_C.text_sec}; font-family: 'Segoe UI', sans-serif; font-size: 13px; line-height: 1.6; }}
-    h1,h2,h3 {{ color: {_C.purple}; margin: 10px 0 4px; }}
-    strong,b {{ color: #58a6ff; }}
-    code {{ background: {_C.bg_deepest}; color: #79c0ff; padding: 2px 6px; border-radius: 4px; font-size: 12px; }}
-    pre {{ background: {_C.bg_deepest}; border: 1px solid {_C.border_subtle}; padding: 12px; border-radius: 8px; overflow-x: auto; }}
-    pre code {{ background: none; padding: 0; }}
-    ul,ol {{ padding-left: 18px; }}
-    li {{ margin-bottom: 3px; }}
-    table {{ border-collapse: collapse; width: 100%; margin: 8px 0; }}
-    th,td {{ border: 1px solid {_C.border}; padding: 6px 12px; text-align: left; }}
-    th {{ background: {_C.bg_card}; color: {_C.purple}; }}
-    p {{ margin: 4px 0; }}
-    a {{ color: {_C.accent}; }}
+    body {{ color: {_C.text_sec}; font-family: 'Inter', 'Segoe UI', sans-serif; font-size: 13.5px; line-height: 1.7; }}
+    h1 {{ color: {_C.text_pri}; font-size: 18px; font-weight: 700; margin: 14px 0 6px; border-bottom: 1px solid {_C.border}; padding-bottom: 6px; }}
+    h2 {{ color: {_C.purple}; font-size: 15px; font-weight: 600; margin: 12px 0 4px; }}
+    h3 {{ color: {_C.accent}; font-size: 14px; font-weight: 600; margin: 10px 0 4px; }}
+    strong,b {{ color: #93C5FD; }}
+    em {{ color: {_C.text_sec}; font-style: italic; }}
+    code {{ background: rgba(59, 130, 246, 0.08); color: #93C5FD; padding: 2px 7px; border-radius: 5px; font-size: 12px; font-family: 'Cascadia Code', 'Consolas', monospace; }}
+    pre {{ background: #0A0F18; border: 1px solid {_C.border}; padding: 14px 16px; border-radius: 10px; overflow-x: auto; margin: 8px 0; }}
+    pre code {{ background: none; padding: 0; color: #A5D6FF; }}
+    ul,ol {{ padding-left: 20px; }}
+    li {{ margin-bottom: 4px; }}
+    table {{ border-collapse: collapse; width: 100%; margin: 10px 0; border-radius: 8px; overflow: hidden; }}
+    th {{ background: {_C.bg_elevated}; color: {_C.purple}; padding: 8px 14px; text-align: left; border-bottom: 2px solid {_C.border}; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }}
+    td {{ border-bottom: 1px solid {_C.border}; padding: 7px 14px; text-align: left; }}
+    p {{ margin: 5px 0; }}
+    a {{ color: {_C.accent}; text-decoration: none; }}
+    a:hover {{ text-decoration: underline; }}
+    blockquote {{ border-left: 3px solid {_C.purple}; margin: 8px 0; padding: 4px 14px; color: {_C.text_muted}; background: {_C.purple_dim}; border-radius: 0 6px 6px 0; }}
+    hr {{ border: none; height: 1px; background: {_C.border}; margin: 12px 0; }}
 """
 
 
@@ -547,34 +649,35 @@ class UserBubble(QFrame):
     def __init__(self, text: str, parent=None):
         super().__init__(parent)
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(60, 2, 8, 2)
+        outer.setContentsMargins(100, 4, 12, 4)
 
         outer.addStretch()
 
         bubble = QFrame()
-        bubble.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        bubble.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
         bubble.setStyleSheet(f"""
             QFrame {{
-                background: {_C.user_bg};
-                border: 1px solid {_C.user_border};
-                border-radius: 12px;
-                padding: 8px 14px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 {_C.user_bg}, stop:1 {_C.user_bg2});
+                border: 1px solid rgba(30, 58, 95, 0.6);
+                border-radius: 16px;
+                border-bottom-right-radius: 4px;
+                padding: 12px 18px;
             }}
         """)
         blay = QVBoxLayout(bubble)
         blay.setContentsMargins(0, 0, 0, 0)
-        blay.setSpacing(2)
+        blay.setSpacing(4)
 
         msg = QLabel(text)
         msg.setWordWrap(True)
-        msg.setTextFormat(Qt.PlainText)
-        msg.setMaximumWidth(500)
-        msg.setStyleSheet(f"color: {_C.text_pri}; font-size: 13px; border: none; background: none;")
+        msg.setTextFormat(Qt.TextFormat.PlainText)
+        msg.setMaximumWidth(520)
+        msg.setStyleSheet(f"color: {_C.text_pri}; font-size: 13.5px; border: none; background: none; line-height: 1.5;")
         blay.addWidget(msg)
 
         ts = QLabel(datetime.now().strftime("%I:%M %p"))
-        ts.setAlignment(Qt.AlignRight)
-        ts.setStyleSheet(f"color: {_C.text_muted}; font-size: 9px; border: none; background: none;")
+        ts.setAlignment(Qt.AlignmentFlag.AlignRight)
+        ts.setStyleSheet(f"color: rgba(107, 123, 141, 0.7); font-size: 9px; border: none; background: none;")
         blay.addWidget(ts)
 
         outer.addWidget(bubble)
@@ -583,13 +686,30 @@ class UserBubble(QFrame):
 class AIBubble(QFrame):
     def __init__(self, html_content: str, parent=None):
         super().__init__(parent)
+        self.setMaximumWidth(1120)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.setStyleSheet(f"""
+            AIBubble {{
+                background: rgba(19, 26, 36, 0.5);
+                border-left: 2px solid {_C.accent};
+                border-radius: 0 10px 10px 0;
+                margin: 2px 0;
+            }}
+        """)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(8, 6, 80, 6)
+        lay.setContentsMargins(18, 12, 42, 12)
         lay.setSpacing(4)
 
-        sender = QLabel("ANCS")
-        sender.setStyleSheet(f"color: {_C.accent}; font-weight: bold; font-size: 13px;")
-        lay.addWidget(sender)
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        sender = QLabel("✦ ANCS Agent")
+        sender.setStyleSheet(f"color: {_C.accent}; font-weight: 700; font-size: 12px; letter-spacing: 0.5px; border: none; background: none;")
+        header.addWidget(sender)
+        header.addStretch()
+        ts = QLabel(datetime.now().strftime("%I:%M %p"))
+        ts.setStyleSheet(f"color: rgba(107, 123, 141, 0.6); font-size: 9px; border: none; background: none;")
+        header.addWidget(ts)
+        lay.addLayout(header)
 
         browser = QTextBrowser()
         browser.setOpenExternalLinks(True)
@@ -602,20 +722,16 @@ class AIBubble(QFrame):
                 font-size: 13px;
             }}
         """)
-        browser.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        browser.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        browser.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        browser.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         doc = browser.document()
-        doc.setTextWidth(650)
-        h = max(40, int(doc.size().height()) + 12)
-        browser.setFixedHeight(min(h, 800))
+        doc.setTextWidth(900)
+        h = max(44, int(doc.size().height()) + 18)
+        browser.setFixedHeight(min(h, 1800))
         lay.addWidget(browser)
 
-        ts = QLabel(datetime.now().strftime("%I:%M %p"))
-        ts.setStyleSheet(f"color: {_C.text_muted}; font-size: 10px;")
-        lay.addWidget(ts)
-
         self.tool_container = QVBoxLayout()
-        self.tool_container.setSpacing(4)
+        self.tool_container.setSpacing(6)
         lay.addLayout(self.tool_container)
 
 
@@ -623,17 +739,24 @@ class SystemMsg(QFrame):
     def __init__(self, text: str, parent=None):
         super().__init__(parent)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 8, 0, 8)
+        lay.setContentsMargins(20, 12, 20, 12)
         line_l = QFrame()
         line_l.setFixedHeight(1)
-        line_l.setStyleSheet(f"background: {_C.border_subtle};")
+        line_l.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            f"stop:0 transparent, stop:1 {_C.border});")
         lay.addWidget(line_l, 1)
         lbl = QLabel(f"  {text}  ")
-        lbl.setStyleSheet(f"color: {_C.text_muted}; font-size: 11px;")
+        lbl.setStyleSheet(f"""
+            color: {_C.text_muted}; font-size: 10px; font-weight: 500;
+            letter-spacing: 0.5px; background: transparent; border: none;
+        """)
         lay.addWidget(lbl)
         line_r = QFrame()
         line_r.setFixedHeight(1)
-        line_r.setStyleSheet(f"background: {_C.border_subtle};")
+        line_r.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            f"stop:0 {_C.border}, stop:1 transparent);")
         lay.addWidget(line_r, 1)
 
 
@@ -642,13 +765,13 @@ class SystemMsg(QFrame):
 # ═══════════════════════════════════════════════════════════════════════
 _SCROLLBAR = f"""
     QScrollBar:vertical {{
-        background: transparent; width: 6px; margin: 4px 1px;
+        background: transparent; width: 7px; margin: 4px 1px;
     }}
     QScrollBar::handle:vertical {{
-        background: {_C.border}; border-radius: 3px; min-height: 30px;
+        background: rgba(88, 140, 210, 80); border-radius: 3px; min-height: 36px;
     }}
     QScrollBar::handle:vertical:hover {{
-        background: {_C.text_muted};
+        background: rgba(88, 166, 255, 150);
     }}
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
     QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{ background: none; }}
@@ -662,22 +785,41 @@ class ANCSAgentDialog(QDialog):
     """Premium ANCS Agent dialog — drop-in replacement for invoke_ai_agent()."""
 
     def __init__(self, parent_app):
-        super().__init__(parent_app, Qt.FramelessWindowHint | Qt.WindowSystemMenuHint)
+        super().__init__(parent_app, Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowSystemMenuHint)
         self.app = parent_app
         self.setMinimumSize(900, 600)
         self.resize(1060, 760)
         self._drag_pos = None
         self._is_maximized = False
 
-        self._tool_cards: dict[str, ToolCard] = {}
+        self._tool_cards: dict[str, list[ToolCard]] = {}
         self._pending_tool_cards: list[ToolCard] = []
+        self._tool_section = None
+        self._tool_list = None
+        self._tool_status_lbl = None
+        self._tool_header = None
+        self._logs_tool_cards: dict[str, list[ToolCard]] = {}
+        self._logs_tool_section = None
+        self._logs_tool_list = None
+        self._logs_tool_status_lbl = None
+        self._logs_tool_empty = None
         self._waiting_for_reply = False
+        self._activity_note_keys: set[tuple[str, str]] = set()
+        self._log_line_keys: set[str] = set()
+        self._closing_for_app = False
+        self._chips_timer = QTimer(self)
+        self._attached_files: list[str] = []
+        self._attach_count_btn = None
 
         if not hasattr(self.app, "_copilot_chat_data"):
             self.app._copilot_chat_data = []
 
         self._build_ui()
         self._restore_state()
+
+        self._chips_timer.setInterval(4000)
+        self._chips_timer.timeout.connect(self._refresh_device_chips)
+        self._chips_timer.start()
 
     # ──────────────────────────────────────────────────────────────────
     # UI CONSTRUCTION
@@ -707,7 +849,11 @@ class ANCSAgentDialog(QDialog):
 
         sep = QFrame()
         sep.setFixedHeight(1)
-        sep.setStyleSheet(f"background: {_C.border_subtle};")
+        sep.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            f"stop:0 transparent, stop:0.2 {_C.border_subtle}, "
+            f"stop:0.8 {_C.border_subtle}, stop:1 transparent);"
+        )
         root.addWidget(sep)
 
         self._main_stack = QStackedWidget()
@@ -734,7 +880,7 @@ class ANCSAgentDialog(QDialog):
         lay.setSpacing(12)
 
         title = QLabel("ANCS Agent")
-        title.setStyleSheet(f"color: {_C.text_pri}; font-size: 15px; font-weight: bold; letter-spacing: 0.5px;")
+        title.setStyleSheet(f"color: {_C.text_pri}; font-size: 16px; font-weight: 800; letter-spacing: 1px;")
         lay.addWidget(title)
 
         self._status_dot = StatusDot(_C.text_muted, 9)
@@ -811,27 +957,34 @@ class ANCSAgentDialog(QDialog):
                 border: none;
                 background: {_C.bg_deepest};
             }}
+            QTabBar {{
+                background: {_C.bg_card};
+                border-bottom: 1px solid {_C.border};
+            }}
             QTabBar::tab {{
                 background: transparent;
                 color: {_C.text_muted};
-                padding: 10px 28px;
+                padding: 12px 32px;
                 font-size: 13px;
-                font-weight: 500;
+                font-weight: 600;
                 border: none;
                 border-bottom: 2px solid transparent;
-                margin-right: 2px;
+                margin-right: 0px;
+                letter-spacing: 0.3px;
             }}
             QTabBar::tab:selected {{
                 color: {_C.text_pri};
                 border-bottom: 2px solid {_C.accent};
+                background: rgba(59, 130, 246, 0.05);
             }}
-            QTabBar::tab:hover {{
+            QTabBar::tab:hover:!selected {{
                 color: {_C.text_sec};
-                background: rgba(255, 255, 255, 0.03);
+                border-bottom: 2px solid rgba(59, 130, 246, 0.3);
+                background: rgba(255, 255, 255, 0.02);
             }}
         """)
-        self._tabs.addTab(self._build_chat_tab(), "Chat")
-        self._tabs.addTab(self._build_logs_tab(), "Execution Logs")
+        self._tabs.addTab(self._build_chat_tab(), "💬  Chat")
+        self._tabs.addTab(self._build_logs_tab(), "📋  Execution Logs")
         lay.addWidget(self._tabs, 1)
 
         lay.addWidget(self._build_input_bar())
@@ -843,18 +996,27 @@ class ANCSAgentDialog(QDialog):
         w = QWidget()
         w.setStyleSheet(f"background: {_C.bg_deepest};")
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(12, 8, 12, 0)
-        lay.setSpacing(6)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
 
-        # Device chips row
-        chips_row = QHBoxLayout()
+        # Device chips bar
+        chips_bar = QWidget()
+        chips_bar.setFixedHeight(38)
+        chips_bar.setStyleSheet(f"""
+            QWidget {{
+                background: {_C.bg_card};
+                border-bottom: 1px solid {_C.border};
+            }}
+        """)
+        chips_row = QHBoxLayout(chips_bar)
+        chips_row.setContentsMargins(16, 0, 16, 0)
         chips_row.setSpacing(8)
 
-        chips_dot = StatusDot(_C.accent, 8)
+        chips_dot = StatusDot(_C.accent, 7)
         chips_row.addWidget(chips_dot)
 
         self._chips_count = QLabel("0 Devices")
-        self._chips_count.setStyleSheet(f"color: {_C.text_sec}; font-size: 11px; font-weight: bold;")
+        self._chips_count.setStyleSheet(f"color: {_C.text_sec}; font-size: 11px; font-weight: 600; letter-spacing: 0.3px;")
         chips_row.addWidget(self._chips_count)
 
         self._chips_container = QHBoxLayout()
@@ -862,27 +1024,49 @@ class ANCSAgentDialog(QDialog):
         chips_row.addLayout(self._chips_container)
 
         chips_row.addStretch()
-        lay.addLayout(chips_row)
+
+        self._btn_topology = QPushButton("View Topology")
+        self._btn_topology.setFixedHeight(26)
+        self._btn_topology.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._btn_topology.setStyleSheet(f"""
+            QPushButton {{
+                background: transparent;
+                border: 1px solid {_C.border};
+                border-radius: 13px;
+                color: {_C.text_muted};
+                padding: 0 14px;
+                font-size: 10px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                border-color: {_C.accent};
+                color: {_C.accent};
+                background: {_C.accent_glow};
+            }}
+        """)
+        self._btn_topology.clicked.connect(self._open_topology)
+        chips_row.addWidget(self._btn_topology)
+
+        lay.addWidget(chips_bar)
 
         # Chat scroll area
         self._chat_scroll = QScrollArea()
         self._chat_scroll.setWidgetResizable(True)
-        self._chat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._chat_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._chat_scroll.setStyleSheet(f"""
             QScrollArea {{
-                background: {_C.bg_card};
-                border: 1px solid {_C.border_subtle};
-                border-radius: 10px;
+                background: {_C.bg_chat};
+                border: none;
             }}
             {_SCROLLBAR}
         """)
 
         self._chat_content = QWidget()
-        self._chat_content.setStyleSheet(f"background: {_C.bg_card}; border-radius: 10px;")
+        self._chat_content.setStyleSheet(f"background: {_C.bg_chat};")
         self._chat_layout = QVBoxLayout(self._chat_content)
-        self._chat_layout.setAlignment(Qt.AlignTop)
-        self._chat_layout.setContentsMargins(14, 14, 14, 14)
-        self._chat_layout.setSpacing(4)
+        self._chat_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self._chat_layout.setContentsMargins(16, 16, 16, 16)
+        self._chat_layout.setSpacing(6)
         self._chat_scroll.setWidget(self._chat_content)
 
         lay.addWidget(self._chat_scroll, 1)
@@ -890,10 +1074,16 @@ class ANCSAgentDialog(QDialog):
         # Thinking row
         self._thinking_row = QWidget()
         self._thinking_row.setVisible(False)
+        self._thinking_row.setStyleSheet(f"""
+            QWidget {{
+                background: {_C.bg_card};
+                border-top: 1px solid {_C.border};
+            }}
+        """)
         tlay = QHBoxLayout(self._thinking_row)
-        tlay.setContentsMargins(8, 4, 8, 4)
+        tlay.setContentsMargins(16, 6, 16, 6)
         self._thinking_text = QLabel("")
-        self._thinking_text.setStyleSheet(f"color: {_C.text_muted}; font-size: 12px;")
+        self._thinking_text.setStyleSheet(f"color: {_C.accent}; font-size: 12px; font-weight: 500;")
         tlay.addWidget(self._thinking_text)
         self._thinking_dots = ThinkingDots()
         self._thinking_dots.hide()
@@ -908,88 +1098,163 @@ class ANCSAgentDialog(QDialog):
         w = QWidget()
         w.setStyleSheet(f"background: {_C.bg_deepest};")
         lay = QVBoxLayout(w)
-        lay.setContentsMargins(12, 8, 12, 8)
-        lay.setSpacing(8)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
 
-        toolbar = QHBoxLayout()
+        # Toolbar bar
+        toolbar_widget = QWidget()
+        toolbar_widget.setFixedHeight(48)
+        toolbar_widget.setStyleSheet(f"""
+            QWidget {{
+                background: {_C.bg_card};
+                border-bottom: 1px solid {_C.border};
+            }}
+        """)
+        toolbar = QHBoxLayout(toolbar_widget)
+        toolbar.setContentsMargins(16, 0, 16, 0)
+        toolbar.setSpacing(10)
+
+        logs_title = QLabel("Execution Logs")
+        logs_title.setStyleSheet(f"color: {_C.text_muted}; font-size: 12px; font-weight: 600; letter-spacing: 0.5px;")
+        toolbar.addWidget(logs_title)
+
         toolbar.addStretch()
 
         self._logs_search = QLineEdit()
-        self._logs_search.setPlaceholderText("Search logs...")
-        self._logs_search.setFixedWidth(220)
-        self._logs_search.setFixedHeight(32)
+        self._logs_search.setPlaceholderText("🔍  Filter logs...")
+        self._logs_search.setFixedWidth(240)
+        self._logs_search.setFixedHeight(30)
         self._logs_search.setStyleSheet(f"""
             QLineEdit {{
-                background: {_C.bg_card};
+                background: {_C.bg_deepest};
                 border: 1px solid {_C.border};
-                border-radius: 6px;
-                color: {_C.text_sec};
-                padding: 0 10px 0 10px;
-                font-size: 12px;
-            }}
-            QLineEdit:focus {{ border-color: {_C.accent}; }}
-        """)
-        self._logs_search.textChanged.connect(self._filter_logs)
-        toolbar.addWidget(self._logs_search)
-
-        btn_style = f"""
-            QPushButton {{
-                background: {_C.bg_elevated};
-                border: 1px solid {_C.border};
-                border-radius: 6px;
+                border-radius: 15px;
                 color: {_C.text_sec};
                 padding: 0 14px;
                 font-size: 12px;
             }}
-            QPushButton:hover {{ border-color: {_C.text_muted}; color: {_C.text_pri}; }}
+            QLineEdit:focus {{
+                border: 1px solid rgba(59, 130, 246, 0.6);
+                background: rgba(11, 16, 24, 0.9);
+            }}
+        """)
+        self._logs_search.textChanged.connect(self._filter_logs)
+        toolbar.addWidget(self._logs_search)
+
+        _log_btn_style = f"""
+            QPushButton {{
+                background: transparent;
+                border: 1px solid {_C.border};
+                border-radius: 15px;
+                color: {_C.text_muted};
+                padding: 0 16px;
+                font-size: 11px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{
+                border-color: {_C.accent};
+                color: {_C.text_sec};
+                background: {_C.accent_glow};
+            }}
         """
 
         btn_clear = QPushButton("  Clear")
         btn_clear.setIcon(Icons.clear())
-        btn_clear.setFixedHeight(32)
-        btn_clear.setCursor(Qt.PointingHandCursor)
-        btn_clear.setStyleSheet(btn_style)
+        btn_clear.setFixedHeight(30)
+        btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_clear.setStyleSheet(_log_btn_style)
         btn_clear.clicked.connect(self._clear_logs)
         toolbar.addWidget(btn_clear)
 
         btn_export = QPushButton("  Export")
         btn_export.setIcon(Icons.export())
-        btn_export.setFixedHeight(32)
-        btn_export.setCursor(Qt.PointingHandCursor)
-        btn_export.setStyleSheet(btn_style)
+        btn_export.setFixedHeight(30)
+        btn_export.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_export.setStyleSheet(_log_btn_style)
         btn_export.clicked.connect(self._export_logs)
         toolbar.addWidget(btn_export)
 
-        lay.addLayout(toolbar)
+        lay.addWidget(toolbar_widget)
+
+        # Logs content area
+        logs_container = QWidget()
+        logs_container.setStyleSheet(f"background: {_C.bg_deepest};")
+        logs_lay = QVBoxLayout(logs_container)
+        logs_lay.setContentsMargins(16, 12, 16, 12)
+        logs_lay.setSpacing(10)
+
+        self._logs_tool_section = QFrame()
+        self._logs_tool_section.setObjectName("logsToolSection")
+        self._logs_tool_section.setStyleSheet(f"""
+            QFrame#logsToolSection {{
+                background: rgba(11, 16, 24, 0.55);
+                border: 1px solid {_C.border_subtle};
+                border-radius: 10px;
+            }}
+        """)
+        logs_tool_outer = QVBoxLayout(self._logs_tool_section)
+        logs_tool_outer.setContentsMargins(12, 10, 12, 10)
+        logs_tool_outer.setSpacing(8)
+
+        logs_tool_header = QHBoxLayout()
+        logs_tool_header.setSpacing(8)
+        logs_tool_title = QLabel("Tool calls")
+        logs_tool_title.setStyleSheet(f"color: {_C.accent}; font-size: 12px; font-weight: 700;")
+        logs_tool_header.addWidget(logs_tool_title)
+        logs_tool_header.addStretch()
+        self._logs_tool_status_lbl = QLabel("Idle")
+        self._logs_tool_status_lbl.setStyleSheet(f"color: {_C.text_muted}; font-size: 11px;")
+        logs_tool_header.addWidget(self._logs_tool_status_lbl)
+        logs_tool_outer.addLayout(logs_tool_header)
+
+        self._logs_tool_list = QVBoxLayout()
+        self._logs_tool_list.setSpacing(6)
+        self._logs_tool_empty = QLabel("No tool calls yet.")
+        self._logs_tool_empty.setStyleSheet(f"color: {_C.text_muted}; font-size: 11px;")
+        self._logs_tool_list.addWidget(self._logs_tool_empty)
+        logs_tool_outer.addLayout(self._logs_tool_list)
+
+        logs_lay.addWidget(self._logs_tool_section)
 
         self._logs_browser = QTextBrowser()
         self._logs_browser.setOpenExternalLinks(False)
+        self._logs_browser.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self._logs_browser.setStyleSheet(f"""
             QTextBrowser {{
-                background: {_C.bg_card};
+                background: #0D141E;
                 border: 1px solid {_C.border_subtle};
-                border-radius: 10px;
+                border-radius: 12px;
                 color: {_C.text_sec};
                 font-family: 'Cascadia Code', 'Consolas', monospace;
-                font-size: 12px;
-                padding: 12px;
+                font-size: 11.5px;
+                padding: 18px;
+                line-height: 1.55;
             }}
             {_SCROLLBAR}
         """)
         self._logs_browser.setHtml(
-            f"<span style='color:{_C.text_muted}'>Tool execution logs will stream here...</span>"
+            f"<div style='text-align: center; padding: 40px 0;'>"
+            f"<span style='color: {_C.text_muted}; font-size: 13px;'>📋 Tool execution logs will stream here...</span>"
+            f"</div>"
         )
         self._logs_raw_entries: list[str] = []
-        lay.addWidget(self._logs_browser, 1)
+        logs_lay.addWidget(self._logs_browser, 1)
+
+        lay.addWidget(logs_container, 1)
 
         return w
 
     # ── INPUT BAR ─────────────────────────────────────────────────────
     def _build_input_bar(self):
         bar = QWidget()
-        bar.setStyleSheet(f"background: {_C.bg_deepest}; border-top: 1px solid {_C.border_subtle};")
+        bar.setStyleSheet(f"""
+            QWidget {{
+                background: {_C.bg_card};
+                border-top: 1px solid {_C.border};
+            }}
+        """)
         outer = QVBoxLayout(bar)
-        outer.setContentsMargins(12, 10, 12, 12)
+        outer.setContentsMargins(16, 12, 16, 14)
         outer.setSpacing(8)
 
         self._chat_input = QTextEdit()
@@ -1000,18 +1265,21 @@ class ANCSAgentDialog(QDialog):
         self._chat_input.setStyleSheet(f"""
             QTextEdit {{
                 background: {_C.bg_card};
-                border: 1px solid {_C.border};
-                border-radius: 10px;
+                border: 1.5px solid {_C.border};
+                border-radius: 12px;
                 color: {_C.text_pri};
-                padding: 10px 14px;
+                padding: 10px 16px;
                 font-size: 13px;
                 font-family: 'Segoe UI', sans-serif;
                 selection-background-color: {_C.accent};
             }}
-            QTextEdit:focus {{ border-color: {_C.accent}; }}
+            QTextEdit:focus {{
+                border: 1.5px solid rgba(59, 130, 246, 200);
+                background: rgba(22, 27, 34, 250);
+            }}
             {_SCROLLBAR}
         """)
-        self._chat_input.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._chat_input.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._chat_input.setEnabled(False)
         self._chat_input.installEventFilter(self)
         self._chat_input.textChanged.connect(self._auto_resize_input)
@@ -1020,17 +1288,27 @@ class ANCSAgentDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
 
-        self._btn_attach = _icon_btn(Icons.attach(), 34, "Attach file")
-        self._btn_attach.setStyleSheet(f"""
+        self._attach_count_btn = QPushButton("📎  0")
+        self._attach_count_btn.setFixedSize(42, 30)
+        self._attach_count_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._attach_count_btn.setToolTip("Attach file")
+        self._attach_count_btn.setStyleSheet(f"""
             QPushButton {{
-                background: {_C.bg_elevated};
+                background: transparent;
                 border: 1px solid {_C.border};
-                border-radius: 8px;
+                border-radius: 15px;
+                color: {_C.text_muted};
+                font-size: 11px;
+                font-weight: 600;
             }}
-            QPushButton:hover {{ border-color: {_C.text_muted}; }}
+            QPushButton:hover {{
+                border-color: {_C.accent};
+                color: {_C.text_sec};
+                background: {_C.accent_glow};
+            }}
         """)
-        self._btn_attach.clicked.connect(self._attach_file)
-        btn_row.addWidget(self._btn_attach)
+        self._attach_count_btn.clicked.connect(self._attach_file)
+        btn_row.addWidget(self._attach_count_btn)
 
         btn_row.addStretch()
 
@@ -1044,19 +1322,23 @@ class ANCSAgentDialog(QDialog):
         self._btn_send.setIcon(Icons.send())
         self._btn_send.setIconSize(QSize(16, 16))
         self._btn_send.setFixedHeight(36)
-        self._btn_send.setCursor(Qt.PointingHandCursor)
+        self._btn_send.setCursor(Qt.CursorShape.PointingHandCursor)
         self._btn_send.setStyleSheet(f"""
             QPushButton {{
-                background: {_C.accent};
-                border: none;
-                border-radius: 8px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563EB, stop:1 #3B82F6);
+                border: 1px solid rgba(59, 130, 246, 100);
+                border-radius: 10px;
                 color: {_C.white};
                 font-size: 13px;
                 font-weight: bold;
-                padding: 0 20px;
+                padding: 0 22px;
+                letter-spacing: 0.5px;
             }}
-            QPushButton:hover {{ background: {_C.accent_hover}; }}
-            QPushButton:disabled {{ background: {_C.border}; color: {_C.text_muted}; }}
+            QPushButton:hover {{
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3B82F6, stop:1 #4F8EF7);
+                border: 1px solid rgba(96, 165, 250, 160);
+            }}
+            QPushButton:disabled {{ background: {_C.border}; color: {_C.text_muted}; border: none; }}
         """)
         self._btn_send.clicked.connect(self._send_message)
         self._btn_send.setEnabled(False)
@@ -1096,7 +1378,7 @@ class ANCSAgentDialog(QDialog):
         for label in nav_items:
             btn = QPushButton(f"  {label}")
             btn.setFixedHeight(36)
-            btn.setCursor(Qt.PointingHandCursor)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setStyleSheet(f"""
                 QPushButton {{
                     background: transparent; border: none; border-radius: 8px;
@@ -1112,7 +1394,7 @@ class ANCSAgentDialog(QDialog):
         btn_back = QPushButton("  Back to Chat")
         btn_back.setIcon(Icons.back())
         btn_back.setFixedHeight(36)
-        btn_back.setCursor(Qt.PointingHandCursor)
+        btn_back.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_back.setStyleSheet(f"""
             QPushButton {{
                 background: transparent; border: 1px solid {_C.border}; border-radius: 8px;
@@ -1158,7 +1440,7 @@ class ANCSAgentDialog(QDialog):
 
         btn_test = QPushButton("Test Connection")
         btn_test.setFixedHeight(36)
-        btn_test.setCursor(Qt.PointingHandCursor)
+        btn_test.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_test.setStyleSheet(f"""
             QPushButton {{
                 background: {_C.bg_elevated}; border: 1px solid {_C.border}; border-radius: 8px;
@@ -1171,7 +1453,7 @@ class ANCSAgentDialog(QDialog):
 
         btn_save = QPushButton("Save Changes")
         btn_save.setFixedHeight(36)
-        btn_save.setCursor(Qt.PointingHandCursor)
+        btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_save.setStyleSheet(f"""
             QPushButton {{
                 background: {_C.accent}; border: none; border-radius: 8px;
@@ -1257,7 +1539,7 @@ class ANCSAgentDialog(QDialog):
         rl.addWidget(self._field_label("API Key"))
         key_row = QHBoxLayout()
         self._api_key_input = QLineEdit()
-        self._api_key_input.setEchoMode(QLineEdit.Password)
+        self._api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self._api_key_input.setPlaceholderText("Enter API key (not needed for Vertex AI)")
         self._api_key_input.setFixedHeight(36)
         self._style_lineedit(self._api_key_input)
@@ -1412,8 +1694,10 @@ class ANCSAgentDialog(QDialog):
     def _refresh_device_chips(self):
         while self._chips_container.count():
             item = self._chips_container.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            if item is not None:
+                w = item.widget()
+                if w is not None:
+                    w.deleteLater()
 
         if not hasattr(self.app, 'devices'):
             self._update_device_count()
@@ -1439,10 +1723,10 @@ class ANCSAgentDialog(QDialog):
         if not w:
             return
         try:
-            w.terminal_log_signal.connect(self._on_terminal_log, Qt.QueuedConnection)
-            w.chat_response_signal.connect(self._on_chat_response, Qt.QueuedConnection)
-            w.finished_signal.connect(self._on_finished, Qt.QueuedConnection)
-            w.ready_signal.connect(self._on_ready, Qt.QueuedConnection)
+            w.terminal_log_signal.connect(self._on_terminal_log, Qt.ConnectionType.QueuedConnection)
+            w.chat_response_signal.connect(self._on_chat_response, Qt.ConnectionType.QueuedConnection)
+            w.finished_signal.connect(self._on_finished, Qt.ConnectionType.QueuedConnection)
+            w.ready_signal.connect(self._on_ready, Qt.ConnectionType.QueuedConnection)
         except Exception:
             pass
 
@@ -1549,52 +1833,43 @@ class ANCSAgentDialog(QDialog):
     # SIGNAL HANDLERS
     # ──────────────────────────────────────────────────────────────────
     def _on_terminal_log(self, html_text):
-        # Always append to logs tab
-        self._logs_raw_entries.append(html_text)
-        self._logs_browser.append(html_text)
-        sb = self._logs_browser.verticalScrollBar()
-        sb.setValue(sb.maximum())
-
         # Skip empty
         clean = re.sub(r'<[^>]+>', '', html_text).strip()
         if not clean:
             return
 
+        if clean.startswith("[Thinking]") or "[Thinking]" in clean:
+            key = re.sub(r"\s+", " ", clean).strip().lower()
+            if key in self._log_line_keys:
+                return
+            self._log_line_keys.add(key)
+
+        # Always append to logs tab after deduping repeated model thought parts.
+        self._logs_raw_entries.append(html_text)
+        self._logs_browser.append(html_text)
+        sb = self._logs_browser.verticalScrollBar()
+        sb.setValue(sb.maximum())
+
         # Skip [User] echo
         if clean.startswith("[User]"):
             return
 
-        # Only show live bubble AFTER user has sent a message
+        # Startup/session-pool messages belong in Execution Logs only. The chat
+        # activity panel starts after the user asks the agent to do something.
         if not getattr(self, '_user_has_sent', False):
             return
 
-        # Ensure live activity bubble exists
-        if not hasattr(self, '_live_bubble') or self._live_bubble is None:
-            self._create_live_bubble()
+        handled_activity = self._handle_tool_log(clean)
 
-        # Pipe the raw HTML directly into the live bubble browser
-        self._live_browser.append(html_text)
-        self._live_browser.verticalScrollBar().setValue(
-            self._live_browser.verticalScrollBar().maximum()
-        )
+        # Tool calls and agent phases now render as structured cards in chat.
+        # Keep the full raw stream in Execution Logs, but avoid duplicating it
+        # as an unreadable live log blob in the conversation.
+        if handled_activity:
+            return
 
-        # Update status line from clean text
-        short = clean[:80]
-        if hasattr(self, '_live_status_lbl'):
-            self._live_status_lbl.setText(short)
-
-        # Auto-expand on first content
-        if hasattr(self, '_live_detail') and not self._live_detail.isVisible():
-            self._live_detail.setVisible(True)
-            if hasattr(self, '_live_expand_btn'):
-                self._live_expand_btn.setIcon(Icons.collapse())
-
-        # Force immediate repaint so updates appear live
-        self._live_browser.repaint()
-        self._live_bubble.repaint()
-        QApplication.processEvents()
-
-        self._scroll_chat_bottom()
+        # Unstructured device output stays in the Execution Logs tab. Showing it
+        # inline made the chat feel like a raw terminal instead of an agent.
+        return
 
     def _create_live_bubble(self):
         """Create a collapsible live-activity bubble in the chat area."""
@@ -1676,7 +1951,7 @@ class ANCSAgentDialog(QDialog):
             if hasattr(self, '_live_status_lbl'):
                 self._live_status_lbl.setText("✓ Completed")
             # Keep expanded so user can see what happened — don't collapse
-        self._live_bubble = None
+        self._live_bubble = None  # type: ignore[assignment]
 
     def _on_chat_response(self, text):
         self._stop_thinking()
@@ -1687,7 +1962,6 @@ class ANCSAgentDialog(QDialog):
         self._btn_send.setEnabled(True)
         self._chat_input.setFocus()
         self._waiting_for_reply = False
-        self._tool_cards.clear()
         self._pending_tool_cards.clear()
 
     def _on_finished(self, summary, success):
@@ -1701,6 +1975,9 @@ class ANCSAgentDialog(QDialog):
 
     def _on_ready(self):
         self._set_status("connected")
+        if self._is_worker_alive():
+            model = getattr(self.app._copilot_worker, "model_name", "Unknown")
+            self._model_badge.setText(model)
         self._chat_input.setEnabled(True)
         self._btn_send.setEnabled(True)
         self._chat_input.setFocus()
@@ -1714,13 +1991,20 @@ class ANCSAgentDialog(QDialog):
         if not msg or self._waiting_for_reply:
             return
         self._user_has_sent = True
+        self._clear_tool_section()
+        self._clear_logs_tool_section()
         self._add_user_message(msg)
         self._chat_input.clear()
         self._chat_input.setFixedHeight(44)
+        self._attached_files.clear()
+        if self._attach_count_btn is not None:
+            self._attach_count_btn.setText("0")
         self._waiting_for_reply = True
         self._chat_input.setEnabled(False)
         self._btn_send.setEnabled(False)
         self._start_thinking("Processing...")
+        self._ensure_live_bubble()
+        self._update_live_status("Thinking...")
         if self.app._copilot_worker:
             self.app._copilot_worker.queue_message(msg)
 
@@ -1744,6 +2028,294 @@ class ANCSAgentDialog(QDialog):
         QTimer.singleShot(50, lambda: self._chat_scroll.verticalScrollBar().setValue(
             self._chat_scroll.verticalScrollBar().maximum()
         ))
+
+    def _ensure_tool_section(self):
+        if self._tool_section is not None:
+            return
+
+        self._tool_section = QFrame()
+        self._tool_section.setObjectName("toolSection")
+        self._tool_section.setStyleSheet(f"""
+            QFrame#toolSection {{
+                background: rgba(11, 16, 24, 0.34);
+                border: 1px solid {_C.border_subtle};
+                border-radius: 10px;
+            }}
+        """)
+        outer = QVBoxLayout(self._tool_section)
+        outer.setContentsMargins(12, 10, 12, 10)
+        outer.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        self._tool_header = QLabel("Agent activity")
+        self._tool_header.setStyleSheet(f"color: {_C.accent}; font-size: 12px; font-weight: 700;")
+        header.addWidget(self._tool_header)
+        header.addStretch()
+        self._tool_status_lbl = QLabel("Working...")
+        self._tool_status_lbl.setStyleSheet(f"color: {_C.text_muted}; font-size: 11px;")
+        header.addWidget(self._tool_status_lbl)
+        outer.addLayout(header)
+
+        self._tool_list = QVBoxLayout()
+        self._tool_list.setSpacing(6)
+        outer.addLayout(self._tool_list)
+
+        self._chat_layout.addWidget(self._tool_section)
+        self._scroll_chat_bottom()
+
+    def _clear_logs_tool_section(self):
+        if self._logs_tool_list is None:
+            return
+        while self._logs_tool_list.count():
+            item = self._logs_tool_list.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self._logs_tool_cards.clear()
+        self._logs_tool_empty = QLabel("No tool calls yet.")
+        self._logs_tool_empty.setStyleSheet(f"color: {_C.text_muted}; font-size: 11px;")
+        self._logs_tool_list.addWidget(self._logs_tool_empty)
+        if self._logs_tool_status_lbl is not None:
+            self._logs_tool_status_lbl.setText("Idle")
+
+    def _find_logs_tool_card(self, tool_name: str):
+        cards = self._logs_tool_cards.get(tool_name) or []
+        for card in cards:
+            if getattr(card, "_state", "running") == "running":
+                return card
+        return cards[-1] if cards else None
+
+    def _set_logs_tool_status(self, tool_name: str):
+        if self._logs_tool_status_lbl is None:
+            return
+        label = "Working..."
+        low = tool_name.lower()
+        if "run_cli" in low or "command" in low:
+            label = "Using terminal..."
+        elif "snapshot" in low or "overview" in low:
+            label = "Inspecting network..."
+        elif "generate" in low:
+            label = "Generating config..."
+        elif "subnet" in low:
+            label = "Calculating subnet..."
+        elif "deploy" in low or "send" in low:
+            label = "Applying configurations..."
+        self._logs_tool_status_lbl.setText(label)
+
+    def _ensure_live_bubble(self):
+        if getattr(self, "_live_bubble", None) is None:
+            self._create_live_bubble()
+
+    def _update_live_status(self, text: str):
+        if hasattr(self, "_live_status_lbl") and self._live_status_lbl is not None:
+            self._live_status_lbl.setText(text[:120])
+
+    def _append_live_detail(self, text: str):
+        if hasattr(self, "_live_browser") and self._live_browser is not None:
+            safe = text.replace("<", "&lt;").replace(">", "&gt;")
+            self._live_browser.append(safe)
+
+    def _add_activity_note(self, text: str, kind: str = "status"):
+        self._ensure_tool_section()
+        if self._tool_list is None:
+            return
+        text = " ".join((text or "").split())
+        if not text:
+            return
+        if len(text) > 260:
+            text = text[:257].rstrip() + "..."
+        key = (kind, text.lower())
+        if key in self._activity_note_keys:
+            return
+        self._activity_note_keys.add(key)
+        self._tool_list.addWidget(ActivityNote(text, kind))
+        self._scroll_chat_bottom()
+
+    def _clear_tool_section(self):
+        if self._tool_section is None:
+            return
+        self._chat_layout.removeWidget(self._tool_section)
+        self._tool_section.deleteLater()
+        self._tool_section = None
+        self._tool_list = None
+        self._tool_status_lbl = None
+        self._tool_header = None
+        self._tool_cards.clear()
+        self._activity_note_keys.clear()
+
+    def _handle_tool_log(self, clean_text: str) -> bool:
+        clean_text = unescape(clean_text).replace("\xa0", " ")
+        call_match = re.search(r"\[Tool Call\]\s+([\w.]+)\((.*)\)", clean_text)
+        result_match = re.search(r"\[Tool Result\]\s+([\w.]+)\s+(?:→|->|â†’)\s+(\d+)ms\s+\|\s+(.*)", clean_text)
+        error_match = re.search(r"\[Tool Error\]\s+([\w.]+):\s+(.*)", clean_text)
+        legacy_tool_match = re.search(r"\[Tool\]\s+([\w.]+)\((.*?)\)(?:\s*(?:â†’|->|Ã¢â€ â€™)\s*(.*))?", clean_text)
+        action_match = re.search(r"\[Agent Action\]\s*(.*)", clean_text)
+        thinking_match = re.search(r"\[Thinking\]\s*(.*)", clean_text)
+        copilot_match = re.search(r"\[Copilot\]\s*(.*)", clean_text)
+
+        if action_match:
+            action_text = action_match.group(1).strip()
+            self._add_activity_note(action_text, "action")
+            if self._tool_status_lbl is not None:
+                self._tool_status_lbl.setText(action_text[:120])
+            if self._logs_tool_status_lbl is not None:
+                self._logs_tool_status_lbl.setText(action_text[:120])
+            self._ensure_live_bubble()
+            self._update_live_status(action_text or "Working...")
+            self._append_live_detail(clean_text)
+            return True
+
+        if call_match:
+            tool_name = call_match.group(1)
+            args_preview = call_match.group(2) or ""
+            self._ensure_tool_section()
+            if self._tool_list is not None:
+                card = ToolCard(tool_name, args_preview)
+                self._tool_cards.setdefault(tool_name, []).append(card)
+                self._tool_list.addWidget(card)
+            if self._logs_tool_list is not None:
+                if self._logs_tool_empty is not None:
+                    self._logs_tool_empty.deleteLater()
+                    self._logs_tool_empty = None
+                logs_card = ToolCard(tool_name, args_preview)
+                self._logs_tool_cards.setdefault(tool_name, []).append(logs_card)
+                self._logs_tool_list.addWidget(logs_card)
+            self._set_tool_status(tool_name)
+            self._set_logs_tool_status(tool_name)
+            self._ensure_live_bubble()
+            self._update_live_status(f"Calling {tool_name}...")
+            self._append_live_detail(clean_text)
+            self._scroll_chat_bottom()
+            return True
+
+        if legacy_tool_match:
+            tool_name = legacy_tool_match.group(1)
+            args_preview = legacy_tool_match.group(2) or ""
+            result_preview = legacy_tool_match.group(3) or ""
+            self._ensure_tool_section()
+            card = self._find_tool_card(tool_name)
+            if card is None and self._tool_list is not None:
+                card = ToolCard(tool_name, args_preview)
+                self._tool_cards.setdefault(tool_name, []).append(card)
+                self._tool_list.addWidget(card)
+            logs_card = self._find_logs_tool_card(tool_name)
+            if logs_card is None and self._logs_tool_list is not None:
+                if self._logs_tool_empty is not None:
+                    self._logs_tool_empty.deleteLater()
+                    self._logs_tool_empty = None
+                logs_card = ToolCard(tool_name, args_preview)
+                self._logs_tool_cards.setdefault(tool_name, []).append(logs_card)
+                self._logs_tool_list.addWidget(logs_card)
+            if card and result_preview:
+                card.set_completed("", result_preview)
+            elif card and "complete" in clean_text.lower():
+                card.set_completed("", clean_text)
+            if logs_card and result_preview:
+                logs_card.set_completed("", result_preview)
+            elif logs_card and "complete" in clean_text.lower():
+                logs_card.set_completed("", clean_text)
+            self._set_tool_status(tool_name)
+            self._set_logs_tool_status(tool_name)
+            self._ensure_live_bubble()
+            self._update_live_status(f"Completed {tool_name}")
+            self._append_live_detail(clean_text)
+            self._scroll_chat_bottom()
+            return True
+
+        if result_match:
+            tool_name = result_match.group(1)
+            duration_ms = result_match.group(2)
+            result_preview = result_match.group(3) or ""
+            card = self._find_tool_card(tool_name)
+            if card:
+                card.set_completed(duration_ms, result_preview)
+            logs_card = self._find_logs_tool_card(tool_name)
+            if logs_card:
+                logs_card.set_completed(duration_ms, result_preview)
+            if self._tool_status_lbl is not None:
+                self._tool_status_lbl.setText("Completed")
+            if self._logs_tool_status_lbl is not None:
+                self._logs_tool_status_lbl.setText("Completed")
+            self._ensure_live_bubble()
+            self._update_live_status(f"Completed {tool_name}")
+            self._append_live_detail(clean_text)
+            self._scroll_chat_bottom()
+            return True
+
+        if error_match:
+            tool_name = error_match.group(1)
+            error_text = error_match.group(2) or ""
+            card = self._find_tool_card(tool_name)
+            if card:
+                card.set_error(error_text)
+            logs_card = self._find_logs_tool_card(tool_name)
+            if logs_card:
+                logs_card.set_error(error_text)
+            if self._tool_status_lbl is not None:
+                self._tool_status_lbl.setText("Error")
+            if self._logs_tool_status_lbl is not None:
+                self._logs_tool_status_lbl.setText("Error")
+            self._ensure_live_bubble()
+            self._update_live_status(f"Error in {tool_name}")
+            self._append_live_detail(clean_text)
+            self._scroll_chat_bottom()
+            return True
+
+        if thinking_match:
+            thought = thinking_match.group(1).strip()
+            self._add_activity_note(thought or "Analyzing request...", "thinking")
+            if self._tool_status_lbl is not None:
+                self._tool_status_lbl.setText("Analyzing request...")
+            self._start_thinking("Analyzing...")
+            if self._logs_tool_status_lbl is not None:
+                self._logs_tool_status_lbl.setText("Analyzing...")
+            self._ensure_live_bubble()
+            self._update_live_status("Analyzing...")
+            self._append_live_detail(clean_text)
+            self._scroll_chat_bottom()
+            return True
+
+        if copilot_match:
+            status = copilot_match.group(1).strip()
+            if status:
+                self._add_activity_note(status, "status")
+                if self._tool_status_lbl is not None:
+                    self._tool_status_lbl.setText(status[:120])
+                self._start_thinking(status[:80])
+                if self._logs_tool_status_lbl is not None:
+                    self._logs_tool_status_lbl.setText(status[:120])
+                self._ensure_live_bubble()
+                self._update_live_status(status)
+                self._append_live_detail(clean_text)
+                self._scroll_chat_bottom()
+                return True
+
+        return False
+
+    def _find_tool_card(self, tool_name: str):
+        cards = self._tool_cards.get(tool_name) or []
+        for card in cards:
+            if getattr(card, "_state", "running") == "running":
+                return card
+        return cards[-1] if cards else None
+
+    def _set_tool_status(self, tool_name: str):
+        if self._tool_status_lbl is None:
+            return
+        label = "Working..."
+        low = tool_name.lower()
+        if "run_cli" in low or "command" in low:
+            label = "Using terminal..."
+        elif "snapshot" in low or "overview" in low:
+            label = "Inspecting network..."
+        elif "generate" in low:
+            label = "Generating config..."
+        elif "subnet" in low:
+            label = "Calculating subnet..."
+        elif "deploy" in low or "send" in low:
+            label = "Applying configurations..."
+        self._tool_status_lbl.setText(label)
 
     def _start_thinking(self, text=""):
         self._thinking_row.setVisible(True)
@@ -1770,6 +2342,10 @@ class ANCSAgentDialog(QDialog):
         self._status_label.setText(label)
         self._status_label.setStyleSheet(f"color: {color}; font-size: 12px;")
 
+    def _open_topology(self):
+        if hasattr(self.app, "open_topology"):
+            self.app.open_topology()
+
     # ──────────────────────────────────────────────────────────────────
     # LOGS
     # ──────────────────────────────────────────────────────────────────
@@ -1783,6 +2359,7 @@ class ANCSAgentDialog(QDialog):
 
     def _clear_logs(self):
         self._logs_raw_entries.clear()
+        self._log_line_keys.clear()
         self._logs_browser.setHtml(f"<span style='color:{_C.text_muted}'>Logs cleared.</span>")
 
     def _export_logs(self):
@@ -1853,12 +2430,12 @@ class ANCSAgentDialog(QDialog):
     # WINDOW DRAG (frameless)
     # ──────────────────────────────────────────────────────────────────
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton and event.position().y() < 48:
+        if event.button() == Qt.MouseButton.LeftButton and event.position().y() < 48:
             self._drag_pos = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
-        if self._drag_pos and event.buttons() == Qt.LeftButton:
+        if self._drag_pos and event.buttons() == Qt.MouseButton.LeftButton:
             self.move(event.globalPosition().toPoint() - self._drag_pos)
         super().mouseMoveEvent(event)
 
@@ -1890,6 +2467,9 @@ class ANCSAgentDialog(QDialog):
             "All Files (*);;Text (*.txt *.log *.csv);;Config (*.cfg *.conf *.json *.yaml)"
         )
         if path:
+            self._attached_files.append(path)
+            if self._attach_count_btn is not None:
+                self._attach_count_btn.setText(str(len(self._attached_files)))
             current = self._chat_input.toPlainText()
             prefix = current + "\n" if current.strip() else ""
             self._chat_input.setPlainText(f"{prefix}[Attached: {path}]")
@@ -1900,13 +2480,17 @@ class ANCSAgentDialog(QDialog):
 
     def eventFilter(self, obj, event):
         if obj == self._chat_input and event.type() == QEvent.Type.KeyPress:
-            if event.key() in (Qt.Key_Return, Qt.Key_Enter):
-                if event.modifiers() & Qt.ShiftModifier:
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
                     return False  # Let Shift+Enter insert newline
                 self._send_message()
                 return True
         return super().eventFilter(obj, event)
 
     def closeEvent(self, event):
+        if self._closing_for_app:
+            self._chips_timer.stop()
+            event.accept()
+            return
         event.ignore()
         self.hide()

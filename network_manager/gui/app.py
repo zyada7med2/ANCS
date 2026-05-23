@@ -132,9 +132,9 @@ except Exception:
 
 GLASS_PANEL = """
     QFrame[glassPanel="true"] {
-        background-color: rgba(10, 20, 35, 0.65);
-        border-radius: 8px;
-        border: 1px solid rgba(60, 100, 170, 0.5);
+        background-color: rgba(10, 20, 35, 0.72);
+        border-radius: 10px;
+        border: 1px solid rgba(60, 100, 170, 0.45);
         padding: 10px;
     }
 """
@@ -151,29 +151,30 @@ GLASS_STYLE = """
     }
 
     QFrame[glassPanel="true"] {
-        background-color: rgba(10, 20, 35, 0.65);
-        border-radius: 8px;
-        border: 1px solid rgba(60, 100, 170, 0.5);
+        background-color: rgba(10, 20, 35, 0.72);
+        border-radius: 10px;
+        border: 1px solid rgba(60, 100, 170, 0.45);
         padding: 10px;
     }
 
     QFrame[topBar="true"] {
-        background-color: rgba(8, 18, 34, 192);
+        background-color: rgba(8, 18, 34, 200);
         border-radius: 0px;
         border: none;
-        border-bottom: 1px solid rgba(86, 146, 228, 48);
+        border-bottom: 1px solid rgba(86, 146, 228, 55);
     }
 
     QFrame[windowTitleBar="true"] {
-        background-color: rgba(8, 18, 34, 236);
+        background-color: rgba(8, 18, 34, 240);
         border: none;
-        border-bottom: 1px solid rgba(86, 146, 228, 52);
+        border-bottom: 1px solid rgba(86, 146, 228, 58);
     }
 
     QLabel[windowTitleText="true"] {
-        color: #D3DCE8;
+        color: #E0E8F0;
         font-size: 14px;
-        font-weight: 600;
+        font-weight: 700;
+        letter-spacing: 0.5px;
     }
 
     QLabel {
@@ -181,37 +182,53 @@ GLASS_STYLE = """
         border: none;
     }
 
+    /* ── TOOLTIP ── */
+    QToolTip {
+        background-color: rgba(13, 17, 23, 240);
+        color: #E6EDF3;
+        border: 1px solid rgba(88, 166, 255, 80);
+        border-radius: 6px;
+        padding: 6px 12px;
+        font-size: 12px;
+    }
+
+    /* ── BUTTONS ── */
     QPushButton {
         background-color: rgba(49, 61, 78, 208);
         color: #A6B2C2;
-        border: none;
+        border: 1px solid rgba(80, 100, 130, 60);
         border-radius: 8px;
         padding: 7px 14px;
         font-size: 15px;
         min-height: 30px;
     }
     QPushButton:hover {
-        background-color: rgba(68, 84, 108, 228);
+        background-color: rgba(68, 84, 108, 235);
         color: #FFFFFF;
+        border: 1px solid rgba(88, 166, 255, 100);
     }
     QPushButton:pressed {
-        background-color: rgba(88, 166, 255, 200);
+        background-color: rgba(55, 75, 100, 255);
+        border: 1px solid rgba(88, 166, 255, 160);
     }
     QPushButton:disabled {
-        background-color: rgba(40, 50, 60, 150);
-        color: #555;
+        background-color: rgba(35, 42, 52, 150);
+        color: #4A5568;
+        border: 1px solid rgba(80, 100, 130, 30);
     }
     QPushButton:focus {
         border: 1px solid rgba(147, 197, 253, 210);
     }
 
     QPushButton[accent="true"] {
-        background-color: rgba(37, 99, 235, 224);
+        background-color: rgba(37, 99, 235, 230);
         color: white;
         font-weight: 700;
+        border: 1px solid rgba(59, 130, 246, 120);
     }
     QPushButton[accent="true"]:hover {
         background-color: rgba(59, 130, 246, 255);
+        border: 1px solid rgba(147, 197, 253, 180);
     }
     
     QPushButton[pill="true"] {
@@ -222,42 +239,48 @@ GLASS_STYLE = """
     }
 
     QPushButton[teal="true"] {
-        background-color: rgba(13, 148, 136, 220);
+        background-color: rgba(13, 148, 136, 225);
         color: white;
         font-weight: bold;
+        border: 1px solid rgba(20, 184, 166, 100);
     }
     QPushButton[teal="true"]:hover {
-        background-color: rgba(15, 118, 110, 240);
+        background-color: rgba(15, 118, 110, 245);
+        border: 1px solid rgba(45, 212, 191, 150);
     }
 
     QPushButton[outlined="true"] {
         background-color: transparent;
-        color: #4A9EFF;
-        border: 1px solid #4A9EFF;
+        color: #58A6FF;
+        border: 1px solid rgba(88, 166, 255, 130);
     }
     QPushButton[outlined="true"]:hover {
-        background-color: rgba(12, 24, 40, 180);
+        background-color: rgba(88, 166, 255, 18);
+        border: 1px solid rgba(88, 166, 255, 200);
+        color: #93C5FD;
     }
 
     QPushButton[danger="true"] {
         background-color: transparent;
-        color: #EF4444;
-        border: 1px solid #EF4444;
+        color: #F87171;
+        border: 1px solid rgba(248, 113, 113, 120);
     }
     QPushButton[danger="true"]:hover {
-        background-color: rgba(26, 10, 10, 180);
+        background-color: rgba(248, 113, 113, 14);
+        border: 1px solid rgba(248, 113, 113, 200);
+        color: #FCA5A5;
     }
     
     /* Top Nav Tabs Active/Inactive Styling */
     QPushButton[navTab="active"] {
         background: transparent;
-        color: #3B82F6;
+        color: #60A5FA;
         font-size: 17px;
         font-weight: 700;
         border: none;
         border-bottom: 2px solid #3B82F6;
         border-radius: 0px;
-        padding: 8px 14px;
+        padding: 8px 18px;
     }
     QPushButton[navTab="inactive"] {
         background: transparent;
@@ -265,12 +288,14 @@ GLASS_STYLE = """
         font-size: 17px;
         font-weight: 600;
         border: none;
+        border-bottom: 2px solid transparent;
         border-radius: 0px;
-        padding: 8px 14px;
+        padding: 8px 18px;
     }
     QPushButton[navTab="inactive"]:hover {
         color: #D1D5DB;
         background: transparent;
+        border-bottom: 2px solid rgba(107, 114, 128, 80);
     }
 
     /* Preview panel tab strip */
@@ -282,7 +307,7 @@ GLASS_STYLE = """
         border: none;
         border-bottom: 2px solid #58A6FF;
         border-radius: 0px;
-        padding: 3px 10px;
+        padding: 3px 12px;
         min-height: 26px;
     }
     QPushButton[previewTab="active"]:hover {
@@ -297,7 +322,7 @@ GLASS_STYLE = """
         border: none;
         border-bottom: 2px solid transparent;
         border-radius: 0px;
-        padding: 3px 10px;
+        padding: 3px 12px;
         min-height: 26px;
     }
     QPushButton[previewTab="inactive"]:hover {
@@ -339,24 +364,26 @@ GLASS_STYLE = """
         color: #FFFFFF;
     }
 
+    /* ── INPUT FIELDS ── */
     QLineEdit {
-        background-color: rgba(31, 42, 58, 208);
+        background-color: rgba(22, 34, 52, 220);
         color: #FFFFFF;
-        border: 1px solid rgba(103, 118, 138, 170);
+        border: 1px solid rgba(88, 110, 145, 130);
         border-radius: 8px;
         padding: 9px 12px;
         font-size: 15px;
     }
     QLineEdit:disabled {
-        background-color: rgba(96, 101, 111, 150);
-        border-color: #777D81;
-        color: #666;
+        background-color: rgba(50, 56, 66, 130);
+        border: 1px solid rgba(100, 106, 116, 80);
+        color: #5A6370;
     }
     QLineEdit:focus {
-        border-color: #58A6FF;
+        border: 1px solid rgba(88, 166, 255, 220);
+        background-color: rgba(25, 40, 60, 240);
     }
     QLineEdit::placeholder {
-        color: #7B8798;
+        color: #5C6B7E;
     }
     QLineEdit[hasError="true"] {
         border: 1px solid #F87171;
@@ -364,75 +391,95 @@ GLASS_STYLE = """
     }
 
     QPlainTextEdit {
-        background-color: rgba(22, 27, 34, 220);
-        color: #FFFFFF;
-        border: none;
-        border-radius: 8px;
-        font-family: 'Consolas', 'Courier New', monospace;
-        font-size: 15px;
-        padding: 8px;
+        background-color: rgba(16, 22, 30, 235);
+        color: #E6EDF3;
+        border: 1px solid rgba(48, 54, 61, 100);
+        border-radius: 10px;
+        font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+        font-size: 14px;
+        padding: 12px;
+    }
+    QPlainTextEdit:focus {
+        border: 1px solid rgba(88, 166, 255, 140);
     }
 
+    /* ── COMBOBOX ── */
     QComboBox {
-        background-color: rgba(18, 32, 54, 206);
+        background-color: rgba(18, 32, 54, 215);
         color: #FFFFFF;
-        border: 1px solid rgba(86, 146, 228, 62);
+        border: 1px solid rgba(88, 130, 200, 70);
         border-radius: 8px;
         padding: 7px 12px;
         font-size: 15px;
+    }
+    QComboBox:hover {
+        border: 1px solid rgba(88, 166, 255, 120);
     }
     QComboBox:focus {
         border: 1px solid #58A6FF;
     }
     QComboBox::drop-down {
         border: none;
-        width: 24px;
+        width: 28px;
     }
     QComboBox QAbstractItemView {
-        background-color: #0C1A2E;
+        background-color: rgba(12, 26, 46, 250);
         color: #FFFFFF;
-        selection-background-color: #1A2840;
-        border: 1px solid rgba(70, 140, 230, 40);
+        selection-background-color: rgba(88, 166, 255, 50);
+        border: 1px solid rgba(70, 140, 230, 50);
+        border-radius: 6px;
+        padding: 4px;
+        outline: none;
     }
 
+    /* ── CHECKBOX ── */
     QCheckBox {
         background: transparent;
-        spacing: 6px;
+        spacing: 8px;
     }
     QCheckBox::indicator {
         width: 18px;
         height: 18px;
-        border: 1px solid #6B7280;
-        border-radius: 4px;
-        background: rgba(43, 50, 63, 200);
+        border: 1.5px solid #5A6370;
+        border-radius: 5px;
+        background: rgba(35, 42, 55, 220);
     }
-    QCheckBox::indicator:checked {
-        background: #58A6FF;
+    QCheckBox::indicator:hover {
         border-color: #58A6FF;
     }
+    QCheckBox::indicator:checked {
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3B82F6, stop:1 #2563EB);
+        border-color: #60A5FA;
+    }
 
+    /* ── LIST WIDGET ── */
     QListWidget {
-        background-color: rgba(6, 14, 28, 230);
-        border: 1px solid rgba(72, 124, 196, 130);
-        border-radius: 8px;
+        background-color: rgba(6, 14, 28, 235);
+        border: 1px solid rgba(72, 124, 196, 110);
+        border-radius: 10px;
         padding: 6px;
         font-size: 15px;
+        outline: none;
     }
     QListWidget:focus {
-        border: 1px solid #58A6FF;
+        border: 1px solid rgba(88, 166, 255, 180);
     }
     QListWidget::item {
-        padding: 9px 10px;
-        border-radius: 4px;
+        padding: 10px 12px;
+        border-radius: 6px;
+        margin-bottom: 2px;
+        border-left: 3px solid transparent;
     }
     QListWidget::item:selected {
-        background-color: rgba(88, 166, 255, 60);
+        background-color: rgba(88, 166, 255, 50);
         color: #FFFFFF;
+        border-left: 3px solid #3B82F6;
     }
-    QListWidget::item:hover {
-        background-color: rgba(88, 166, 255, 30);
+    QListWidget::item:hover:!selected {
+        background-color: rgba(88, 166, 255, 22);
     }
 
+    /* ── SCROLL AREA ── */
     QScrollArea {
         background: transparent;
         border: none;
@@ -441,63 +488,114 @@ GLASS_STYLE = """
         background: transparent;
     }
 
+    /* ── SCROLLBAR ── */
     QScrollBar:vertical {
-        background: rgba(12, 26, 46, 88);
-        width: 7px;
+        background: rgba(12, 26, 46, 60);
+        width: 8px;
         border-radius: 4px;
+        margin: 2px 0px;
     }
     QScrollBar::handle:vertical {
-        background: rgba(88, 166, 255, 120);
+        background: rgba(88, 140, 210, 100);
         border-radius: 4px;
-        min-height: 30px;
+        min-height: 36px;
+    }
+    QScrollBar::handle:vertical:hover {
+        background: rgba(88, 166, 255, 170);
     }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         height: 0px;
     }
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+        background: none;
+    }
+    QScrollBar:horizontal {
+        background: rgba(12, 26, 46, 60);
+        height: 8px;
+        border-radius: 4px;
+    }
+    QScrollBar::handle:horizontal {
+        background: rgba(88, 140, 210, 100);
+        border-radius: 4px;
+        min-width: 36px;
+    }
+    QScrollBar::handle:horizontal:hover {
+        background: rgba(88, 166, 255, 170);
+    }
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+        width: 0px;
+    }
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+        background: none;
+    }
 
+    /* ── TABLE ── */
     QTableWidget {
-        background-color: rgba(22, 27, 34, 200);
+        background-color: rgba(16, 22, 30, 220);
         color: #C9D1D9;
         border: none;
-        border-radius: 8px;
-        gridline-color: rgba(48, 54, 61, 150);
+        border-radius: 10px;
+        gridline-color: rgba(48, 54, 61, 100);
         font-size: 14px;
+        alternate-background-color: rgba(22, 30, 42, 200);
+        outline: none;
     }
     QTableWidget:focus {
-        border: 1px solid #58A6FF;
+        border: 1px solid rgba(88, 166, 255, 120);
+    }
+    QTableWidget::item {
+        padding: 6px 10px;
+        border-bottom: 1px solid rgba(48, 54, 61, 80);
     }
     QTableWidget::item:selected {
         background-color: rgba(38, 79, 120, 200);
         color: #FFFFFF;
     }
+    QTableWidget::item:hover:!selected {
+        background-color: rgba(88, 166, 255, 16);
+    }
     QHeaderView::section {
-        background-color: rgba(31, 38, 48, 220);
+        background-color: rgba(22, 30, 42, 240);
         color: #8B949E;
         border: none;
-        padding: 7px 10px;
-        font-weight: bold;
-        font-size: 14px;
+        border-bottom: 2px solid rgba(48, 54, 61, 150);
+        padding: 8px 10px;
+        font-weight: 600;
+        font-size: 13px;
+        letter-spacing: 0.3px;
     }
 
+    /* ── MENUS ── */
     QMenuBar {
-        background-color: rgba(7, 16, 31, 200);
+        background-color: rgba(7, 16, 31, 210);
         color: #C9D1D9;
     }
     QMenuBar::item:selected {
         background-color: rgba(88, 166, 255, 80);
     }
     QMenu {
-        background-color: #0C1A2E;
+        background-color: rgba(12, 26, 46, 250);
         color: #C9D1D9;
-        border: 1px solid rgba(70, 140, 230, 40);
+        border: 1px solid rgba(70, 140, 230, 50);
+        border-radius: 8px;
+        padding: 4px;
+    }
+    QMenu::item {
+        padding: 8px 24px;
+        border-radius: 4px;
     }
     QMenu::item:selected {
-        background-color: rgba(88, 166, 255, 80);
+        background-color: rgba(88, 166, 255, 60);
+    }
+    QMenu::separator {
+        height: 1px;
+        background: rgba(48, 54, 61, 120);
+        margin: 4px 12px;
     }
 
-    /* Unified dialog theming (message boxes, input dialogs, file dialogs) */
+    /* Unified dialog theming */
     QDialog, QMessageBox, QInputDialog, QFileDialog {
-        background-color: rgba(8, 18, 34, 232);
+        background-color: rgba(8, 18, 34, 240);
         color: #D3DCE8;
     }
     QMessageBox QLabel, QInputDialog QLabel, QFileDialog QLabel {
@@ -508,14 +606,14 @@ GLASS_STYLE = """
         min-width: 92px;
     }
     QFileDialog QTreeView, QFileDialog QListView {
-        background-color: rgba(14, 28, 46, 228);
+        background-color: rgba(14, 28, 46, 235);
         color: #D3DCE8;
-        border: 1px solid rgba(86, 146, 228, 64);
+        border: 1px solid rgba(86, 146, 228, 50);
         border-radius: 8px;
-        selection-background-color: rgba(88, 166, 255, 72);
+        selection-background-color: rgba(88, 166, 255, 60);
     }
     QFileDialog QLineEdit {
-        background-color: rgba(18, 32, 54, 220);
+        background-color: rgba(18, 32, 54, 225);
     }
 """
 
@@ -1308,12 +1406,12 @@ class App(QMainWindow):
         lbl_title = OutlinedLabel("ANCS", stroke_width=2)
         lbl_title.setAttribute(Qt.WA_TranslucentBackground)
         # Using 28pt Michroma with 3px letter spacing tightly equalizes to 8pt subtitle 
-        lbl_title.setStyleSheet("background: transparent; color: #FFFFFF; font-family: 'Michroma'; font-size: 28pt; letter-spacing: 3px;")
+        lbl_title.setStyleSheet("background: transparent; color: #FFFFFF; font-family: 'Michroma'; font-size: 28pt; letter-spacing: 4px; font-weight: 800;")
         text_col.addWidget(lbl_title)
 
         lbl_sub = QLabel("Auto Network Configuration System")
         lbl_sub.setAttribute(Qt.WA_TranslucentBackground)
-        lbl_sub.setStyleSheet("background: transparent; color: #9AAABB; font-family: 'Montserrat'; font-size: 8pt; letter-spacing: 0px;")
+        lbl_sub.setStyleSheet("background: transparent; color: #A0B4C8; font-family: 'Montserrat'; font-size: 8pt; letter-spacing: 1px;")
         text_col.addWidget(lbl_sub)
 
         header_row.addLayout(text_col)
@@ -1364,9 +1462,9 @@ class App(QMainWindow):
         left_panel.setAutoFillBackground(True)
         left_panel.setStyleSheet("""
             QFrame#leftPanel {
-                background-color: rgba(11, 29, 50, 100);
-                border-radius: 8px;
-                border: 1px solid rgba(50, 85, 160, 80);
+                background-color: rgba(11, 29, 50, 110);
+                border-radius: 12px;
+                border: 1px solid rgba(50, 85, 160, 65);
             }
         """)
         left_panel.setMinimumWidth(260)
@@ -1385,8 +1483,12 @@ class App(QMainWindow):
         left_layout.setContentsMargins(14, 14, 14, 14)
         left_layout.setSpacing(8)
 
-        lbl_devices = QLabel("Devices")
-        lbl_devices.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: 700;")
+        lbl_devices = QLabel("  Devices")
+        lbl_devices.setStyleSheet(
+            "color: #F0F2F4; font-size: 19px; font-weight: 700; "
+            "border-left: 3px solid qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB); "
+            "padding-left: 10px; padding-top: 2px; padding-bottom: 2px; margin-bottom: 4px;"
+        )
         left_layout.addWidget(lbl_devices)
 
         self.device_list = QListWidget()
@@ -1395,23 +1497,27 @@ class App(QMainWindow):
         self.device_list.setAutoFillBackground(True)
         self.device_list.setStyleSheet("""
             QListWidget {
-                background-color: rgba(10, 28, 48, 185);
-                border: 1px solid rgba(55, 100, 180, 100);
-                border-radius: 8px;
+                background-color: rgba(8, 22, 42, 200);
+                border: 1px solid rgba(55, 100, 180, 80);
+                border-radius: 10px;
                 padding: 6px;
                 font-size: 15px;
+                outline: none;
             }
             QListWidget::item {
-                padding: 9px 10px;
-                border-radius: 4px;
+                padding: 10px 12px;
+                border-radius: 6px;
                 color: #C9D1D9;
+                border-left: 3px solid transparent;
+                margin-bottom: 2px;
             }
             QListWidget::item:selected {
-                background-color: rgba(88, 166, 255, 80);
+                background-color: rgba(59, 130, 246, 55);
                 color: #FFFFFF;
+                border-left: 3px solid #3B82F6;
             }
-            QListWidget::item:hover {
-                background-color: rgba(88, 166, 255, 40);
+            QListWidget::item:hover:!selected {
+                background-color: rgba(88, 166, 255, 25);
             }
         """)
         self.device_list.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1420,42 +1526,40 @@ class App(QMainWindow):
         left_layout.addWidget(self.device_list)
 
         dev_btns = QHBoxLayout()
-        btn_add = QPushButton("+ Add")
-        btn_add.setStyleSheet("""
+        _capsule_btn_style = """
             QPushButton {
-                background-color: #2C4563;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
+                background-color: rgba(30, 55, 85, 220);
+                border: 1px solid rgba(88, 140, 210, 50);
+                border-radius: 17px;
+                color: #C9D1D9;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 4px 16px;
             }
             QPushButton:hover {
-                background-color: #38567A;
+                background-color: rgba(45, 75, 115, 240);
+                border: 1px solid rgba(88, 166, 255, 120);
+                color: #FFFFFF;
             }
-        """)
+        """
+        btn_add = QPushButton("+ Add")
+        btn_add.setStyleSheet(_capsule_btn_style)
         btn_add.setFixedHeight(34)
         btn_add.clicked.connect(self.add_device_prompt)
         btn_remove = QPushButton("Remove")
-        btn_remove.setStyleSheet("""
-            QPushButton {
-                background-color: #2C4563;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #38567A;
-            }
-        """)
+        btn_remove.setStyleSheet(_capsule_btn_style)
         btn_remove.setFixedHeight(34)
         btn_remove.clicked.connect(self.remove_selected_device)
         dev_btns.addWidget(btn_add)
         dev_btns.addWidget(btn_remove)
         left_layout.addLayout(dev_btns)
 
-        lbl_templates = QLabel("Templates")
-        lbl_templates.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: 700;")
+        lbl_templates = QLabel("  Templates")
+        lbl_templates.setStyleSheet(
+            "color: #F0F2F4; font-size: 19px; font-weight: 700; "
+            "border-left: 3px solid qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #8B5CF6, stop:1 #6D28D9); "
+            "padding-left: 10px; padding-top: 2px; padding-bottom: 2px; margin-bottom: 4px;"
+        )
         left_layout.addWidget(lbl_templates)
 
         self.template_list = QListWidget()
@@ -1463,23 +1567,27 @@ class App(QMainWindow):
         self.template_list.setAutoFillBackground(True)
         self.template_list.setStyleSheet("""
             QListWidget {
-                background-color: rgba(10, 28, 48, 185);
-                border: 1px solid rgba(55, 100, 180, 100);
-                border-radius: 8px;
+                background-color: rgba(8, 22, 42, 200);
+                border: 1px solid rgba(55, 100, 180, 80);
+                border-radius: 10px;
                 padding: 6px;
                 font-size: 15px;
+                outline: none;
             }
             QListWidget::item {
-                padding: 9px 10px;
-                border-radius: 4px;
+                padding: 10px 12px;
+                border-radius: 6px;
                 color: #C9D1D9;
+                border-left: 3px solid transparent;
+                margin-bottom: 2px;
             }
             QListWidget::item:selected {
-                background-color: rgba(88, 166, 255, 80);
+                background-color: rgba(139, 92, 246, 45);
                 color: #FFFFFF;
+                border-left: 3px solid #8B5CF6;
             }
-            QListWidget::item:hover {
-                background-color: rgba(88, 166, 255, 40);
+            QListWidget::item:hover:!selected {
+                background-color: rgba(139, 92, 246, 18);
             }
         """)
         self.template_list.currentRowChanged.connect(self._on_template_row_changed)
@@ -1488,34 +1596,12 @@ class App(QMainWindow):
         tpl_btns = QHBoxLayout()
         btn_tpl_add = QPushButton("+ Add")
         self._apply_icon(btn_tpl_add, "doc.svg")
-        btn_tpl_add.setStyleSheet("""
-            QPushButton {
-                background-color: #2C4563;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #38567A;
-            }
-        """)
+        btn_tpl_add.setStyleSheet(_capsule_btn_style)
         btn_tpl_add.setFixedHeight(34)
         btn_tpl_add.clicked.connect(self.add_template_dialog)
         btn_tpl_edit = QPushButton("Edit")
         self._apply_icon(btn_tpl_edit, "doc.svg")
-        btn_tpl_edit.setStyleSheet("""
-            QPushButton {
-                background-color: #2C4563;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #38567A;
-            }
-        """)
+        btn_tpl_edit.setStyleSheet(_capsule_btn_style)
         btn_tpl_edit.setFixedHeight(34)
         btn_tpl_edit.clicked.connect(self.edit_template_dialog)
         tpl_btns.addWidget(btn_tpl_add)
@@ -1523,39 +1609,52 @@ class App(QMainWindow):
         left_layout.addLayout(tpl_btns)
 
         left_sep_top = QFrame()
-        left_sep_top.setFrameShape(QFrame.HLine)
-        left_sep_top.setStyleSheet("color: rgba(86,146,228,45);")
+        left_sep_top.setFixedHeight(1)
+        left_sep_top.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 transparent, stop:0.3 rgba(88,166,255,60), "
+            "stop:0.7 rgba(88,166,255,60), stop:1 transparent); "
+            "border: none; margin-top: 6px; margin-bottom: 6px;"
+        )
         left_layout.addWidget(left_sep_top)
 
-        btn_guided = QPushButton("Guided Setup")
+        btn_guided = QPushButton("✦  Guided Setup")
         btn_guided.setStyleSheet("""
             QPushButton {
-                background-color: #238636;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1B7A30, stop:1 #238636);
+                border: 1px solid rgba(46, 160, 67, 80);
+                border-radius: 8px;
                 color: #FFFFFF;
                 font-size: 14px;
                 font-weight: bold;
+                letter-spacing: 0.3px;
             }
-            QPushButton:hover { background-color: #2EA043; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #238636, stop:1 #2EA043);
+                border: 1px solid rgba(63, 185, 80, 120);
+            }
         """)
-        btn_guided.setFixedHeight(36)
+        btn_guided.setFixedHeight(38)
         btn_guided.clicked.connect(self.guided_setup)
         left_layout.addWidget(btn_guided)
 
-        btn_deploy = QPushButton("Deploy All (Ordered)")
+        btn_deploy = QPushButton("⚡  Deploy All (Ordered)")
         btn_deploy.setStyleSheet("""
             QPushButton {
-                background-color: #2563EB;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1D4ED8, stop:1 #2563EB);
+                border: 1px solid rgba(59, 130, 246, 80);
+                border-radius: 8px;
                 color: #FFFFFF;
                 font-size: 14px;
                 font-weight: bold;
+                letter-spacing: 0.3px;
             }
-            QPushButton:hover { background-color: #3B82F6; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563EB, stop:1 #3B82F6);
+                border: 1px solid rgba(96, 165, 250, 130);
+            }
         """)
-        btn_deploy.setFixedHeight(36)
+        btn_deploy.setFixedHeight(38)
         btn_deploy.clicked.connect(self.deploy_all_ordered)
         left_layout.addWidget(btn_deploy)
 
@@ -1578,8 +1677,13 @@ class App(QMainWindow):
         left_layout.addWidget(self.btn_rollback)
 
         left_sep_bottom = QFrame()
-        left_sep_bottom.setFrameShape(QFrame.HLine)
-        left_sep_bottom.setStyleSheet("color: rgba(86,146,228,35);")
+        left_sep_bottom.setFixedHeight(1)
+        left_sep_bottom.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 transparent, stop:0.3 rgba(88,166,255,40), "
+            "stop:0.7 rgba(88,166,255,40), stop:1 transparent); "
+            "border: none; margin-top: 4px; margin-bottom: 4px;"
+        )
         left_layout.addWidget(left_sep_bottom)
 
         left_layout.addStretch()
@@ -1596,7 +1700,11 @@ class App(QMainWindow):
 
         center_header = QHBoxLayout()
         lbl_preview = QLabel("Preview")
-        lbl_preview.setStyleSheet("color: #F0F2F4; font-size: 24px; font-weight: 700;")
+        lbl_preview.setStyleSheet(
+            "color: #F0F2F4; font-size: 26px; font-weight: 800; letter-spacing: 0.5px; "
+            "border-bottom: 2px solid qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 #3B82F6, stop:1 transparent); padding-bottom: 4px;"
+        )
         center_header.addWidget(lbl_preview)
         center_header.addStretch()
 
@@ -1609,14 +1717,17 @@ class App(QMainWindow):
         btn_import = QPushButton("Import Project")
         btn_import.setStyleSheet("""
             QPushButton {
-                background-color: #408CDB;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3574C4, stop:1 #408CDB);
+                border: 1px solid rgba(88, 166, 255, 60);
+                border-radius: 8px;
                 color: #FFFFFF;
                 font-size: 14px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #58A6FF; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #408CDB, stop:1 #58A6FF);
+                border: 1px solid rgba(88, 166, 255, 130);
+            }
         """)
         btn_import.setFixedHeight(36)
         btn_import.clicked.connect(self.import_project)
@@ -1655,24 +1766,43 @@ class App(QMainWindow):
         center_layout.addWidget(self.preview)
 
         center_bottom = QHBoxLayout()
-        btn_generate = QPushButton("Generate")
+        btn_generate = QPushButton("⚙  Generate")
         btn_generate.setStyleSheet("""
             QPushButton {
-                background-color: #408CDB;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 20px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563EB, stop:1 #4F46E5);
+                border: 1px solid rgba(99, 102, 241, 80);
+                border-radius: 21px;
                 color: #FFFFFF;
                 font-size: 16px;
                 font-weight: bold;
+                padding: 0 28px;
+                letter-spacing: 0.5px;
             }
-            QPushButton:hover { background-color: #58A6FF; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3B82F6, stop:1 #6366F1);
+                border: 1px solid rgba(147, 197, 253, 130);
+            }
         """)
         btn_generate.setFixedHeight(42)
         btn_generate.clicked.connect(self.generate_full)
         center_bottom.addWidget(btn_generate)
         center_bottom.addStretch()
         btn_clear = QPushButton("Clear Preview")
-        btn_clear.setProperty("danger", True)
+        btn_clear.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #9CA3AF;
+                border: 1px solid rgba(156, 163, 175, 60);
+                border-radius: 21px;
+                font-size: 14px;
+                padding: 0 20px;
+            }
+            QPushButton:hover {
+                color: #F87171;
+                border: 1px solid rgba(248, 113, 113, 100);
+                background-color: rgba(248, 113, 113, 10);
+            }
+        """)
         btn_clear.setFixedHeight(42)
         btn_clear.clicked.connect(self.clear_preview)
         center_bottom.addWidget(btn_clear)
@@ -1686,9 +1816,9 @@ class App(QMainWindow):
         self.right_panel.setAutoFillBackground(True)
         self.right_panel.setStyleSheet("""
             QFrame#rightPanel {
-                background-color: rgba(11, 29, 50, 100);
-                border-radius: 8px;
-                border: 1px solid rgba(50, 85, 160, 80);
+                background-color: rgba(11, 29, 50, 110);
+                border-radius: 12px;
+                border: 1px solid rgba(50, 85, 160, 65);
             }
         """)
         self.right_panel.setMinimumWidth(340)
@@ -1706,8 +1836,12 @@ class App(QMainWindow):
         right_layout.setSpacing(10)
 
         # Import & Discovery section
-        lbl_gns3 = QLabel("Discovery & Import")
-        lbl_gns3.setStyleSheet("color: white; font-size: 18px; font-weight: 700;")
+        lbl_gns3 = QLabel("  Discovery & Import")
+        lbl_gns3.setStyleSheet(
+            "color: #F0F2F4; font-size: 18px; font-weight: 700; "
+            "border-left: 3px solid qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #F59E0B, stop:1 #D97706); "
+            "padding-left: 10px; padding-top: 2px; padding-bottom: 2px; margin-bottom: 4px;"
+        )
         right_layout.addWidget(lbl_gns3)
 
         gns3_row = QHBoxLayout()
@@ -1728,14 +1862,17 @@ class App(QMainWindow):
         btn_gns3_import = QPushButton("Import")
         btn_gns3_import.setStyleSheet("""
             QPushButton {
-                background-color: #408CDB;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3574C4, stop:1 #408CDB);
+                border: 1px solid rgba(88, 166, 255, 60);
+                border-radius: 8px;
                 color: #FFFFFF;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #58A6FF; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #408CDB, stop:1 #58A6FF);
+                border: 1px solid rgba(88, 166, 255, 130);
+            }
         """)
         btn_gns3_import.setFixedHeight(32)
         btn_gns3_import.clicked.connect(self.gns3_list_projects)
@@ -1743,13 +1880,17 @@ class App(QMainWindow):
         btn_gns3_refresh = QPushButton("Refresh")
         btn_gns3_refresh.setStyleSheet("""
             QPushButton {
-                background-color: #445263;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
+                background-color: rgba(50, 66, 85, 220);
+                border: 1px solid rgba(100, 130, 170, 50);
+                border-radius: 8px;
+                color: #C9D1D9;
+                font-size: 13px;
             }
-            QPushButton:hover { background-color: #55667A; }
+            QPushButton:hover {
+                background-color: rgba(65, 85, 110, 240);
+                border: 1px solid rgba(88, 166, 255, 100);
+                color: #FFFFFF;
+            }
         """)
         btn_gns3_refresh.setFixedHeight(32)
         btn_gns3_refresh.clicked.connect(self.refresh_gns3_connection)
@@ -1757,14 +1898,17 @@ class App(QMainWindow):
         btn_physical_discovery = QPushButton("Add Physical")
         btn_physical_discovery.setStyleSheet("""
             QPushButton {
-                background-color: #238636;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1B7A30, stop:1 #238636);
+                border: 1px solid rgba(46, 160, 67, 60);
+                border-radius: 8px;
                 color: #FFFFFF;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #2EA043; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #238636, stop:1 #2EA043);
+                border: 1px solid rgba(63, 185, 80, 100);
+            }
         """)
         btn_physical_discovery.setFixedHeight(32)
         btn_physical_discovery.clicked.connect(self.show_physical_discovery)
@@ -1772,11 +1916,16 @@ class App(QMainWindow):
         btn_network_rescan = QPushButton("Rescan Networks")
         btn_network_rescan.setStyleSheet("""
             QPushButton {
-                background-color: rgba(30, 60, 45, 180);
-                border: 1px solid rgba(136, 219, 136, 60);
-                color: #A3D8A3; border-radius: 4px; padding: 4px;
+                background-color: rgba(25, 50, 40, 200);
+                border: 1px solid rgba(100, 200, 130, 45);
+                border-radius: 8px;
+                color: #86EFAC;
+                font-size: 13px;
             }
-            QPushButton:hover { background-color: rgba(40, 80, 55, 200); }
+            QPushButton:hover {
+                background-color: rgba(35, 70, 50, 230);
+                border: 1px solid rgba(134, 239, 172, 80);
+            }
         """)
         btn_network_rescan.setFixedHeight(32)
         btn_network_rescan.clicked.connect(self._assign_network_ids)
@@ -1787,13 +1936,22 @@ class App(QMainWindow):
         right_layout.addLayout(gns3_btns)
 
         right_sep_top = QFrame()
-        right_sep_top.setFrameShape(QFrame.HLine)
-        right_sep_top.setStyleSheet("color: rgba(86,146,228,45);")
+        right_sep_top.setFixedHeight(1)
+        right_sep_top.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 transparent, stop:0.3 rgba(88,166,255,50), "
+            "stop:0.7 rgba(88,166,255,50), stop:1 transparent); "
+            "border: none; margin-top: 6px; margin-bottom: 6px;"
+        )
         right_layout.addWidget(right_sep_top)
 
         # Send / Connect section
-        lbl_send = QLabel("Send / Connect")
-        lbl_send.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: 700;")
+        lbl_send = QLabel("  Send / Connect")
+        lbl_send.setStyleSheet(
+            "color: #F0F2F4; font-size: 18px; font-weight: 700; "
+            "border-left: 3px solid qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB); "
+            "padding-left: 10px; padding-top: 2px; padding-bottom: 2px; margin-bottom: 4px;"
+        )
         right_layout.addWidget(lbl_send)
 
         self.send_method = QComboBox()
@@ -1866,17 +2024,26 @@ class App(QMainWindow):
         ):
             _le.returnPressed.connect(self._on_connection_field_return)
 
-        self.btn_send = QPushButton("Send")
+        self.btn_send = QPushButton("➤  Send")
         self.btn_send.setStyleSheet("""
             QPushButton {
-                background-color: #1F6FEB;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 20px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1D4ED8, stop:1 #2563EB);
+                border: 1px solid rgba(59, 130, 246, 80);
+                border-radius: 21px;
                 color: #FFFFFF;
                 font-size: 16px;
                 font-weight: bold;
+                letter-spacing: 0.5px;
             }
-            QPushButton:hover { background-color: #388BFD; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563EB, stop:1 #3B82F6);
+                border: 1px solid rgba(96, 165, 250, 140);
+            }
+            QPushButton:disabled {
+                background: rgba(35, 42, 52, 180);
+                color: #4A5568;
+                border: 1px solid rgba(80, 100, 130, 40);
+            }
         """)
         self.btn_send.setFixedHeight(42)
         self._apply_icon(self.btn_send, "router.svg")
@@ -1910,32 +2077,29 @@ class App(QMainWindow):
         send_row.addWidget(self.btn_ai, 0)
         right_layout.addLayout(send_row)
 
-        btn_save_creds = QPushButton("Save Credentials")
-        btn_save_creds.setStyleSheet("""
+        _ghost_btn_style = """
             QPushButton {
                 background-color: transparent;
-                border: 1px solid rgba(88, 166, 255, 120);
-                border-radius: 6px;
-                color: #58A6FF;
-                font-size: 14px;
+                border: 1px solid rgba(88, 166, 255, 90);
+                border-radius: 8px;
+                color: #7CB8F0;
+                font-size: 13px;
+                font-weight: 600;
             }
-            QPushButton:hover { background-color: rgba(88, 166, 255, 30); }
-        """)
+            QPushButton:hover {
+                background-color: rgba(88, 166, 255, 16);
+                border: 1px solid rgba(88, 166, 255, 160);
+                color: #93C5FD;
+            }
+        """
+        btn_save_creds = QPushButton("Save Credentials")
+        btn_save_creds.setStyleSheet(_ghost_btn_style)
         btn_save_creds.setFixedHeight(34)
         btn_save_creds.clicked.connect(self.save_credentials)
         right_layout.addWidget(btn_save_creds)
 
         btn_terminal = QPushButton("Open Terminal")
-        btn_terminal.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                border: 1px solid rgba(88, 166, 255, 120);
-                border-radius: 6px;
-                color: #58A6FF;
-                font-size: 14px;
-            }
-            QPushButton:hover { background-color: rgba(88, 166, 255, 30); }
-        """)
+        btn_terminal.setStyleSheet(_ghost_btn_style)
         btn_terminal.setFixedHeight(34)
         btn_terminal.clicked.connect(self.open_terminal)
         right_layout.addWidget(btn_terminal)
@@ -4239,7 +4403,39 @@ class App(QMainWindow):
             if ret != QMessageBox.Yes:
                 event.ignore()
                 return
+        self._shutdown_copilot_on_exit()
         event.accept()
+
+    def _shutdown_copilot_on_exit(self):
+        """Stop the Copilot dialog/worker before Qt tears down widgets."""
+        dlg = getattr(self, "_copilot_dlg", None)
+        if dlg is not None:
+            try:
+                dlg._closing_for_app = True
+                if hasattr(dlg, "_chips_timer"):
+                    dlg._chips_timer.stop()
+                if hasattr(dlg, "_thinking_dots"):
+                    dlg._thinking_dots.stop()
+                if hasattr(dlg, "_disconnect_worker_signals"):
+                    dlg._disconnect_worker_signals()
+                dlg.close()
+                dlg.deleteLater()
+            except Exception:
+                pass
+            self._copilot_dlg = None
+
+        worker = getattr(self, "_copilot_worker", None)
+        if worker is None:
+            return
+        try:
+            self._copilot_history = getattr(worker, "_messages", [])
+            worker.stop()
+            if worker.isRunning() and not worker.wait(5000):
+                worker.terminate()
+                worker.wait(1500)
+        except Exception:
+            pass
+        self._copilot_worker = None
 
     # ── DB stubs (kept for compatibility) ───────────────────────────────
 
