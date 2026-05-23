@@ -18,6 +18,8 @@ def _venv_python_path(project_root: str) -> str:
 
 def _maybe_reexec_in_venv(project_root: str) -> None:
     """Relaunch with local .venv interpreter to avoid dependency mismatches."""
+    if getattr(sys, "frozen", False):
+        return
     venv_python = _venv_python_path(project_root)
     if not os.path.exists(venv_python):
         return

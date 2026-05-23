@@ -25,7 +25,7 @@ base = "Win32GUI" if sys.platform == "win32" else None
 
 setup(
     name="ANCS",
-    version="2.1.0",
+    version="2.3.0",
     description="Auto Network Configuration System - Router-on-a-Stick & RIPv2 Support",
     author="ANCS Team",
     options={"build_exe": build_options},
