@@ -2712,7 +2712,7 @@ class CopilotWorker(QThread):
     def _process_response_gemini(self, response):
         """Handle the agentic tool-calling loop and return final text."""
         MAX_TURNS = 10
-        turn_tool_calls = set()
+        turn_tool_calls = {}
         for turn in range(MAX_TURNS):
             if not self._running:
                 break
@@ -2740,11 +2740,23 @@ class CopilotWorker(QThread):
 
                 # Track duplicate tool calls to prevent loops
                 call_key = (fn_name, json.dumps(fn_args, sort_keys=True))
-                if call_key in turn_tool_calls:
-                    result = f"Error: Tool loop detected. You have already called {fn_name} with these arguments in this turn. Do not retry. Report this failure/state to the user immediately."
-                    ctx.log(f"<span style='color:#d29922'>[Copilot] Loop prevented: {fn_name} called again with same args</span>\n")
+                call_count = turn_tool_calls.get(call_key, 0) + 1
+                turn_tool_calls[call_key] = call_count
+
+                if call_count > 3:  # Allow up to 3 identical calls, block on the 4th
+                    # Replicate the log tool call wrap so UI stays perfectly aligned
+                    args_preview = ", ".join(f"{k}={repr(v)[:80]}" for k, v in fn_args.items()).replace('<', '&lt;').replace('>', '&gt;')
+                    ctx.log(f"<span style='color:#a371f7'><b>[Tool Call]</b> {fn_name}({args_preview})</span>\n")
+                    if hasattr(ctx, 'logger') and ctx.logger:
+                        ctx.logger.log_tool_call(fn_name, fn_args)
+
+                    ctx.log(f"<span style='color:#d29922'>[Copilot] Loop prevented: {fn_name} called again with same args ({call_count} times)</span>\n")
+
+                    result = f"Error: Tool loop detected. You have already called {fn_name} with these arguments {call_count - 1} times in this turn. Do not retry. Report this failure/state to the user immediately."
+                    ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {result}</span>\n")
+                    if hasattr(ctx, 'logger') and ctx.logger:
+                        ctx.logger.log_error(f"{fn_name} error: {result}")
                 else:
-                    turn_tool_calls.add(call_key)
                     t0 = time.monotonic()
                     if fn_name in TOOL_MAP:
                         try:
@@ -2805,7 +2817,7 @@ class CopilotWorker(QThread):
         Single tool calls run directly on the current thread (no overhead).
         """
         MAX_TURNS = 10
-        turn_tool_calls = set()
+        turn_tool_calls = {}
         for turn in range(MAX_TURNS):
             if not self._running:
                 break
@@ -2917,10 +2929,24 @@ class CopilotWorker(QThread):
 
         if turn_tool_calls is not None:
             call_key = (fn_name, json.dumps(fn_args, sort_keys=True))
-            if call_key in turn_tool_calls:
-                ctx.log(f"<span style='color:#d29922'>[Copilot] Loop prevented: {fn_name} called again with same args</span>\n")
-                return f"Error: Tool loop detected. You have already called {fn_name} with these arguments in this turn. Do not retry. Report this failure/state to the user immediately."
-            turn_tool_calls.add(call_key)
+            call_count = turn_tool_calls.get(call_key, 0) + 1
+            turn_tool_calls[call_key] = call_count
+
+            if call_count > 3:  # Allow up to 3 identical calls, block on the 4th
+                # Replicate the log tool call wrap so UI stays perfectly aligned
+                args_preview = ", ".join(f"{k}={repr(v)[:80]}" for k, v in fn_args.items()).replace('<', '&lt;').replace('>', '&gt;')
+                ctx.log(f"<span style='color:#a371f7'><b>[Tool Call]</b> {fn_name}({args_preview})</span>\n")
+                if hasattr(ctx, 'logger') and ctx.logger:
+                    ctx.logger.log_tool_call(fn_name, fn_args)
+
+                ctx.log(f"<span style='color:#d29922'>[Copilot] Loop prevented: {fn_name} called again with same args ({call_count} times)</span>\n")
+
+                result = f"Error: Tool loop detected. You have already called {fn_name} with these arguments {call_count - 1} times in this turn. Do not retry. Report this failure/state to the user immediately."
+                ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {result}</span>\n")
+                if hasattr(ctx, 'logger') and ctx.logger:
+                    ctx.logger.log_error(f"{fn_name} error: {result}")
+
+                return result
 
         if fn_name in _MAJOR_TOOL_STATUS:
             self.terminal_log_signal.emit(
