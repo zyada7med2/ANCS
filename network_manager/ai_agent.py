@@ -2740,19 +2740,18 @@ class CopilotWorker(QThread):
 
                 # Track duplicate tool calls to prevent loops
                 call_key = (fn_name, json.dumps(fn_args, sort_keys=True))
-                call_count = turn_tool_calls.get(call_key, 0) + 1
-                turn_tool_calls[call_key] = call_count
+                error_count = turn_tool_calls.get(call_key, 0)
 
-                if call_count > 3:  # Allow up to 3 identical calls, block on the 4th
+                if error_count >= 3:  # Block on the 4th identical failure
                     # Replicate the log tool call wrap so UI stays perfectly aligned
                     args_preview = ", ".join(f"{k}={repr(v)[:80]}" for k, v in fn_args.items()).replace('<', '&lt;').replace('>', '&gt;')
                     ctx.log(f"<span style='color:#a371f7'><b>[Tool Call]</b> {fn_name}({args_preview})</span>\n")
                     if hasattr(ctx, 'logger') and ctx.logger:
                         ctx.logger.log_tool_call(fn_name, fn_args)
 
-                    ctx.log(f"<span style='color:#d29922'>[Copilot] Loop prevented: {fn_name} called again with same args ({call_count} times)</span>\n")
+                    ctx.log(f"<span style='color:#d29922'>[Copilot] Loop prevented: {fn_name} called again after 3 failures</span>\n")
 
-                    result = f"Error: Tool loop detected. You have already called {fn_name} with these arguments {call_count - 1} times in this turn. Do not retry. Report this failure/state to the user immediately."
+                    result = f"Error: Tool loop detected. You have already called {fn_name} with these arguments and it failed 3 times in this turn. Do not retry. Report this failure/state to the user immediately."
                     ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {result}</span>\n")
                     if hasattr(ctx, 'logger') and ctx.logger:
                         ctx.logger.log_error(f"{fn_name} error: {result}")
@@ -2767,6 +2766,20 @@ class CopilotWorker(QThread):
                         result = f"Unknown tool: {fn_name}"
                         ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: Unknown tool</span>\n")
                     dt_ms = (time.monotonic() - t0) * 1000.0
+
+                    # Check if result is an error/failure. If so, increment the failure counter
+                    result_str = str(result)
+                    result_lower = result_str.lower()
+                    is_err = (
+                        result_lower.startswith("error:") or 
+                        result_lower.startswith("tool error:") or
+                        result_lower.startswith("unknown tool:") or
+                        "no connection info" in result_lower or
+                        "no host/credentials" in result_lower or
+                        result_lower.startswith("exception:")
+                    )
+                    if is_err:
+                        turn_tool_calls[call_key] = error_count + 1
 
                 function_responses.append(
                     types.Part.from_function_response(
@@ -2929,19 +2942,18 @@ class CopilotWorker(QThread):
 
         if turn_tool_calls is not None:
             call_key = (fn_name, json.dumps(fn_args, sort_keys=True))
-            call_count = turn_tool_calls.get(call_key, 0) + 1
-            turn_tool_calls[call_key] = call_count
+            error_count = turn_tool_calls.get(call_key, 0)
 
-            if call_count > 3:  # Allow up to 3 identical calls, block on the 4th
+            if error_count >= 3:  # Block on the 4th identical failure
                 # Replicate the log tool call wrap so UI stays perfectly aligned
                 args_preview = ", ".join(f"{k}={repr(v)[:80]}" for k, v in fn_args.items()).replace('<', '&lt;').replace('>', '&gt;')
                 ctx.log(f"<span style='color:#a371f7'><b>[Tool Call]</b> {fn_name}({args_preview})</span>\n")
                 if hasattr(ctx, 'logger') and ctx.logger:
                     ctx.logger.log_tool_call(fn_name, fn_args)
 
-                ctx.log(f"<span style='color:#d29922'>[Copilot] Loop prevented: {fn_name} called again with same args ({call_count} times)</span>\n")
+                ctx.log(f"<span style='color:#d29922'>[Copilot] Loop prevented: {fn_name} called again after 3 failures</span>\n")
 
-                result = f"Error: Tool loop detected. You have already called {fn_name} with these arguments {call_count - 1} times in this turn. Do not retry. Report this failure/state to the user immediately."
+                result = f"Error: Tool loop detected. You have already called {fn_name} with these arguments and it failed 3 times in this turn. Do not retry. Report this failure/state to the user immediately."
                 ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {result}</span>\n")
                 if hasattr(ctx, 'logger') and ctx.logger:
                     ctx.logger.log_error(f"{fn_name} error: {result}")
@@ -2967,6 +2979,21 @@ class CopilotWorker(QThread):
             ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: Unknown tool</span>\n")
         dt_ms = (time.monotonic() - t0) * 1000.0
 
+        # After execution: check if it failed. If so, increment the failure counter
+        if turn_tool_calls is not None:
+            call_key = (fn_name, json.dumps(fn_args, sort_keys=True))
+            result_str = str(result)
+            result_lower = result_str.lower()
+            is_err = (
+                result_lower.startswith("error:") or 
+                result_lower.startswith("tool error:") or
+                result_lower.startswith("unknown tool:") or
+                "no connection info" in result_lower or
+                "no host/credentials" in result_lower or
+                result_lower.startswith("exception:")
+            )
+            if is_err:
+                turn_tool_calls[call_key] = error_count + 1
 
         return str(result)
 
