@@ -2037,6 +2037,50 @@ ALL_TOOLS = [
     get_agent_guidelines,
 ]
 
+# Wrap all functions in ALL_TOOLS dynamically to intercept and log calls
+def log_tool_execution(fn):
+    """Decorator to automatically log tool calls, timing, and errors.
+    
+    This ensures that when Gemini/Vertex AI calls functions automatically in the background
+    (via automatic function calling), the logs are intercepted at the local Python level
+    and correctly output to the Console Stream and parsed by the UI for structured cards.
+    """
+    import functools
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        fn_name = fn.__name__
+        args_preview = ", ".join(
+            [repr(a)[:80] for a in args] +
+            [f"{k}={repr(v)[:80]}" for k, v in kwargs.items()]
+        ).replace('<', '&lt;').replace('>', '&gt;')
+        
+        # Emit [Tool Call] log
+        ctx.log(
+            f"<span style='color:#a371f7'><b>[Tool Call]</b> {fn_name}({args_preview})</span>\n"
+        )
+        
+        t0 = time.monotonic()
+        try:
+            result = fn(*args, **kwargs)
+            dt_ms = (time.monotonic() - t0) * 1000.0
+            
+            # Format and emit [Tool Result] log
+            result_preview = str(result)[:300].replace('<', '&lt;').replace('>', '&gt;')
+            ctx.log(
+                f"<span style='color:#8b949e'>[Tool Result] {fn_name} → {dt_ms:.0f}ms | "
+                f"{result_preview}{'…' if len(str(result)) > 300 else ''}</span>\n"
+            )
+            return result
+        except Exception as e:
+            dt_ms = (time.monotonic() - t0) * 1000.0
+            # Format and emit [Tool Error] log
+            ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {e}</span>\n")
+            raise
+            
+    return wrapper
+
+ALL_TOOLS = [log_tool_execution(fn) for fn in ALL_TOOLS]
+
 # Map function names for the agentic loop dispatcher
 TOOL_MAP = {fn.__name__: fn for fn in ALL_TOOLS}
 
@@ -2650,29 +2694,16 @@ class CopilotWorker(QThread):
                 fn_name = fc.name
                 fn_args = dict(fc.args) if fc.args else {}
 
-                # Log tool call with arguments
-                args_preview = ", ".join(f"{k}={repr(v)[:80]}" for k, v in fn_args.items())
-                ctx.log(
-                    f"<span style='color:#a371f7'><b>[Tool Call]</b> {fn_name}({args_preview})</span>\n"
-                )
-
                 t0 = time.monotonic()
                 if fn_name in TOOL_MAP:
                     try:
                         result = TOOL_MAP[fn_name](**fn_args)
                     except Exception as e:
                         result = f"Tool error: {e}"
-                        ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {e}</span>\n")
                 else:
                     result = f"Unknown tool: {fn_name}"
+                    ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: Unknown tool</span>\n")
                 dt_ms = (time.monotonic() - t0) * 1000.0
-
-                # Log result preview + timing
-                result_preview = str(result)[:300].replace('<', '&lt;').replace('>', '&gt;')
-                ctx.log(
-                    f"<span style='color:#8b949e'>[Tool Result] {fn_name} → {dt_ms:.0f}ms | "
-                    f"{result_preview}{'…' if len(str(result)) > 300 else ''}</span>\n"
-                )
 
                 # Session logger
                 self._logger.log_tool_call(fn_name, fn_args)
@@ -2840,9 +2871,6 @@ class CopilotWorker(QThread):
             fn_args = {}
             ctx.log(f"<span style='color:#d29922'>[Copilot] Warning: bad JSON args for {fn_name}</span>\n")
 
-        args_preview = ", ".join(f"{k}={repr(v)[:80]}" for k, v in fn_args.items())
-        ctx.log(f"<span style='color:#a371f7'><b>[Tool Call]</b> {fn_name}({args_preview})</span>\n")
-
         if fn_name in _MAJOR_TOOL_STATUS:
             self.terminal_log_signal.emit(
                 f"<span style='color: #8b949e'>[Copilot] {_MAJOR_TOOL_STATUS[fn_name]}</span>\n"
@@ -2857,16 +2885,10 @@ class CopilotWorker(QThread):
                 ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {e}</span>\n")
             except Exception as e:
                 result = f"Tool error: {e}"
-                ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {e}</span>\n")
         else:
             result = f"Unknown tool: {fn_name}"
+            ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: Unknown tool</span>\n")
         dt_ms = (time.monotonic() - t0) * 1000.0
-
-        result_preview = str(result)[:300].replace('<', '&lt;').replace('>', '&gt;')
-        ctx.log(
-            f"<span style='color:#8b949e'>[Tool Result] {fn_name} → {dt_ms:.0f}ms | "
-            f"{result_preview}{'…' if len(str(result)) > 300 else ''}</span>\n"
-        )
 
         # Session logger
         self._logger.log_tool_call(fn_name, fn_args)
