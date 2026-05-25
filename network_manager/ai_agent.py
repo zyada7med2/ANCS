@@ -2507,9 +2507,9 @@ class CopilotWorker(QThread):
         ctx.workspace_resolved = self.workspace_resolved  # live GNS3 ports for tool functions
         ctx.logger = self._logger
 
-    def queue_message(self, text: str):
+    def queue_message(self, text: str, attachment_path: str = None):
         """Called from the GUI thread to queue a user message."""
-        self._msg_queue.append(text)
+        self._msg_queue.append({"text": text, "attachment_path": attachment_path})
 
     def stop(self):
         self._running = False
@@ -3251,14 +3251,73 @@ class CopilotWorker(QThread):
                         pass
 
                 if self._msg_queue:
-                    user_msg = self._msg_queue.pop(0)
+                    msg_item = self._msg_queue.pop(0)
+                    if isinstance(msg_item, dict):
+                        user_msg = msg_item.get("text", "")
+                        attachment_path = msg_item.get("attachment_path", None)
+                    else:
+                        user_msg = str(msg_item)
+                        attachment_path = None
+
                     self.terminal_log_signal.emit(f"\n<span style='color: #58A6FF'><b>[User]</b> {user_msg}</span>\n")
-                    self._logger.log_user_message(user_msg)
+                    if attachment_path:
+                        import os
+                        self.terminal_log_signal.emit(
+                            f"<span style='color: #a371f7'>📎 <b>[Attachment]</b> {os.path.basename(attachment_path)}</span>\n"
+                        )
+
+                    self._logger.log_user_message(user_msg + (f" [Attached: {os.path.basename(attachment_path)}]" if attachment_path else ""))
                     try:
                         if self.provider in ("gemini", "vertex"):
-                            response = self._send_with_retry(user_msg)
+                            contents = []
+                            if attachment_path:
+                                try:
+                                    import mimetypes
+                                    mtype, _ = mimetypes.guess_type(attachment_path)
+                                    if not mtype:
+                                        mtype = "application/octet-stream"
+                                    with open(attachment_path, "rb") as f:
+                                        fbytes = f.read()
+                                    
+                                    # Create Gemini SDK part
+                                    part = types.Part.from_bytes(data=fbytes, mime_type=mtype)
+                                    contents.append(part)
+                                except Exception as e:
+                                    self.terminal_log_signal.emit(
+                                        f"<span style='color: #d73a49'>[Copilot] Failed to load attachment: {e}</span>\n"
+                                    )
+                            contents.append(user_msg)
+                            response = self._send_with_retry(contents if len(contents) > 1 else user_msg)
                         else:
-                            self._messages.append({"role": "user", "content": user_msg})
+                            content_list = []
+                            if attachment_path:
+                                import mimetypes
+                                mtype, _ = mimetypes.guess_type(attachment_path)
+                                if not mtype:
+                                    mtype = "application/octet-stream"
+                                
+                                # If it's an image and OpenRouter, pass as base64 data URI
+                                if mtype.startswith("image/"):
+                                    import base64
+                                    try:
+                                        with open(attachment_path, "rb") as f:
+                                            b64_data = base64.b64encode(f.read()).decode("utf-8")
+                                        content_list = [
+                                            {"type": "text", "text": user_msg},
+                                            {
+                                                "type": "image_url",
+                                                "image_url": {
+                                                    "url": f"data:{mtype};base64,{b64_data}"
+                                                }
+                                            }
+                                        ]
+                                    except Exception as e:
+                                        self.terminal_log_signal.emit(f"<span style='color: #d73a49'>[Copilot] Base64 encode failed: {e}</span>\n")
+                                
+                            if not content_list:
+                                content_list = user_msg + (f" [Attached PDF/File: {os.path.basename(attachment_path)}]" if attachment_path else "")
+
+                            self._messages.append({"role": "user", "content": content_list})
                             self._compress_context()  # Compress old tool results first
                             self._truncate_history()   # Then trim if still too long
                             kwargs = {

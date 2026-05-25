@@ -511,6 +511,48 @@
             border-color: var(--border-light);
         }
 
+        /* Attachment Pill Styling */
+        .attachment-container {
+            display: none;
+            align-items: center;
+            background: rgba(163, 113, 247, 0.1);
+            border: 1px solid rgba(163, 113, 247, 0.2);
+            border-radius: 6px;
+            padding: 6px 12px;
+            margin-bottom: 8px;
+            gap: 8px;
+            width: fit-content;
+            animation: fadeIn 0.2s ease-out;
+        }
+        
+        .attachment-icon {
+            color: #a371f7;
+            display: flex;
+            align-items: center;
+        }
+        
+        .attachment-name {
+            color: var(--text-pri);
+            font-size: 12px;
+            font-family: 'Outfit', sans-serif;
+            font-weight: 500;
+        }
+        
+        .attachment-remove {
+            background: transparent;
+            border: none;
+            color: var(--text-sec);
+            cursor: pointer;
+            padding: 2px;
+            display: flex;
+            align-items: center;
+            transition: color 0.2s;
+        }
+        
+        .attachment-remove:hover {
+            color: #ef4444;
+        }
+
         .chat-input-box input {
             flex: 1;
             background: transparent;
@@ -1676,8 +1718,19 @@
 
             <!-- Input Bar -->
             <div class="chat-input-area">
+                <!-- Attachment Pill Container -->
+                <div id="chat-attachment-pill" class="attachment-container">
+                    <span class="attachment-icon">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+                    </span>
+                    <span id="chat-attachment-name" class="attachment-name"></span>
+                    <button class="attachment-remove" title="Remove File" onclick="triggerRemoveAttachment()">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                    </button>
+                </div>
+
                 <div class="chat-input-box">
-                    <button class="chat-input-btn" title="Add File">
+                    <button class="chat-input-btn" title="Add File" onclick="triggerSelectFile()">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
                     </button>
                     <button class="chat-input-btn" title="Terminal Mode">
@@ -3038,10 +3091,17 @@
             }
         }
 
-        // Trigger export action — routes through Python bridge
-        function exportChatConversation() {
-            if (window.bridge && window.bridge.exportLogs) {
-                window.bridge.exportLogs();
+        // Trigger select file native picker
+        function triggerSelectFile() {
+            if (window.bridge && window.bridge.selectFile) {
+                window.bridge.selectFile();
+            }
+        }
+
+        // Trigger remove attachment
+        function triggerRemoveAttachment() {
+            if (window.bridge && window.bridge.removeAttachment) {
+                window.bridge.removeAttachment();
             }
         }
 
@@ -4004,6 +4064,26 @@
                         });
                     }
                     
+                    if (window.bridge.fileAttached) {
+                        window.bridge.fileAttached.connect(function(filename, path) {
+                            const pill = document.getElementById('chat-attachment-pill');
+                            const name = document.getElementById('chat-attachment-name');
+                            if (pill && name) {
+                                name.textContent = filename;
+                                pill.style.display = 'flex';
+                            }
+                        });
+                    }
+
+                    if (window.bridge.clearAttachment) {
+                        window.bridge.clearAttachment.connect(function() {
+                            const pill = document.getElementById('chat-attachment-pill');
+                            if (pill) {
+                                pill.style.display = 'none';
+                            }
+                        });
+                    }
+
                     // Notify Python that JS is ready
                     if (window.bridge.jsReady) {
                         window.bridge.jsReady();

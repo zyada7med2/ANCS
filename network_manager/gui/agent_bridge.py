@@ -26,6 +26,8 @@ class AgentBridge(QObject):
     updateDevices = Signal(str)                   # JSON array of device objects
     updateConnections = Signal(str)               # JSON array of GNS3 link objects
     pushSettings = Signal(str)                    # JSON settings object
+    fileAttached = Signal(str, str)               # filename, absolute_path
+    clearAttachment = Signal()                    # clear current attachment pill
 
     def __init__(self, dialog):
         super().__init__(dialog)
@@ -55,20 +57,26 @@ class AgentBridge(QObject):
 
         self.setThinking.emit(True, "Processing...")
 
+        # Extract attachment path if any
+        attachment_path = getattr(self._dialog, '_active_attachment', None)
+        if attachment_path:
+            self._dialog._active_attachment = None
+            self.clearAttachment.emit()
+
         # Queue message to the CopilotWorker
         worker = getattr(self.app, '_copilot_worker', None)
         if worker and worker.isRunning():
-            worker.queue_message(text)
+            worker.queue_message(text, attachment_path)
         else:
             # Not connected — try auto-connect first
             self._dialog._launch_agent()
             # Wait a moment then queue
-            QTimer.singleShot(1500, lambda: self._delayed_send(text))
+            QTimer.singleShot(1500, lambda: self._delayed_send(text, attachment_path))
 
-    def _delayed_send(self, text):
+    def _delayed_send(self, text, attachment_path=None):
         worker = getattr(self.app, '_copilot_worker', None)
         if worker and worker.isRunning():
-            worker.queue_message(text)
+            worker.queue_message(text, attachment_path)
         else:
             self.addChatMessage.emit(
                 "system",
@@ -189,3 +197,31 @@ class AgentBridge(QObject):
         self._dialog._launch_agent()
         self.setThinking.emit(False, "")
         self.addChatMessage.emit("system", "Process stopped by user.", "")
+
+    @Slot()
+    def selectFile(self):
+        """Launch native file picker to attach a PDF or Image."""
+        from PySide6.QtWidgets import QFileDialog
+        file_path, _ = QFileDialog.getOpenFileName(
+            self._dialog, "Attach File to Copilot", "",
+            "Supported Files (*.pdf *.png *.jpg *.jpeg *.webp);;PDF Files (*.pdf);;Images (*.png *.jpg *.jpeg *.webp);;All Files (*)"
+        )
+        if not file_path:
+            return
+
+        # Store the active attachment path on the dialog
+        self._dialog._active_attachment = file_path
+
+        # Extract filename for display in Web UI
+        import os
+        filename = os.path.basename(file_path)
+
+        # Send signal to JS to show the attachment pill in the input box
+        self.fileAttached.emit(filename, file_path)
+
+    @Slot()
+    def removeAttachment(self):
+        """Remove the active file attachment."""
+        if hasattr(self._dialog, '_active_attachment'):
+            self._dialog._active_attachment = None
+        self.clearAttachment.emit()
