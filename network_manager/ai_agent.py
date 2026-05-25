@@ -2779,12 +2779,15 @@ class CopilotWorker(QThread):
             self._truncate_history()
             for attempt in range(3):
                 try:
-                    response = self._client.chat.completions.create(
-                        model=self.model_name,
-                        messages=self._messages,
-                        tools=OPENAI_TOOLS,
-                        extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"} if self.provider == "openrouter" else {},
-                    )
+                    kwargs = {
+                        "model": self.model_name,
+                        "messages": self._messages,
+                        "tools": OPENAI_TOOLS,
+                        "temperature": 0.2,
+                    }
+                    if self.provider == "openrouter":
+                        kwargs["extra_headers"] = {"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"}
+                    response = self._client.chat.completions.create(**kwargs)
                     break
                 except openai.RateLimitError:
                     if attempt < 2:
@@ -3059,15 +3062,21 @@ class CopilotWorker(QThread):
                     return
 
             else:
-                # ── OpenRouter / Hapuppy path (OpenAI-compatible) ──
-                provider_name = "Hapuppy" if self.provider == "hapuppy" else "OpenRouter"
+                # ── OpenRouter / Hapuppy / NVIDIA path (OpenAI-compatible) ──
+                provider_name = "Hapuppy" if self.provider == "hapuppy" else "NVIDIA NIM" if self.provider == "nvidia" else "OpenRouter"
                 self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Initializing {provider_name}...</span>\n")
                 key_preview = f"{self.api_key[:8]}...{self.api_key[-4:]}" if len(self.api_key) > 12 else "(empty)"
                 self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] API Key: {key_preview}</span>\n")
                 self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Provider: {self.provider} | Model: {self.model_name}</span>\n")
 
-                base_url = "https://beta.hapuppy.com/v1" if self.provider == "hapuppy" else "https://openrouter.ai/api/v1"
-                headers = {"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"} if self.provider == "openrouter" else {}
+                if self.provider == "hapuppy":
+                    base_url = "https://beta.hapuppy.com/v1"
+                elif self.provider == "nvidia":
+                    base_url = "https://integrate.api.nvidia.com/v1"
+                else:
+                    base_url = "https://openrouter.ai/api/v1"
+                
+                headers = {"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"} if self.provider == "openrouter" else None
 
                 # Set timeout to 115 s — just under Hapuppy/Cloudflare's 120 s proxy
                 # read-timeout window.  This makes Python raise openai.APITimeoutError
@@ -3108,12 +3117,15 @@ class CopilotWorker(QThread):
                             self._messages.append({"role": "user", "content": user_msg})
                             self._compress_context()  # Compress old tool results first
                             self._truncate_history()   # Then trim if still too long
-                            response = self._client.chat.completions.create(
-                                model=self.model_name,
-                                messages=self._messages,
-                                tools=OPENAI_TOOLS,
-                                extra_headers={"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"} if self.provider == "openrouter" else {},
-                            )
+                            kwargs = {
+                                "model": self.model_name,
+                                "messages": self._messages,
+                                "tools": OPENAI_TOOLS,
+                                "temperature": 0.2,
+                            }
+                            if self.provider == "openrouter":
+                                kwargs["extra_headers"] = {"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"}
+                            response = self._client.chat.completions.create(**kwargs)
                         reply = self._process_response(response)
                         self._logger.log_ai_response(reply)
                         self.chat_response_signal.emit(reply)

@@ -1,0 +1,3555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ANCS Agent Dashboard</title>
+    <script src="qwebchannel.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+        :root {
+            --bg-deep: #080C14;
+            --bg-panel: #0F1622;
+            --border: #1E2D3D;
+            --border-light: #2A3B4D;
+            --text-pri: #E2E8F0;
+            --text-sec: #94A3B8;
+            --text-muted: #475569;
+            --accent: #2563EB;
+            --accent-hover: #3B82F6;
+            --green: #10B981;
+            --yellow: #D97706;
+            --cyan: #06B6D4;
+            --purple: #8B5CF6;
+        }
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            height: 100vh;
+            background-color: var(--bg-deep);
+            color: var(--text-pri);
+            font-family: 'Inter', system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--bg-deep);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 3px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--border-light);
+        }
+
+        /* Top Header */
+        .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            padding: 16px 24px;
+            background: var(--bg-deep);
+        }
+
+        .header-left {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .header-title-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .header-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-pri);
+            margin: 0;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            color: var(--text-sec);
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            background-color: var(--green);
+            border-radius: 50%;
+            display: inline-block;
+        }
+
+        .status-dot.pulsing {
+            box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+            animation: pulse-green 2s infinite;
+        }
+
+        @keyframes pulse-green {
+            0% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0.7);
+            }
+            70% {
+                transform: scale(1);
+                box-shadow: 0 0 0 6px rgba(16, 185, 129, 0);
+            }
+            100% {
+                transform: scale(0.95);
+                box-shadow: 0 0 0 0 rgba(16, 185, 129, 0);
+            }
+        }
+
+        .header-info-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 12px;
+            color: var(--text-sec);
+        }
+
+        .model-pill {
+            background: #131C26;
+            border: 1px solid #334155;
+            padding: 2px 8px;
+            border-radius: 4px;
+            color: var(--text-sec);
+            font-weight: 500;
+        }
+
+        .header-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            color: var(--text-sec);
+        }
+
+        .window-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-sec);
+            cursor: pointer;
+            padding: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: background 0.2s, color 0.2s;
+        }
+
+        .window-btn:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-pri);
+        }
+
+        .window-btn.close:hover {
+            background: #EF4444;
+            color: white;
+        }
+
+        /* Tabs Section */
+        .tabs-container {
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-deep);
+            padding: 0 24px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 8px;
+        }
+
+        .tab {
+            padding: 12px 16px;
+            color: var(--text-sec);
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            position: relative;
+            transition: color 0.2s;
+        }
+
+        .tab:hover {
+            color: var(--text-pri);
+        }
+
+        .tab.active {
+            color: var(--text-pri);
+        }
+
+        .tab.active::after {
+            content: '';
+            position: absolute;
+            bottom: -1px;
+            left: 16px;
+            right: 16px;
+            height: 2px;
+            background-color: var(--accent);
+            border-radius: 2px;
+        }
+
+        /* Main Workspace Container */
+        .container {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: var(--bg-deep);
+            padding: 16px 24px 24px 24px;
+        }
+
+        /* --- PAGE 1: CHAT PANEL --- */
+        #page-chat {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: var(--bg-deep);
+            overflow: hidden;
+        }
+
+        /* Device Bar at Top of Chat */
+        .device-bar {
+            display: flex;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            align-items: center;
+            gap: 10px;
+            background: var(--bg-deep);
+            flex-wrap: wrap;
+        }
+        
+        .device-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-pri);
+            margin-right: 6px;
+        }
+
+        .device-pill {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            padding: 4px 10px;
+            border-radius: 6px;
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            color: var(--text-pri);
+        }
+
+        .device-pill svg {
+            flex-shrink: 0;
+        }
+
+        .device-pill .status-text {
+            color: var(--text-sec);
+            font-weight: 400;
+        }
+
+        .device-pill .pill-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+        }
+
+        .view-topology-btn {
+            margin-left: auto;
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-sec);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            transition: background 0.2s, color 0.2s, border-color 0.2s;
+        }
+
+        .view-topology-btn:hover {
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-pri);
+            border-color: var(--border-light);
+        }
+
+        /* Chat History Scroll Area */
+        .chat-history {
+            flex: 1;
+            padding: 24px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 24px;
+            background: var(--bg-deep);
+        }
+
+        /* Message Bubble Layouts */
+        .user-message-container {
+            display: flex;
+            justify-content: flex-end;
+            width: 100%;
+        }
+
+        .user-message {
+            max-width: 60%;
+            background: #131B26;
+            padding: 16px 20px;
+            border-radius: 8px;
+            border: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        
+        .user-name {
+            color: var(--text-pri);
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .user-content {
+            color: var(--text-pri);
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .msg-time {
+            color: var(--text-sec);
+            font-size: 11px;
+            margin-top: 2px;
+        }
+
+        .ai-message-container {
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            gap: 8px;
+        }
+
+        .ai-name {
+            color: var(--accent-hover);
+            font-weight: 700;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        
+        .ai-content {
+            color: var(--text-pri);
+            font-size: 14px;
+            line-height: 1.6;
+            max-width: 90%;
+        }
+
+        /* Tool Execution Cards in Chat */
+        .tool-cards-container {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 12px;
+            max-width: 800px;
+            width: 100%;
+        }
+
+        .tool-card {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            padding: 12px 16px;
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            transition: border-color 0.2s;
+        }
+
+        .tool-card:hover {
+            border-color: var(--border-light);
+        }
+
+        .tool-card-left {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        
+        .tool-icon-box {
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-sec);
+            background: var(--bg-deep);
+        }
+
+        .tool-card-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-pri);
+        }
+
+        .tool-card-right {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .tool-card-status {
+            font-size: 13px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-weight: 500;
+        }
+
+        .tool-card-status.completed {
+            color: var(--green);
+        }
+
+        .tool-card-status.running {
+            color: var(--accent-hover);
+        }
+
+        .tool-chevron {
+            color: var(--text-muted);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+        }
+
+        /* Loading Dots Animation */
+        .loading-status-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 16px;
+            font-size: 13px;
+            color: var(--text-sec);
+        }
+
+        .bouncing-dots {
+            display: flex;
+            gap: 4px;
+        }
+
+        .bouncing-dots span {
+            width: 6px;
+            height: 6px;
+            background-color: var(--accent-hover);
+            border-radius: 50%;
+            display: inline-block;
+            animation: bounce 1.4s infinite ease-in-out both;
+        }
+
+        .bouncing-dots span:nth-child(1) { animation-delay: -0.32s; }
+        .bouncing-dots span:nth-child(2) { animation-delay: -0.16s; }
+
+        @keyframes bounce {
+            0%, 80%, 100% { transform: scale(0); }
+            40% { transform: scale(1.0); }
+        }
+
+        /* Chat Input Area at Bottom */
+        .chat-input-area {
+            padding: 16px 24px;
+            background: var(--bg-deep);
+            position: relative;
+        }
+
+        .chat-input-box {
+            display: flex;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 10px 14px;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .chat-input-btn {
+            width: 32px;
+            height: 32px;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: transparent;
+            color: var(--text-sec);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s, border-color 0.2s;
+        }
+
+        .chat-input-btn:hover {
+            background: var(--bg-deep);
+            color: var(--text-pri);
+            border-color: var(--border-light);
+        }
+
+        .chat-input-box input {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-pri);
+            font-size: 14px;
+            outline: none;
+            padding: 4px 8px;
+        }
+        .chat-input-box input::placeholder {
+            color: var(--text-muted);
+        }
+
+        .chat-input-right {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .input-hint-text {
+            color: var(--text-muted);
+            font-size: 12px;
+            user-select: none;
+        }
+
+        /* Split Send Button */
+        .split-btn {
+            display: flex;
+            height: 36px;
+            border-radius: 6px;
+            overflow: hidden;
+            border: none;
+        }
+
+        .split-btn-main {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0 14px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .split-btn-main:hover {
+            background: var(--accent-hover);
+        }
+
+        .split-btn-divider {
+            width: 1px;
+            background: #1D4ED8;
+        }
+
+        .split-btn-dropdown {
+            background: var(--accent);
+            color: white;
+            border: none;
+            padding: 0 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: background 0.2s;
+        }
+
+        .split-btn-dropdown:hover {
+            background: var(--accent-hover);
+        }
+
+        /* Custom Dropdown Menu for Send Button Options */
+        .dropdown-menu {
+            position: absolute;
+            bottom: 74px;
+            right: 24px;
+            background: #0E1521;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            width: 280px;
+            box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);
+            z-index: 999;
+            display: none;
+            flex-direction: column;
+            padding: 6px 0;
+            animation: fadeIn 0.15s ease-out;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(8px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .dropdown-item {
+            padding: 10px 16px;
+            cursor: pointer;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            transition: background 0.2s;
+        }
+
+        .dropdown-item:hover {
+            background: rgba(255, 255, 255, 0.04);
+        }
+
+        .dropdown-item.active {
+            border-left: 3px solid var(--accent);
+            background: rgba(37, 99, 235, 0.05);
+            padding-left: 13px;
+        }
+
+        .dropdown-item-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-pri);
+        }
+
+        .dropdown-item-desc {
+            font-size: 11px;
+            color: var(--text-sec);
+        }
+
+        /* --- PAGE 2: EXECUTION LOGS & TOPOLOGY PANEL --- */
+        #page-logs {
+            display: none;
+            flex-direction: column;
+            gap: 24px;
+            height: 100%;
+            overflow-y: auto;
+        }
+
+        #page-logs > * {
+            flex-shrink: 0;
+        }
+
+        /* Top Filter Row */
+        .logs-filter-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logs-dropdown {
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            display: flex;
+            align-items: center;
+            padding: 8px 12px;
+            gap: 32px;
+            cursor: pointer;
+            color: var(--text-pri);
+            font-size: 13px;
+            font-weight: 500;
+            transition: border-color 0.2s;
+        }
+
+        .logs-dropdown:hover {
+            border-color: var(--border-light);
+        }
+
+        .clear-logs-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-sec);
+            padding: 8px 16px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background 0.2s, color 0.2s, border-color 0.2s;
+        }
+
+        .clear-logs-btn:hover {
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-pri);
+            border-color: var(--border-light);
+        }
+
+        /* Log List Container */
+        .logs-list-card {
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            background: transparent;
+            overflow: hidden;
+        }
+
+        .log-row {
+            display: flex;
+            align-items: center;
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border);
+            font-size: 13px;
+            height: 24px;
+        }
+
+        .log-row:last-child {
+            border-bottom: none;
+        }
+
+        .log-time {
+            width: 80px;
+            color: var(--text-muted);
+            font-family: monospace;
+        }
+
+        .log-badge-col {
+            width: 80px;
+            display: flex;
+        }
+
+        .log-badge {
+            font-size: 11px;
+            font-weight: 700;
+            padding: 2px 8px;
+            border-radius: 4px;
+            text-transform: capitalize;
+        }
+
+        .log-badge.tool {
+            background: rgba(139, 92, 246, 0.12);
+            border: 1px solid rgba(139, 92, 246, 0.3);
+            color: #C084FC;
+        }
+
+        .log-badge.info {
+            background: rgba(217, 119, 6, 0.12);
+            border: 1px solid rgba(217, 119, 6, 0.3);
+            color: #FBBF24;
+        }
+
+        .log-badge.pending {
+            background: rgba(148, 163, 184, 0.1);
+            border: 1px solid rgba(148, 163, 184, 0.25);
+            color: #94A3B8;
+        }
+
+        .log-name {
+            width: 220px;
+            font-weight: 500;
+            color: var(--text-pri);
+            padding-right: 12px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .log-desc {
+            flex: 1;
+            color: var(--text-sec);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            padding-right: 12px;
+        }
+
+        .log-status-col {
+            width: 80px;
+            display: flex;
+            align-items: center;
+            justify-content: flex-end;
+            gap: 8px;
+            color: var(--text-sec);
+            font-weight: 500;
+        }
+
+        .log-status-col.running {
+            color: var(--accent-hover);
+        }
+
+        .log-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+        }
+
+        .log-dot.success { background-color: var(--green); }
+        
+        /* Spinner */
+        .spinner-ring {
+            width: 12px;
+            height: 12px;
+            border: 2px solid rgba(37, 99, 235, 0.2);
+            border-top: 2px solid var(--accent-hover);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Monospace Thinking Block */
+        .thought-container {
+            background: rgba(8, 12, 20, 0.6);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            margin-bottom: 12px;
+            overflow: hidden;
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+            max-width: 800px;
+            width: 100%;
+        }
+
+        .thought-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 14px;
+            background: rgba(15, 22, 34, 0.4);
+            cursor: pointer;
+            user-select: none;
+            transition: background 0.2s;
+        }
+
+        .thought-header:hover {
+            background: rgba(15, 22, 34, 0.6);
+        }
+
+        .thought-header-left {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--text-sec);
+            font-weight: 500;
+        }
+
+        .thought-brain-icon {
+            color: var(--purple);
+            display: flex;
+            align-items: center;
+        }
+
+        .thought-duration {
+            font-size: 11px;
+            color: var(--text-muted);
+            background: rgba(255, 255, 255, 0.03);
+            padding: 1px 6px;
+            border-radius: 4px;
+        }
+
+        .thought-chevron {
+            color: var(--text-muted);
+            transition: transform 0.2s ease;
+            display: flex;
+            align-items: center;
+        }
+
+        .thought-container.expanded .thought-chevron {
+            transform: rotate(180deg);
+        }
+
+        .thought-content {
+            max-height: 0;
+            opacity: 0;
+            overflow: hidden;
+            transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1), opacity 0.3s ease, padding 0.3s ease;
+            border-top: 0px solid transparent;
+        }
+
+        .thought-container.expanded .thought-content {
+            max-height: 500px;
+            opacity: 1;
+            border-top: 1px solid var(--border);
+            padding: 12px 14px;
+        }
+
+        .thought-steps {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin: 0;
+            padding: 0;
+            list-style: none;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-sec);
+        }
+
+        .thought-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+        }
+
+        .thought-step-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-top: 3px;
+            flex-shrink: 0;
+        }
+
+        .thought-step-success {
+            color: var(--green);
+        }
+
+        .thought-step-info {
+            color: var(--cyan);
+        }
+
+        .thought-step-text {
+            flex: 1;
+        }
+
+        .thought-step-time {
+            color: var(--text-muted);
+            font-size: 10px;
+            font-family: sans-serif;
+            white-space: nowrap;
+            margin-top: 2px;
+        }
+
+        /* Network Topology Section */
+        .topology-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-top: 8px;
+        }
+
+        .topology-title {
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-pri);
+            margin: 0;
+        }
+
+        .refresh-btn {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-sec);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            transition: background 0.2s, color 0.2s, border-color 0.2s;
+        }
+
+        .refresh-btn:hover {
+            background: rgba(255, 255, 255, 0.03);
+            color: var(--text-pri);
+            border-color: var(--border-light);
+        }
+
+        .topology-panel {
+            display: flex;
+            gap: 20px;
+            height: 320px;
+        }
+
+        /* Topology Canvas Panel */
+        .topology-canvas {
+            flex: 2;
+            background: #060A10;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* Connections SVG layer */
+        .connections-svg {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        /* Node elements */
+        .topo-node {
+            position: absolute;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 2;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .node-icon-container {
+            position: relative;
+            width: 60px;
+            height: 48px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Highlight effects for Active Node (R3) */
+        .topo-node.active .node-icon-container {
+            filter: drop-shadow(0 0 10px rgba(6, 182, 212, 0.8));
+        }
+
+        .topo-node.active .node-pulse-ring {
+            position: absolute;
+            width: 64px;
+            height: 64px;
+            border: 2px solid var(--cyan);
+            border-radius: 50%;
+            animation: pulse-ring 2s infinite ease-out;
+            opacity: 0;
+            z-index: -1;
+        }
+
+        @keyframes pulse-ring {
+            0% {
+                transform: scale(0.6);
+                opacity: 0.8;
+            }
+            100% {
+                transform: scale(1.3);
+                opacity: 0;
+            }
+        }
+
+        .node-label {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--text-pri);
+            margin-top: 6px;
+        }
+
+        .node-ip {
+            font-size: 11px;
+            color: var(--text-sec);
+            margin-top: 1px;
+        }
+
+        /* Device Details Side Panel */
+        .device-details-panel {
+            flex: 1;
+            max-width: 320px;
+            background: var(--bg-deep);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+        }
+
+        .details-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .details-title {
+            margin: 0;
+            font-size: 20px;
+            font-weight: 600;
+            color: var(--text-pri);
+        }
+
+        .details-badge {
+            font-size: 12px;
+            font-weight: 600;
+            padding: 4px 10px;
+            border-radius: 4px;
+        }
+
+        .details-badge.configured {
+            border: 1px solid var(--green);
+            color: var(--green);
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        .details-badge.pending {
+            border: 1px solid var(--yellow);
+            color: var(--yellow);
+            background: rgba(217, 119, 6, 0.1);
+        }
+
+        .details-badge.connected {
+            border: 1px solid var(--cyan);
+            color: var(--cyan);
+            background: rgba(6, 180, 210, 0.1);
+        }
+
+        .details-grid {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            flex: 1;
+        }
+
+        .details-row {
+            display: flex;
+            justify-content: space-between;
+            font-size: 13px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+            padding-bottom: 8px;
+        }
+
+        .details-row:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .details-key {
+            color: var(--text-sec);
+        }
+
+        .details-val {
+            color: var(--text-pri);
+            font-weight: 500;
+        }
+
+        .details-val.bold-highlight {
+            font-weight: 700;
+        }
+
+        .details-val.status-loading {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-pri);
+        }
+
+        .details-divider {
+            border: none;
+            border-top: 1px solid var(--border);
+            margin: 16px 0;
+        }
+
+        /* Stats Dashboard Row */
+        .stats-dashboard {
+            display: flex;
+            gap: 20px;
+        }
+
+        .stats-card {
+            flex: 1;
+            background: var(--bg-deep);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            transition: border-color 0.2s;
+        }
+
+        .stats-card:hover {
+            border-color: var(--border-light);
+        }
+
+        .stats-num {
+            font-size: 26px;
+            font-weight: 700;
+        }
+
+        .stats-num.total { color: var(--text-pri); }
+        .stats-num.success { color: var(--green); }
+        .stats-num.pending { color: var(--yellow); }
+        .stats-num.connected { color: var(--cyan); }
+
+        .stats-title {
+            font-size: 13px;
+            font-weight: 600;
+            margin: 0;
+        }
+        
+        .stats-title.total { color: var(--text-pri); }
+        .stats-title.success { color: var(--green); }
+        .stats-title.pending { color: var(--yellow); }
+        .stats-title.connected { color: var(--cyan); }
+
+        .stats-subtitle {
+            margin: 0;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
+        /* --- GLOBAL GLASSMORPHIC MODAL DESIGN SYSTEM --- */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100vw;
+            height: 100vh;
+            background: rgba(0, 0, 0, 0.7);
+            backdrop-filter: blur(5px);
+            z-index: 1000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal-overlay.nested {
+            z-index: 1001; /* Overlay on top of settings modal */
+            background: rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(2px);
+        }
+
+        .settings-dialog {
+            width: 780px;
+            height: 520px;
+            background: var(--bg-deep);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: flex;
+            overflow: hidden;
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.7);
+            animation: modalScaleUp 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        @keyframes modalScaleUp {
+            from { opacity: 0; transform: scale(0.96); }
+            to { opacity: 1; transform: scale(1); }
+        }
+
+        /* Settings Sidebar */
+        .settings-sidebar {
+            width: 200px;
+            background: #06090E;
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            padding: 24px 0;
+        }
+
+        .settings-sidebar-title {
+            padding: 0 24px 16px 24px;
+            font-size: 15px;
+            font-weight: 700;
+            color: var(--text-pri);
+            margin: 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .settings-nav {
+            margin-top: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+        }
+
+        .settings-nav-item {
+            padding: 10px 24px;
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-sec);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            border-left: 3px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .settings-nav-item svg {
+            color: var(--text-muted);
+            transition: color 0.2s;
+        }
+
+        .settings-nav-item:hover {
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--text-pri);
+        }
+
+        .settings-nav-item:hover svg {
+            color: var(--text-sec);
+        }
+
+        .settings-nav-item.active {
+            border-left-color: var(--accent);
+            background: rgba(37, 99, 235, 0.05);
+            color: var(--text-pri);
+            font-weight: 600;
+        }
+
+        .settings-nav-item.active svg {
+            color: var(--accent-hover);
+        }
+
+        .settings-sidebar-footer {
+            padding: 0 24px;
+            font-size: 11px;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: space-between;
+        }
+
+        /* Settings Content Area */
+        .settings-content-container {
+            flex: 1;
+            background: var(--bg-panel);
+            padding: 32px;
+            position: relative;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .settings-close-btn {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            background: transparent;
+            border: none;
+            color: var(--text-sec);
+            font-size: 16px;
+            cursor: pointer;
+            padding: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: background 0.2s, color 0.2s;
+            z-index: 10;
+        }
+
+        .settings-close-btn:hover {
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-pri);
+        }
+
+        .settings-tab-content {
+            display: none;
+            flex-direction: column;
+            gap: 20px;
+            height: 100%;
+        }
+
+        .settings-tab-content.active {
+            display: flex;
+        }
+
+        .settings-tab-title {
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-pri);
+            margin: 0 0 10px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+            padding-bottom: 8px;
+        }
+
+        /* Form Controls */
+        .settings-form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .settings-form-row {
+            display: flex;
+            gap: 16px;
+        }
+
+        .settings-form-row > * {
+            flex: 1;
+        }
+
+        .settings-label {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-sec);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .settings-input, .settings-select {
+            background: var(--bg-deep);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px 12px;
+            color: var(--text-pri);
+            font-size: 13px;
+            outline: none;
+            transition: border-color 0.2s;
+            font-family: inherit;
+        }
+
+        .settings-input:focus, .settings-select:focus {
+            border-color: var(--accent);
+        }
+
+        .settings-desc {
+            font-size: 11px;
+            color: var(--text-muted);
+            margin: -2px 0 0 0;
+        }
+
+        .checkbox-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            cursor: pointer;
+            user-select: none;
+            font-size: 13px;
+            color: var(--text-sec);
+            padding: 4px 0;
+        }
+
+        .checkbox-row input {
+            accent-color: var(--accent);
+            width: 16px;
+            height: 16px;
+            margin: 0;
+        }
+
+        /* Settings action buttons footer */
+        .settings-actions {
+            margin-top: auto;
+            padding-top: 20px;
+            border-top: 1px solid rgba(255, 255, 255, 0.03);
+            display: flex;
+            justify-content: flex-end;
+            gap: 12px;
+        }
+
+        .settings-btn {
+            padding: 10px 20px;
+            border-radius: 6px;
+            font-size: 13px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.2s, border-color 0.2s;
+            font-family: inherit;
+        }
+
+        .settings-btn.primary {
+            background: var(--accent);
+            color: white;
+            border: none;
+        }
+
+        .settings-btn.primary:hover {
+            background: var(--accent-hover);
+        }
+
+        .settings-btn.secondary {
+            background: transparent;
+            border: 1px solid var(--border);
+            color: var(--text-pri);
+        }
+
+        .settings-btn.secondary:hover {
+            background: rgba(255, 255, 255, 0.03);
+            border-color: var(--border-light);
+        }
+
+        /* Workspace settings device table */
+        .device-table-card {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--bg-deep);
+            overflow: hidden;
+            max-height: 240px;
+            overflow-y: auto;
+        }
+
+        .device-table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 12px;
+            text-align: left;
+        }
+
+        .device-table th {
+            background: #06090E;
+            padding: 8px 12px;
+            font-weight: 600;
+            color: var(--text-sec);
+            border-bottom: 1px solid var(--border);
+        }
+
+        .device-table td {
+            padding: 8px 12px;
+            color: var(--text-pri);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.02);
+        }
+
+        .device-table tr:last-child td {
+            border-bottom: none;
+        }
+
+        /* Manual Add Nested Dialog */
+        .add-device-dialog {
+            width: 420px;
+            background: var(--bg-panel);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.8);
+            animation: modalScaleUp 0.15s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .add-device-header {
+            padding: 16px 20px;
+            background: var(--bg-deep);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            position: relative;
+        }
+
+        .add-device-header h3 {
+            margin: 0;
+            font-size: 15px;
+            font-weight: 600;
+            color: var(--text-pri);
+        }
+
+        .add-device-body {
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+    </style>
+</head>
+<body>
+
+    <!-- Header Section -->
+    <div class="header">
+        <div class="header-left">
+            <div class="header-title-container">
+                <h1 class="header-title">ANCS Agent</h1>
+                <div class="status-badge">
+                    <span class="status-dot pulsing"></span>
+                    <span>Connected</span>
+                </div>
+            </div>
+            <div class="header-info-row">
+                <span class="model-pill">Gemini 2.5 Flash</span>
+                <span id="header-device-count">4 devices connected</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <!-- Settings Gear -->
+            <button class="window-btn" title="Settings" onclick="toggleSettingsModal()">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+            </button>
+            <!-- Minimize -->
+            <button class="window-btn minimize" title="Minimize">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+            </button>
+            <!-- Maximize -->
+            <button class="window-btn maximize" title="Maximize">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect></svg>
+            </button>
+            <!-- Close -->
+            <button class="window-btn close" title="Close">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+            </button>
+        </div>
+    </div>
+
+    <!-- Tabs Container -->
+    <div class="tabs-container">
+        <div class="tabs">
+            <div class="tab active" id="tab-chat" onclick="switchTab('chat')">Chat</div>
+            <div class="tab" id="tab-logs" onclick="switchTab('logs')">Execution Logs</div>
+        </div>
+    </div>
+
+    <!-- Main Container -->
+    <div class="container">
+
+        <!-- PAGE 1: CHAT PANEL -->
+        <div id="page-chat">
+            <!-- Device Connected Pills Bar -->
+            <div class="device-bar" id="device-bar-pills">
+                <!-- Dynamically populated by JS -->
+            </div>
+
+            <!-- Messages Area -->
+            <div class="chat-history">
+            </div>
+
+            <!-- Input Bar -->
+            <div class="chat-input-area">
+                <div class="chat-input-box">
+                    <button class="chat-input-btn" title="Add File">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"></path></svg>
+                    </button>
+                    <button class="chat-input-btn" title="Terminal Mode">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+                    </button>
+                    <input type="text" id="chat-text-input" placeholder="Ask ANCS anything...">
+                    <div class="chat-input-right">
+                        <span class="input-hint-text">Shift + Enter for new line</span>
+                        <div class="split-btn">
+                            <button class="split-btn-main" id="send-mode-btn" title="Send Chat Message" onclick="triggerSend()">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>
+                            </button>
+                            <div class="split-btn-divider"></div>
+                            <button class="split-btn-dropdown" title="Options" onclick="toggleSendDropdown(event)">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Send Options Dropdown Menu -->
+                <div class="dropdown-menu" id="send-options-menu">
+                    <div class="dropdown-item active" id="mode-chat" onclick="selectSendMode('chat')">
+                        <span class="dropdown-item-title">Send Chat Message</span>
+                        <span class="dropdown-item-desc">Ask questions, explain configs (Default)</span>
+                    </div>
+                    <div class="dropdown-item" id="mode-network" onclick="selectSendMode('network')">
+                        <span class="dropdown-item-title">Deploy via Network</span>
+                        <span class="dropdown-item-desc">Deploy configurations via SSH or Telnet</span>
+                    </div>
+                    <div class="dropdown-item" id="mode-serial" onclick="selectSendMode('serial')">
+                        <span class="dropdown-item-title">Deploy via Serial Console</span>
+                        <span class="dropdown-item-desc">Deploy configurations via serial console fallback</span>
+                    </div>
+                    <div class="dropdown-item" id="mode-audit" onclick="selectSendMode('audit')">
+                        <span class="dropdown-item-title">Run Security & Audit Scan</span>
+                        <span class="dropdown-item-desc">Checks for open VTY, no enable secret</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- PAGE 2: EXECUTION LOGS & TOPOLOGY PANEL -->
+        <div id="page-logs">
+            <!-- Filter Dropdown Row -->
+            <div class="logs-filter-row">
+                <div style="position: relative;">
+                    <div class="logs-dropdown" onclick="toggleLogsFilterDropdown(event)">
+                        <span id="logs-filter-label">All Tools</span>
+                        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                    </div>
+                    
+                    <!-- Tools Filter Dropdown Menu -->
+                    <div class="dropdown-menu" id="logs-filter-menu" style="bottom: auto; top: 40px; left: 0; width: 250px; max-height: 250px; overflow-y: auto; box-shadow: 0 10px 25px rgba(0, 0, 0, 0.6);">
+                        <div class="dropdown-item active" onclick="selectLogsFilter('All Tools')">
+                            <span class="dropdown-item-title">All Tools (Default)</span>
+                        </div>
+                        <!-- GNS3 Discovery -->
+                        <div class="dropdown-item" onclick="selectLogsFilter('list_gns3_projects')">
+                            <span class="dropdown-item-title">list_gns3_projects</span>
+                            <span class="dropdown-item-desc">List GNS3 projects</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('list_gns3_nodes')">
+                            <span class="dropdown-item-title">list_gns3_nodes</span>
+                            <span class="dropdown-item-desc">List nodes in GNS3 project</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('get_node_ports')">
+                            <span class="dropdown-item-title">get_node_ports</span>
+                            <span class="dropdown-item-desc">Get GNS3 node ports</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('get_topology_links')">
+                            <span class="dropdown-item-title">get_topology_links</span>
+                            <span class="dropdown-item-desc">Topology mapper</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('get_network_overview')">
+                            <span class="dropdown-item-title">get_network_overview</span>
+                            <span class="dropdown-item-desc">Network overview</span>
+                        </div>
+                        <!-- Terminal -->
+                        <div class="dropdown-item" onclick="selectLogsFilter('run_cli_on_device')">
+                            <span class="dropdown-item-title">run_cli_on_device</span>
+                            <span class="dropdown-item-desc">Terminal tool (Telnet)</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('run_command_on_device')">
+                            <span class="dropdown-item-title">run_command_on_device</span>
+                            <span class="dropdown-item-desc">Run CLI command</span>
+                        </div>
+                        <!-- Database & Inventory -->
+                        <div class="dropdown-item" onclick="selectLogsFilter('list_all_devices')">
+                            <span class="dropdown-item-title">list_all_devices</span>
+                            <span class="dropdown-item-desc">Device inventory</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('get_device_credentials')">
+                            <span class="dropdown-item-title">get_device_credentials</span>
+                            <span class="dropdown-item-desc">Get connection info</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('get_saved_config')">
+                            <span class="dropdown-item-title">get_saved_config</span>
+                            <span class="dropdown-item-desc">Get saved configuration</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('get_send_history')">
+                            <span class="dropdown-item-title">get_send_history</span>
+                            <span class="dropdown-item-desc">Get deployment log history</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('query_logs')">
+                            <span class="dropdown-item-title">query_logs</span>
+                            <span class="dropdown-item-desc">Query activity logs</span>
+                        </div>
+                        <!-- Config Generation -->
+                        <div class="dropdown-item" onclick="selectLogsFilter('generate_device_config')">
+                            <span class="dropdown-item-title">generate_device_config</span>
+                            <span class="dropdown-item-desc">Config generator</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('generate_and_deploy_device_config')">
+                            <span class="dropdown-item-title">generate_and_deploy_device_config</span>
+                            <span class="dropdown-item-desc">Generate and deploy</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('detect_topology')">
+                            <span class="dropdown-item-title">detect_topology</span>
+                            <span class="dropdown-item-desc">Detect topology pattern</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('suggest_configs')">
+                            <span class="dropdown-item-title">suggest_configs</span>
+                            <span class="dropdown-item-desc">Suggest configurations</span>
+                        </div>
+                        <!-- Deployment -->
+                        <div class="dropdown-item" onclick="selectLogsFilter('deploy_to_device')">
+                            <span class="dropdown-item-title">deploy_to_device</span>
+                            <span class="dropdown-item-desc">Deploy config</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('deploy_config_telnet')">
+                            <span class="dropdown-item-title">deploy_config_telnet</span>
+                            <span class="dropdown-item-desc">Deploy via Telnet</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('deploy_config_ssh')">
+                            <span class="dropdown-item-title">deploy_config_ssh</span>
+                            <span class="dropdown-item-desc">Deploy via SSH</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('verify_device')">
+                            <span class="dropdown-item-title">verify_device</span>
+                            <span class="dropdown-item-desc">Verify device CLI</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('verify_deployment')">
+                            <span class="dropdown-item-title">verify_deployment</span>
+                            <span class="dropdown-item-desc">Verify deployment commands</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('bulk_deploy')">
+                            <span class="dropdown-item-title">bulk_deploy</span>
+                            <span class="dropdown-item-desc">Bulk deploy</span>
+                        </div>
+                        <!-- Network Intelligence -->
+                        <div class="dropdown-item" onclick="selectLogsFilter('snapshot_network_state')">
+                            <span class="dropdown-item-title">snapshot_network_state</span>
+                            <span class="dropdown-item-desc">Network snapshot</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('cleanup_device')">
+                            <span class="dropdown-item-title">cleanup_device</span>
+                            <span class="dropdown-item-desc">Cleanup tool</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('audit_network')">
+                            <span class="dropdown-item-title">audit_network</span>
+                            <span class="dropdown-item-desc">Security audit</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('trace_connectivity')">
+                            <span class="dropdown-item-title">trace_connectivity</span>
+                            <span class="dropdown-item-desc">Connectivity trace</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('validate_configs')">
+                            <span class="dropdown-item-title">validate_configs</span>
+                            <span class="dropdown-item-desc">Config validator</span>
+                        </div>
+                        <!-- Utilities -->
+                        <div class="dropdown-item" onclick="selectLogsFilter('calculate_subnet')">
+                            <span class="dropdown-item-title">calculate_subnet</span>
+                            <span class="dropdown-item-desc">Subnet calculator</span>
+                        </div>
+                        <div class="dropdown-item" onclick="selectLogsFilter('get_agent_guidelines')">
+                            <span class="dropdown-item-title">get_agent_guidelines</span>
+                            <span class="dropdown-item-desc">Guidelines tool</span>
+                        </div>
+                    </div>
+                </div>
+                <button class="clear-logs-btn" onclick="clearExecutionLogs()">Clear Logs</button>
+            </div>
+
+            <!-- Split Pane for Logs -->
+            <div style="display: flex; gap: 20px; height: 280px; align-items: stretch; min-height: 0;">
+                
+                <!-- Left Pane: Console Stream & Model Reasoning -->
+                <div style="flex: 1.2; display: flex; flex-direction: column; gap: 10px; min-width: 0;">
+                    <div style="display: flex; align-items: center; justify-content: space-between;">
+                        <h3 class="topology-title" style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-pri); display: flex; align-items: center; gap: 8px;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--cyan);"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>
+                            Console Stream & Reasoning
+                        </h3>
+                        <span style="font-size: 10px; color: var(--cyan); font-family: ui-monospace, monospace; background: rgba(6, 182, 212, 0.1); border: 1px solid rgba(6, 182, 212, 0.2); padding: 1px 6px; border-radius: 4px; display: inline-flex; align-items: center; gap: 4px;">
+                            <span class="status-dot pulsing" style="width: 5px; height: 5px; background-color: var(--cyan); margin-bottom: 0;"></span> Live Output
+                        </span>
+                    </div>
+                    <div class="raw-logs-container" style="flex: 1; background: #040710; border: 1px solid var(--border); border-radius: 8px; padding: 12px; overflow-y: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 11px; line-height: 1.6; color: #38BDF8; box-shadow: inset 0 2px 8px rgba(0,0,0,0.8); display: flex; flex-direction: column; gap: 4px; min-height: 0;">
+                        <div class="raw-log-placeholder" style="color: var(--text-muted); text-align: center; padding: 20px 0; font-family: sans-serif; font-size: 12px;">Waiting for network operations or agent reasoning...</div>
+                    </div>
+                </div>
+
+                <!-- Right Pane: Structured Tool Logs -->
+                <div style="flex: 1; display: flex; flex-direction: column; gap: 10px; min-width: 0;">
+                    <div style="display: flex; align-items: center; justify-content: space-between; height: 20px;">
+                        <h3 class="topology-title" style="margin: 0; font-size: 14px; font-weight: 600; color: var(--text-pri); display: flex; align-items: center; gap: 8px;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: var(--purple);"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                            Structured Events
+                        </h3>
+                    </div>
+                    <div class="logs-list-card" style="flex: 1; border: 1px solid var(--border); border-radius: 8px; background: transparent; overflow-y: auto; display: flex; flex-direction: column; min-height: 0;">
+                        <div style="padding: 20px; text-align: center; color: var(--text-sec); font-size: 12px; font-family: sans-serif;">No tool logs in this session.</div>
+                    </div>
+                </div>
+
+            </div>
+
+            <!-- Topology Section -->
+            <div class="topology-header-row">
+                <h3 class="topology-title">Network Topology</h3>
+                <button class="refresh-btn">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21.5 2v6h-6M21.34 15.57a10 10 0 1 1-.57-8.38l5.67-5.67"></path></svg>
+                    <span>Refresh</span>
+                </button>
+            </div>
+
+            <!-- Topology Grid & Detail Card -->
+            <div class="topology-panel">
+                <!-- Visual Graph Canvas -->
+                <div class="topology-canvas" id="topology-canvas-container">
+                    <!-- Connections Drawer (SVG) -->
+                    <svg class="connections-svg" id="topology-connections">
+                        <!-- Rendered dynamically by JS -->
+                    </svg>
+
+                    <!-- Nodes Rendered dynamically by JS -->
+                </div>
+
+                <!-- Right Side Details Card -->
+                <div class="device-details-panel" id="topology-details-card">
+                    <!-- Populated dynamically by JS -->
+                </div>
+            </div>
+
+            <!-- Stats Row at bottom -->
+            <div class="stats-dashboard" id="topology-stats-dashboard">
+                <!-- Populated dynamically by JS -->
+            </div>
+        </div>
+
+    </div>
+
+    <!-- GLOBAL SETTINGS MODAL DIALOG -->
+    <div id="settings-modal" class="modal-overlay" onclick="closeSettingsModal(event)">
+        <div class="settings-dialog" onclick="event.stopPropagation()">
+            <!-- Left Sidebar Navigation -->
+            <div class="settings-sidebar">
+                <h3 class="settings-sidebar-title">Settings</h3>
+                <div class="settings-nav">
+                    <div class="settings-nav-item active" id="settings-nav-general" onclick="switchSettingsTab('general')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="9" rx="1"></rect><rect x="14" y="3" width="7" height="5" rx="1"></rect><rect x="14" y="12" width="7" height="9" rx="1"></rect><rect x="3" y="16" width="7" height="5" rx="1"></rect></svg>
+                        <span>General</span>
+                    </div>
+                    <div class="settings-nav-item" id="settings-nav-model" onclick="switchSettingsTab('model')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"></path><polyline points="3.27 6.96 12 12.01 20.73 6.96"></polyline><line x1="12" y1="22.08" x2="12" y2="12"></line></svg>
+                        <span>Model & Provider</span>
+                    </div>
+                    <div class="settings-nav-item" id="settings-nav-connections" onclick="switchSettingsTab('connections')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="12" x2="2" y2="12"></line><path d="M5.45 5.11L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"></path><line x1="6" y1="16" x2="6.01" y2="16"></line><line x1="10" y1="16" x2="10.01" y2="16"></line></svg>
+                        <span>Connections</span>
+                    </div>
+                    <div class="settings-nav-item" id="settings-nav-workspace" onclick="switchSettingsTab('workspace')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+                        <span>Workspace</span>
+                    </div>
+                    <div class="settings-nav-item" id="settings-nav-advanced" onclick="switchSettingsTab('advanced')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                        <span>Advanced</span>
+                    </div>
+                </div>
+                <div class="settings-sidebar-footer">
+                    <span>v1.0.0</span>
+                    <span style="cursor:pointer;" onclick="alert('ANCS Auto Network Configuration System\nVersion 1.0.0 (Qt WebEngine Hybrid)')">About</span>
+                </div>
+            </div>
+
+            <!-- Settings Content Container -->
+            <div class="settings-content-container">
+                <button class="settings-close-btn" onclick="toggleSettingsModal()">✕</button>
+
+                <!-- TAB 1: GENERAL -->
+                <div class="settings-tab-content active" id="settings-tab-general">
+                    <h3 class="settings-tab-title">General Settings</h3>
+                    
+                    <div class="settings-form-row">
+                        <div class="settings-form-group">
+                            <label class="settings-label">Theme</label>
+                            <select class="settings-select">
+                                <option value="dark">Dark Theme</option>
+                                <option value="light">Light Theme</option>
+                                <option value="system">System Default</option>
+                            </select>
+                        </div>
+                        <div class="settings-form-group">
+                            <label class="settings-label">Language</label>
+                            <select class="settings-select">
+                                <option value="en">English</option>
+                                <option value="es">Español</option>
+                                <option value="fr">Français</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div style="display:flex; flex-direction:column; gap:12px; margin-top: 10px;">
+                        <label class="checkbox-row">
+                            <input type="checkbox" checked>
+                            <span>Start ANCS Agent on system startup</span>
+                        </label>
+                        <label class="checkbox-row">
+                            <input type="checkbox" checked>
+                            <span>Minimize to tray</span>
+                        </label>
+                        <label class="checkbox-row">
+                            <input type="checkbox" checked>
+                            <span>Show notification on task completion</span>
+                        </label>
+                        <label class="checkbox-row">
+                            <input type="checkbox" checked>
+                            <span>Auto connect last workspace</span>
+                        </label>
+                    </div>
+
+                    <div class="settings-actions">
+                        <button class="settings-btn secondary" onclick="toggleSettingsModal()">Cancel</button>
+                        <button class="settings-btn primary" onclick="saveSettings()">Save Changes</button>
+                    </div>
+                </div>
+
+                <!-- TAB 2: MODEL & PROVIDER -->
+                <div class="settings-tab-content" id="settings-tab-model">
+                    <h3 class="settings-tab-title">Model & Provider</h3>
+                    
+                    <div class="settings-form-row">
+                        <div class="settings-form-group">
+                            <label class="settings-label">Provider</label>
+                            <select class="settings-select" id="settings-provider">
+                                <option value="openrouter">OpenRouter (Free Models)</option>
+                                <option value="gemini">Gemini (API Key)</option>
+                                <option value="vertex">Vertex AI (Cloud Credits)</option>
+                                <option value="hapuppy">Hapuppy (Cheap Models)</option>
+                                <option value="nvidia">NVIDIA NIM</option>
+                            </select>
+                        </div>
+                        <div class="settings-form-group">
+                            <label class="settings-label">Model</label>
+                            <select class="settings-select" id="settings-model">
+                                <option value="openai/gpt-4o-mini">openai/gpt-4o-mini</option>
+                                <option value="openai/gpt-oss-120b:free">openai/gpt-oss-120b:free</option>
+                                <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                                <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                                <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                                <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+                                <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+                                <option value="gemini-3-flash">gemini-3-flash</option>
+                                <option value="gpt-4o-mini">gpt-4o-mini</option>
+                                <option value="deepseek-v3">deepseek-v3</option>
+                                <option value="mistralai/mistral-nemo:free">mistralai/mistral-nemo:free</option>
+                                <option value="meta-llama/llama-3.1-8b-instruct:free">meta-llama/llama-3.1-8b-instruct:free</option>
+                                <option value="google/gemma-2-27b-it:free">google/gemma-2-27b-it:free</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="settings-form-group">
+                        <div style="display:flex; justify-content:space-between;">
+                            <label class="settings-label">API Key</label>
+                            <span style="font-size:11px; color:var(--green); font-weight:600;" id="settings-api-status-label">✓ API connection successful</span>
+                        </div>
+                        <input type="password" class="settings-input" id="settings-api-key" placeholder="Enter API key (not needed for Vertex AI)">
+                    </div>
+
+                    <div class="settings-form-row">
+                        <div class="settings-form-group">
+                            <label class="settings-label">Max Tokens</label>
+                            <input type="number" class="settings-input" id="settings-max-tokens" value="8192">
+                        </div>
+                        <div class="settings-form-group">
+                            <label class="settings-label">Request Timeout (seconds)</label>
+                            <input type="number" class="settings-input" id="settings-timeout" value="30">
+                        </div>
+                    </div>
+                    <span class="settings-desc">Time to wait for a model response. Higher values may increase response time.</span>
+
+                    <label class="checkbox-row" style="margin-top: 15px; margin-bottom: 5px;">
+                        <input type="checkbox" id="settings-allow-raw-deploy">
+                        <span>Allow raw config deploy</span>
+                    </label>
+                    <span class="settings-desc" style="display: block; margin-bottom: 15px;">Bypass Copilot safety signatures and allow direct deployment of raw configuration text to devices.</span>
+
+                    <div class="settings-actions">
+                        <button class="settings-btn secondary" style="margin-right:auto;">Test Connection</button>
+                        <button class="settings-btn secondary" onclick="toggleSettingsModal()">Cancel</button>
+                        <button class="settings-btn primary" onclick="saveSettings()">Save Changes</button>
+                    </div>
+                </div>
+
+                <!-- TAB 3: CONNECTIONS -->
+                <div class="settings-tab-content" id="settings-tab-connections">
+                    <h3 class="settings-tab-title">Connection Settings</h3>
+                    
+                    <div class="settings-form-row">
+                        <div class="settings-form-group">
+                            <label class="settings-label">Connection Timeout (seconds)</label>
+                            <input type="number" class="settings-input" value="10">
+                        </div>
+                        <div class="settings-form-group">
+                            <label class="settings-label">Read Timeout (seconds)</label>
+                            <input type="number" class="settings-input" value="30">
+                        </div>
+                    </div>
+                    <span class="settings-desc">Time to wait for a response from a device.</span>
+
+                    <div class="settings-form-row">
+                        <div class="settings-form-group">
+                            <label class="settings-label">Keep Alive Interval (seconds)</label>
+                            <input type="number" class="settings-input" value="60">
+                        </div>
+                        <div class="settings-form-group">
+                            <label class="settings-label">Discovery Interval (seconds)</label>
+                            <input type="number" class="settings-input" value="60">
+                        </div>
+                    </div>
+                    <span class="settings-desc">How often to scan the network for devices.</span>
+
+                    <label class="checkbox-row" style="margin-top: 10px;">
+                        <input type="checkbox" checked>
+                        <span>Discover devices on the local network automatically (Auto Discovery)</span>
+                    </label>
+
+                    <div class="settings-actions">
+                        <button class="settings-btn secondary" onclick="toggleSettingsModal()">Cancel</button>
+                        <button class="settings-btn primary" onclick="saveSettings()">Save Changes</button>
+                    </div>
+                </div>
+
+                <!-- TAB 4: WORKSPACE -->
+                <div class="settings-tab-content" id="settings-tab-workspace">
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom:8px;">
+                        <h3 class="settings-tab-title" style="border:none; margin:0; padding:0;">Connected Devices</h3>
+                        <button class="refresh-btn" style="padding:4px 8px; font-size:11px;" onclick="toggleAddDeviceModal()">+ Add Device</button>
+                    </div>
+
+                    <div class="device-table-card">
+                        <table class="device-table">
+                            <thead>
+                                <tr>
+                                    <th>Device</th>
+                                    <th>IP Address</th>
+                                    <th>Platform</th>
+                                    <th>Status</th>
+                                    <th>Last Seen</th>
+                                </tr>
+                            </thead>
+                            <tbody id="settings-device-list-tbody">
+                                <!-- Populated dynamically by JS -->
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div class="settings-actions">
+                        <button class="settings-btn secondary" onclick="toggleSettingsModal()">Cancel</button>
+                        <button class="settings-btn primary" onclick="saveSettings()">Save Changes</button>
+                    </div>
+                </div>
+
+                <!-- TAB 5: ADVANCED -->
+                <div class="settings-tab-content" id="settings-tab-advanced">
+                    <h3 class="settings-tab-title">Advanced Settings</h3>
+                    
+                    <div class="settings-form-row">
+                        <div class="settings-form-group">
+                            <label class="settings-label">Max Concurrent Executions</label>
+                            <input type="number" class="settings-input" value="3">
+                        </div>
+                        <div class="settings-form-group">
+                            <label class="settings-label">Max Retry Attempts</label>
+                            <input type="number" class="settings-input" value="5">
+                        </div>
+                    </div>
+                    <span class="settings-desc">Maximum number of retry attempts for failed commands.</span>
+
+                    <label class="checkbox-row">
+                        <input type="checkbox" checked>
+                        <span>Automatically retry failed commands (Retry failed commands)</span>
+                    </label>
+
+                    <div class="settings-form-row" style="margin-top: 10px;">
+                        <div class="settings-form-group">
+                            <label class="settings-label">Log Level</label>
+                            <select class="settings-select">
+                                <option value="info">Info</option>
+                                <option value="debug">Debug</option>
+                                <option value="warning">Warning</option>
+                                <option value="error">Error</option>
+                            </select>
+                        </div>
+                        <div class="settings-form-group">
+                            <label class="settings-label">Keep logs for (days)</label>
+                            <input type="number" class="settings-input" value="30">
+                        </div>
+                    </div>
+
+                    <div style="display:flex; flex-direction:column; gap:10px; margin-top: 10px;">
+                        <label class="checkbox-row">
+                            <input type="checkbox" checked>
+                            <span>Verify SSH host keys when connecting to devices (Validate SSH host key)</span>
+                        </label>
+                        <label class="checkbox-row">
+                            <input type="checkbox">
+                            <span>Allow connections to devices with unknown SSH host keys</span>
+                        </label>
+                    </div>
+
+                    <div class="settings-actions">
+                        <button class="settings-btn secondary" onclick="toggleSettingsModal()">Cancel</button>
+                        <button class="settings-btn primary" onclick="saveSettings()">Save Changes</button>
+                    </div>
+                </div>
+
+            </div>
+        </div>
+    </div>
+
+    <!-- NESTED DEVICE DISCOVERY MODAL -->
+    <div id="add-device-modal" class="modal-overlay nested" onclick="closeAddDeviceModal(event)">
+        <div class="add-device-dialog" style="width: 580px; max-width: 95%; max-height: 90vh; overflow: hidden; display: flex; flex-direction: column; background: rgba(15, 22, 34, 0.95); border: 1px solid var(--border); box-shadow: 0 20px 40px rgba(0,0,0,0.8); backdrop-filter: blur(20px); border-radius: 12px;" onclick="event.stopPropagation()">
+            <div class="add-device-header" style="padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center;">
+                <h3 style="margin: 0; font-size: 15px; font-weight: 700; color: var(--text-pri); text-transform: uppercase; letter-spacing: 0.5px;">Device Discovery</h3>
+                <button class="settings-close-btn" style="position: static; background: transparent; border: none; color: var(--text-sec); cursor: pointer; font-size: 16px; transition: color 0.2s;" onclick="toggleAddDeviceModal()">✕</button>
+            </div>
+            
+            <!-- Discovery Tabs -->
+            <div class="discovery-tabs" style="display: flex; background: rgba(0,0,0,0.15); border-bottom: 1px solid var(--border); padding: 0 10px;">
+                <div class="discovery-tab active" id="tab-auto-discover" onclick="switchDiscoveryTab('auto')" style="padding: 12px 16px; font-size: 12px; font-weight: 700; color: var(--text-sec); cursor: pointer; border-bottom: 2px solid transparent; text-transform: uppercase; letter-spacing: 0.5px;">Auto Discover</div>
+                <div class="discovery-tab" id="tab-manual-add" onclick="switchDiscoveryTab('manual')" style="padding: 12px 16px; font-size: 12px; font-weight: 700; color: var(--text-sec); cursor: pointer; border-bottom: 2px solid transparent; text-transform: uppercase; letter-spacing: 0.5px;">Manual Add</div>
+            </div>
+            
+            <!-- Tab Contents -->
+            <div style="flex: 1; overflow-y: auto; padding: 20px; display: flex; flex-direction: column; gap: 16px;">
+                
+                <!-- TAB 1: AUTO DISCOVER -->
+                <div class="discovery-tab-content" id="discovery-tab-auto" style="display: flex; flex-direction: column; gap: 16px;">
+                    <div class="settings-form-row" style="display: flex; gap: 16px; margin: 0;">
+                        <div class="settings-form-group" style="flex: 2; display: flex; flex-direction: column; gap: 6px;">
+                            <label class="settings-label" style="font-size: 11px; color: var(--text-sec); text-transform: uppercase; font-weight: 600;">Discover Range</label>
+                            <input type="text" class="settings-input" id="scan-range" value="192.168.1.1-192.168.1.254" style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; color: var(--text-pri); font-size: 13px;">
+                        </div>
+                        <div class="settings-form-group" style="flex: 1; display: flex; flex-direction: column; gap: 6px;">
+                            <label class="settings-label" style="font-size: 11px; color: var(--text-sec); text-transform: uppercase; font-weight: 600;">SNMP Community</label>
+                            <input type="text" class="settings-input" id="scan-snmp" value="public" style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; color: var(--text-pri); font-size: 13px;">
+                        </div>
+                    </div>
+                    
+                    <div style="display: flex; gap: 12px; align-items: center; border-bottom: 1px solid rgba(255,255,255,0.03); padding-bottom: 16px;">
+                        <button class="settings-btn primary" id="btn-start-discovery" onclick="startAutoDiscovery()" style="background: var(--accent); border: none; border-radius: 4px; padding: 8px 16px; color: white; font-size: 12px; font-weight: 600; cursor: pointer; text-transform: uppercase;">Start Discovery</button>
+                        <button class="settings-btn secondary" id="btn-stop-discovery" onclick="stopAutoDiscovery()" style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.3); color: #F87171; border-radius: 4px; padding: 8px 16px; font-size: 12px; font-weight: 600; cursor: pointer; text-transform: uppercase; display: none;">Stop</button>
+                        
+                        <!-- Discovery Progress Bar -->
+                        <div id="discovery-progress-container" style="flex: 1; display: none; flex-direction: column; gap: 6px;">
+                            <div style="display: flex; justify-content: space-between; font-size: 11px; color: var(--text-sec); font-family: monospace;">
+                                <span id="discovery-status-text">Scanning network...</span>
+                                <span id="discovery-percent">0%</span>
+                            </div>
+                            <div style="height: 6px; background: rgba(255,255,255,0.05); border-radius: 3px; overflow: hidden; border: 1px solid var(--border);">
+                                <div id="discovery-progress-bar" style="width: 0%; height: 100%; background: var(--accent); transition: width 0.1s linear;"></div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Discovered Devices Section -->
+                    <div id="discovered-results-section" style="display: none; flex-direction: column; gap: 12px;">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <h4 style="margin: 0; font-size: 12px; font-weight: 700; color: var(--text-pri); text-transform: uppercase;" id="discovered-count-label">Discovered Devices (0)</h4>
+                            <span style="font-size: 11px; color: var(--text-sec); font-family: monospace;" id="selection-count-label">0 Selected</span>
+                        </div>
+                        
+                        <div style="border: 1px solid var(--border); border-radius: 6px; overflow: hidden; max-height: 180px; overflow-y: auto; background: rgba(0,0,0,0.15);">
+                            <table style="width: 100%; border-collapse: collapse; text-align: left; font-size: 11px;">
+                                <thead>
+                                    <tr style="border-bottom: 1px solid var(--border); background: rgba(0,0,0,0.25); color: var(--text-sec);">
+                                        <th style="padding: 8px 10px; width: 30px; text-align: center;"><input type="checkbox" id="select-all-discovered" onclick="toggleSelectAllDiscovered(this)" style="accent-color: var(--accent);"></th>
+                                        <th style="padding: 8px 10px;">Hostname</th>
+                                        <th style="padding: 8px 10px;">IP Address</th>
+                                        <th style="padding: 8px 10px;">Vendor</th>
+                                        <th style="padding: 8px 10px;">OS</th>
+                                        <th style="padding: 8px 10px;">Model</th>
+                                        <th style="padding: 8px 10px;">Status</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="discovered-devices-tbody">
+                                    <!-- Populated dynamically by scanning -->
+                                </tbody>
+                            </table>
+                        </div>
+                        
+                        <div style="display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid rgba(255,255,255,0.03); padding-top: 12px;">
+                            <button class="settings-btn secondary" style="padding: 6px 12px; font-size: 11px;" onclick="clearDiscoveredSelection()">Clear Selection</button>
+                            <button class="settings-btn secondary" style="padding: 6px 12px; font-size: 11px;" onclick="refreshDiscovery()">Refresh</button>
+                            <button class="settings-btn primary" id="btn-add-selected" style="padding: 6px 12px; font-size: 11px; background: var(--green); border-color: var(--green);" onclick="addSelectedDiscoveredDevices()">Add Selected (0)</button>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- TAB 2: MANUAL ADD -->
+                <div class="discovery-tab-content" id="discovery-tab-manual" style="display: none; flex-direction: column; gap: 16px;">
+                    <div class="settings-form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                        <label class="settings-label" style="font-size: 11px; color: var(--text-sec); text-transform: uppercase; font-weight: 600;">Connection Type</label>
+                        <select class="settings-select" id="new-device-proto" style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; color: var(--text-pri); font-size: 13px;">
+                            <option value="SSH">SSH</option>
+                            <option value="Telnet">Telnet</option>
+                            <option value="Serial">Serial Console</option>
+                        </select>
+                    </div>
+                    
+                    <div class="settings-form-row" style="display: flex; gap: 16px; margin: 0;">
+                        <div class="settings-form-group" style="flex: 2; display: flex; flex-direction: column; gap: 6px;">
+                            <label class="settings-label" style="font-size: 11px; color: var(--text-sec); text-transform: uppercase; font-weight: 600;">Hostname / IP Address</label>
+                            <input type="text" class="settings-input" id="new-device-ip" placeholder="e.g., 192.168.1.1" style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; color: var(--text-pri); font-size: 13px;">
+                        </div>
+                        <div class="settings-form-group" style="flex: 1; display: flex; flex-direction: column; gap: 6px;">
+                            <label class="settings-label" style="font-size: 11px; color: var(--text-sec); text-transform: uppercase; font-weight: 600;">Port</label>
+                            <input type="number" class="settings-input" id="new-device-port" value="22" style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; color: var(--text-pri); font-size: 13px;">
+                        </div>
+                    </div>
+                    
+                    <div class="settings-form-row" style="display: flex; gap: 16px; margin: 0;">
+                        <div class="settings-form-group" style="flex: 1; display: flex; flex-direction: column; gap: 6px;">
+                            <label class="settings-label" style="font-size: 11px; color: var(--text-sec); text-transform: uppercase; font-weight: 600;">Username</label>
+                            <input type="text" class="settings-input" id="new-device-user" placeholder="e.g., admin" style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; color: var(--text-pri); font-size: 13px;">
+                        </div>
+                        <div class="settings-form-group" style="flex: 1; display: flex; flex-direction: column; gap: 6px;">
+                            <label class="settings-label" style="font-size: 11px; color: var(--text-sec); text-transform: uppercase; font-weight: 600;">Password</label>
+                            <input type="password" class="settings-input" id="new-device-pass" placeholder="Enter password" style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; color: var(--text-pri); font-size: 13px;">
+                        </div>
+                    </div>
+                    
+                    <div class="settings-form-group" style="display: flex; flex-direction: column; gap: 6px;">
+                        <label class="settings-label" style="font-size: 11px; color: var(--text-sec); text-transform: uppercase; font-weight: 600;">Enable Password (Optional)</label>
+                        <input type="password" class="settings-input" id="new-device-enable" placeholder="Enter enable password" style="background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; color: var(--text-pri); font-size: 13px;">
+                    </div>
+                    
+                    <div class="settings-actions" style="margin-top: 10px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid rgba(255,255,255,0.03); padding-top: 16px;">
+                        <button class="settings-btn secondary" style="padding: 8px 16px; border-radius: 4px; cursor: pointer; text-transform: uppercase;" onclick="toggleAddDeviceModal()">Cancel</button>
+                        <button class="settings-btn primary" style="background: var(--accent); border: none; border-radius: 4px; padding: 8px 16px; color: white; cursor: pointer; text-transform: uppercase;" onclick="addCustomDevice()">Add Device</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts for UI interactivity -->
+    <script>
+        // Central Device State — populated by Python bridge
+        let devices = [];
+
+        const connections = [
+            { from: "R1", to: "R2" },
+            { from: "R2", to: "R3" },
+            { from: "R2", to: "SW1" },
+            { from: "SW1", to: "FW1" },
+            { from: "SW1", to: "AP1" }
+        ];
+
+        let selectedDeviceId = "R3"; // Default selected device for the details card
+
+        // Helper to auto detect type based on device name
+        function detectDeviceType(name) {
+            const lower = name.toLowerCase();
+            if (lower.startsWith('r') || lower.includes('router')) return 'router';
+            if (lower.startsWith('sw') || lower.includes('switch')) return 'switch';
+            if (lower.startsWith('fw') || lower.includes('firewall') || lower.startsWith('asa')) return 'firewall';
+            if (lower.startsWith('ap') || lower.includes('accesspoint') || lower.includes('wifi')) return 'ap';
+            return 'router'; // fallback
+        }
+
+        // Return the exact 3D Cisco SVG for a device type and size
+        function getDeviceIconSVG(type, size = 'medium') {
+            let width = 48, height = 30;
+            if (size === 'small') {
+                width = 24;
+                height = 15;
+            } else if (size === 'large') {
+                width = 54;
+                height = 34;
+            }
+
+            if (type === 'router') {
+                return `
+                    <svg width="${width}" height="${height}" viewBox="0 0 48 34" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <linearGradient id="rBodyGrad-${size}" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#0E3D48" />
+                                <stop offset="50%" stop-color="#1E7C90" />
+                                <stop offset="100%" stop-color="#0E3D48" />
+                            </linearGradient>
+                            <linearGradient id="rTopGrad-${size}" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" stop-color="#2CD3F6" />
+                                <stop offset="100%" stop-color="#0CA6C4" />
+                            </linearGradient>
+                        </defs>
+                        <path d="M4 10 C4 14.5 13 18 24 18 C35 18 44 14.5 44 10 L44 22 C44 26.5 35 30 24 30 C13 30 4 26.5 4 22 Z" fill="url(#rBodyGrad-${size})" />
+                        <ellipse cx="24" cy="10" rx="20" ry="8" fill="url(#rTopGrad-${size})" stroke="#198EAB" stroke-width="1" />
+                        <path d="M12 10 C18 7, 30 7, 36 10" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+                        <path d="M36 10 L32 8 M36 10 L32 12" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>
+                        <path d="M36 10 C30 13, 18 13, 12 10" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+                        <path d="M12 10 L16 8 M12 10 L16 12" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>
+                    </svg>
+                `;
+            } else if (type === 'switch') {
+                return `
+                    <svg width="${width}" height="${height}" viewBox="0 0 48 30" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <linearGradient id="swTopGrad-${size}" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" stop-color="#1E8C9E" />
+                                <stop offset="100%" stop-color="#0E5F6E" />
+                            </linearGradient>
+                            <linearGradient id="swSideGrad-${size}" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#092830" />
+                                <stop offset="100%" stop-color="#03141A" />
+                            </linearGradient>
+                            <linearGradient id="swFrontGrad-${size}" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#0B2029" />
+                                <stop offset="50%" stop-color="#143D4C" />
+                                <stop offset="100%" stop-color="#0B2029" />
+                            </linearGradient>
+                        </defs>
+                        <path d="M4 16 L20 8 L44 8 L28 16 Z" fill="url(#swTopGrad-${size})" stroke="#137485" stroke-width="0.75" />
+                        <path d="M4 16 L20 8 L20 18 L4 26 Z" fill="url(#swSideGrad-${size})" />
+                        <path d="M4 16 L28 16 L28 26 L4 26 Z" fill="url(#swFrontGrad-${size})" stroke="#0E2F3B" stroke-width="0.75" />
+                        <path d="M28 16 L44 8 L44 18 L28 26 Z" fill="url(#swFrontGrad-${size})" stroke="#0E2F3B" stroke-width="0.75" />
+                        <path d="M8 21 H20 M8 21 L11 18 M8 21 L11 24" stroke="#2CD3F6" stroke-width="1.2" stroke-linecap="round"/>
+                        <path d="M20 21 H8 M20 21 L17 18 M20 21 L17 24" stroke="#2CD3F6" stroke-width="1.2" stroke-linecap="round"/>
+                        <rect x="30" y="11" width="1.5" height="1.5" fill="#10B981"/>
+                        <rect x="33" y="11" width="1.5" height="1.5" fill="#10B981"/>
+                        <rect x="36" y="11" width="1.5" height="1.5" fill="#D97706"/>
+                        <rect x="39" y="11" width="1.5" height="1.5" fill="#10B981"/>
+                        <rect x="30" y="14" width="1.5" height="1.5" fill="#10B981"/>
+                        <rect x="33" y="14" width="1.5" height="1.5" fill="#475569"/>
+                        <rect x="36" y="14" width="1.5" height="1.5" fill="#10B981"/>
+                        <rect x="39" y="14" width="1.5" height="1.5" fill="#475569"/>
+                    </svg>
+                `;
+            } else if (type === 'firewall') {
+                return `
+                    <svg width="${width}" height="${height}" viewBox="0 0 48 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <linearGradient id="fwTopGrad-${size}" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" stop-color="#E27474" />
+                                <stop offset="100%" stop-color="#B91C1C" />
+                            </linearGradient>
+                            <linearGradient id="fwSideGrad-${size}" x1="0%" y1="0%" x2="100%" y2="100%">
+                                <stop offset="0%" stop-color="#7F1D1D" />
+                                <stop offset="100%" stop-color="#450A0A" />
+                            </linearGradient>
+                            <linearGradient id="fwFrontGrad-${size}" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#991B1B" />
+                                <stop offset="50%" stop-color="#EF4444" />
+                                <stop offset="100%" stop-color="#991B1B" />
+                            </linearGradient>
+                        </defs>
+                        <path d="M4 16 L20 8 L44 8 L28 16 Z" fill="url(#fwTopGrad-${size})" stroke="#B91C1C" stroke-width="0.75" />
+                        <path d="M4 16 L20 8 L20 28 L4 36 Z" fill="url(#fwSideGrad-${size})" />
+                        <path d="M4 16 L28 16 L28 36 L4 36 Z" fill="url(#fwFrontGrad-${size})" stroke="#7F1D1D" stroke-width="0.75" />
+                        <path d="M28 16 L44 8 L44 28 L28 36 Z" fill="url(#fwFrontGrad-${size})" stroke="#7F1D1D" stroke-width="0.75" />
+                        <path d="M4 21 H28 M4 26 H28 M4 31 H28" stroke="#FCA5A5" stroke-width="0.75" opacity="0.4"/>
+                        <path d="M10 16 V21 M20 16 V21 M15 21 V26 M25 21 V26 M10 26 V31 M20 26 V31 M15 31 V36 M25 31 V36" stroke="#FCA5A5" stroke-width="0.75" opacity="0.4"/>
+                    </svg>
+                `;
+            } else if (type === 'ap') {
+                return `
+                    <svg width="${width}" height="${height}" viewBox="0 0 48 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <defs>
+                            <linearGradient id="apTopGrad-${size}" x1="0%" y1="0%" x2="0%" y2="100%">
+                                <stop offset="0%" stop-color="#F1F5F9" />
+                                <stop offset="100%" stop-color="#CBD5E1" />
+                            </linearGradient>
+                            <linearGradient id="apBodyGrad-${size}" x1="0%" y1="0%" x2="100%" y2="0%">
+                                <stop offset="0%" stop-color="#475569" />
+                                <stop offset="50%" stop-color="#64748B" />
+                                <stop offset="100%" stop-color="#475569" />
+                            </linearGradient>
+                        </defs>
+                        <path d="M8 20 C8 24 14 27 24 27 C34 27 40 24 40 20 L40 23 C40 27 34 30 24 30 C14 30 8 27 8 23 Z" fill="url(#apBodyGrad-${size})" />
+                        <ellipse cx="24" cy="20" rx="16" ry="6" fill="url(#apTopGrad-${size})" stroke="#94A3B8" stroke-width="1" />
+                        <path d="M18 16 C20 12, 28 12, 30 16" stroke="#3B82F6" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+                        <path d="M14 12 C18 7, 30 7, 34 12" stroke="#3B82F6" stroke-width="1.5" stroke-linecap="round" fill="none"/>
+                    </svg>
+                `;
+            }
+            return '';
+        }
+
+        // Render Device Connected Pills
+        function renderDevicePills() {
+            const bar = document.getElementById('device-bar-pills');
+            if (!bar) return;
+
+            let html = `
+                <div class="device-label">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="5" r="3"></circle><circle cx="5" cy="19" r="3"></circle><circle cx="19" cy="19" r="3"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="12" x2="5" y2="16"></line><line x1="12" y1="12" x2="19" y2="16"></line></svg>
+                    <span>${devices.length} Devices</span>
+                </div>
+            `;
+
+            devices.forEach(dev => {
+                const type = detectDeviceType(dev.name);
+                const iconSvg = getDeviceIconSVG(type, 'small');
+                
+                let dotColor = 'var(--green)';
+                let statusText = 'Connected';
+                
+                if (dev.status === 'configured') {
+                    dotColor = 'var(--green)';
+                    statusText = 'Configured';
+                } else if (dev.status === 'pending') {
+                    dotColor = 'var(--yellow)';
+                    statusText = 'Pending';
+                }
+
+                html += `
+                    <div class="device-pill" style="cursor: pointer;" onclick="switchTab('logs'); selectDevice('${dev.id}')">
+                        ${iconSvg}
+                        <strong>${dev.name}</strong> 
+                        <span class="pill-dot" style="background-color: ${dotColor};"></span> 
+                        <span class="status-text">${statusText}</span>
+                    </div>
+                `;
+            });
+
+            html += `
+                <button class="view-topology-btn" onclick="switchTab('logs')">
+                    <span>View Topology</span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+                </button>
+            `;
+
+            bar.innerHTML = html;
+
+            // Update top bar text too
+            const countLabel = document.getElementById('header-device-count');
+            if (countLabel) {
+                countLabel.innerText = `${devices.length} devices connected`;
+            }
+        }
+
+        // Render Connections
+        function renderConnections() {
+            const svg = document.getElementById('topology-connections');
+            if (!svg) return;
+
+            let html = '';
+            connections.forEach(conn => {
+                const fromDev = devices.find(d => d.id === conn.from);
+                const toDev = devices.find(d => d.id === conn.to);
+                
+                if (fromDev && toDev) {
+                    html += `
+                        <line x1="${fromDev.x}%" y1="${fromDev.y}%" x2="${toDev.x}%" y2="${toDev.y}%" stroke="#10B981" stroke-width="2" />
+                    `;
+                }
+            });
+            svg.innerHTML = html;
+        }
+
+        // Render Topology Nodes
+        function renderTopologyNodes() {
+            const canvas = document.getElementById('topology-canvas-container');
+            if (!canvas) return;
+
+            // Remove existing nodes (keep connection SVG)
+            const oldNodes = canvas.querySelectorAll('.topo-node');
+            oldNodes.forEach(n => n.remove());
+
+            devices.forEach(dev => {
+                const type = detectDeviceType(dev.name);
+                const iconSvg = getDeviceIconSVG(type, 'large');
+                const isActive = (dev.id === selectedDeviceId) ? 'active' : '';
+
+                const nodeDiv = document.createElement('div');
+                nodeDiv.className = `topo-node ${isActive}`;
+                nodeDiv.style.left = `calc(${dev.x}% - 30px)`;
+                nodeDiv.style.top = `calc(${dev.y}% - 35px)`;
+                nodeDiv.onclick = () => selectDevice(dev.id);
+
+                nodeDiv.innerHTML = `
+                    <div class="node-icon-container">
+                        ${isActive ? '<div class="node-pulse-ring"></div>' : ''}
+                        ${iconSvg}
+                    </div>
+                    <span class="node-label">${dev.name}</span>
+                    <span class="node-ip">${dev.ip}</span>
+                `;
+
+                canvas.appendChild(nodeDiv);
+            });
+        }
+
+        // Render Details Card
+        function renderDetailsCard() {
+            const panel = document.getElementById('topology-details-card');
+            if (!panel) return;
+
+            const dev = devices.find(d => d.id === selectedDeviceId);
+            if (!dev) return;
+
+            let statusText = 'Connected';
+            let badgeClass = 'connected';
+            let statusValHtml = 'Reachable';
+
+            if (dev.status === 'configured') {
+                statusText = 'Configured';
+                badgeClass = 'configured';
+                statusValHtml = 'Success';
+            } else if (dev.status === 'pending') {
+                statusText = 'Pending';
+                badgeClass = 'pending';
+                statusValHtml = `
+                    <span>Deploying configuration...</span>
+                    <div class="spinner-ring"></div>
+                `;
+            }
+
+            panel.innerHTML = `
+                <div class="details-header">
+                    <h4 class="details-title">${dev.name}</h4>
+                    <span class="details-badge ${badgeClass}">${statusText}</span>
+                </div>
+
+                <div class="details-grid">
+                    <div class="details-row">
+                        <span class="details-key">IP Address</span>
+                        <span class="details-val">${dev.ip}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-key">Platform</span>
+                        <span class="details-val bold-highlight">${dev.platform}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-key">OSPF Area</span>
+                        <span class="details-val">${dev.area !== undefined ? dev.area : '—'}</span>
+                    </div>
+                    
+                    <hr class="details-divider">
+                    
+                    <div class="details-row">
+                        <span class="details-key">Status</span>
+                        <span class="details-val ${dev.status === 'pending' ? 'status-loading' : ''}">
+                            ${statusValHtml}
+                        </span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-key">Last Seen</span>
+                        <span class="details-val" style="color: var(--text-muted)">${dev.lastSeen}</span>
+                    </div>
+                </div>
+            `;
+        }
+
+        // Render Stats Dashboard
+        function renderStatsDashboard() {
+            const dashboard = document.getElementById('topology-stats-dashboard');
+            if (!dashboard) return;
+
+            const total = devices.length;
+            const success = devices.filter(d => d.status === 'configured').length;
+            const pending = devices.filter(d => d.status === 'pending').length;
+            const connected = devices.filter(d => d.status === 'connected').length;
+
+            dashboard.innerHTML = `
+                <div class="stats-card">
+                    <span class="stats-num total">${total}</span>
+                    <span class="stats-title total">Devices</span>
+                    <span class="stats-subtitle">Total</span>
+                </div>
+                <div class="stats-card">
+                    <span class="stats-num success">${success}</span>
+                    <span class="stats-title success">Configured</span>
+                    <span class="stats-subtitle">Success</span>
+                </div>
+                <div class="stats-card">
+                    <span class="stats-num pending">${pending}</span>
+                    <span class="stats-title pending">Pending</span>
+                    <span class="stats-subtitle">In Progress</span>
+                </div>
+                <div class="stats-card">
+                    <span class="stats-num connected">${connected}</span>
+                    <span class="stats-title connected">Connected</span>
+                    <span class="stats-subtitle">Reachable</span>
+                </div>
+            `;
+        }
+
+        // Render Workspace Settings Devices List Table
+        function renderWorkspaceSettingsTable() {
+            const tbody = document.getElementById('settings-device-list-tbody');
+            if (!tbody) return;
+
+            let html = '';
+            devices.forEach(dev => {
+                let dotColor = 'var(--green)';
+                let statusText = 'Connected';
+                
+                if (dev.status === 'configured') {
+                    dotColor = 'var(--green)';
+                    statusText = 'Configured';
+                } else if (dev.status === 'pending') {
+                    dotColor = 'var(--yellow)';
+                    statusText = 'Pending';
+                }
+
+                html += `
+                    <tr>
+                        <td><strong>${dev.name}</strong></td>
+                        <td>${dev.ip}</td>
+                        <td>${dev.platform}</td>
+                        <td>
+                            <span style="display:inline-flex; align-items:center; gap:6px;">
+                                <span class="pill-dot" style="width:6px; height:6px; border-radius:50%; background-color:${dotColor};"></span>
+                                ${statusText}
+                            </span>
+                        </td>
+                        <td>${dev.lastSeen}</td>
+                    </tr>
+                `;
+            });
+            tbody.innerHTML = html;
+        }
+
+        // Action to select device
+        function selectDevice(devId) {
+            selectedDeviceId = devId;
+            renderTopologyNodes();
+            renderDetailsCard();
+        }
+
+        // Tab Switcher
+        function switchTab(tabId) {
+            const chatTab = document.getElementById('tab-chat');
+            const logsTab = document.getElementById('tab-logs');
+            const chatPage = document.getElementById('page-chat');
+            const logsPage = document.getElementById('page-logs');
+
+            if (tabId === 'chat') {
+                chatTab.classList.add('active');
+                logsTab.classList.remove('active');
+                chatPage.style.display = 'flex';
+                logsPage.style.display = 'none';
+            } else {
+                logsTab.classList.add('active');
+                chatTab.classList.remove('active');
+                logsPage.style.display = 'flex';
+                chatPage.style.display = 'none';
+                
+                // Render topology features when page load/switch happens
+                setTimeout(() => {
+                    renderConnections();
+                    renderTopologyNodes();
+                    renderDetailsCard();
+                    renderStatsDashboard();
+                }, 20);
+            }
+        }
+
+        // --- INTERACTIVE ACTIONS LOGIC ---
+
+        // Toggle Split Send Button Dropdown Menu
+        function toggleSendDropdown(event) {
+            event.stopPropagation();
+            const menu = document.getElementById('send-options-menu');
+            if (menu.style.display === 'flex') {
+                menu.style.display = 'none';
+            } else {
+                menu.style.display = 'flex';
+                // Close other menus
+                document.getElementById('logs-filter-menu').style.display = 'none';
+            }
+        }
+
+        // Select specific mode from dropdown
+        function selectSendMode(mode) {
+            const btn = document.getElementById('send-mode-btn');
+            const input = document.getElementById('chat-text-input');
+            const menu = document.getElementById('send-options-menu');
+
+            // Reset active item
+            document.querySelectorAll('#send-options-menu .dropdown-item').forEach(item => item.classList.remove('active'));
+            
+            if (mode === 'chat') {
+                document.getElementById('mode-chat').classList.add('active');
+                btn.title = "Send Chat Message";
+                input.placeholder = "Ask ANCS anything...";
+                btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"></line><polygon points="22 2 15 22 11 13 2 9 22 2"></polygon></svg>`;
+            } else if (mode === 'network') {
+                document.getElementById('mode-network').classList.add('active');
+                btn.title = "Deploy via Network";
+                input.placeholder = "Deploy OSPF/VLAN/Routing to devices via Network SSH/Telnet...";
+                btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>`;
+            } else if (mode === 'serial') {
+                document.getElementById('mode-serial').classList.add('active');
+                btn.title = "Deploy via Serial Console";
+                input.placeholder = "Deploy configurations via Serial console fallback interface...";
+                btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"></polyline><line x1="12" y1="19" x2="20" y2="19"></line></svg>`;
+            } else if (mode === 'audit') {
+                document.getElementById('mode-audit').classList.add('active');
+                btn.title = "Run Security & Audit Scan";
+                input.placeholder = "Search or enter audit parameters...";
+                btn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path></svg>`;
+            }
+
+            _currentSendMode = mode;
+            menu.style.display = 'none';
+        }
+
+        // Trigger send action — routes through Python bridge
+        function triggerSend() {
+            const input = document.getElementById('chat-text-input');
+            const val = input.value.trim();
+            if (!val) return;
+            
+            // Add user message to chat immediately
+            _appendUserMessage(val);
+            input.value = '';
+            
+            // Show thinking indicator
+            _showThinking(true, 'Processing...');
+            
+            // Send to Python backend via bridge
+            if (window.bridge) {
+                window.bridge.sendMessage(val, _currentSendMode || 'chat');
+            }
+        }
+
+        let _currentSendMode = 'chat';
+
+        // Toggle logs tool filter dropdown
+        function toggleLogsFilterDropdown(event) {
+            event.stopPropagation();
+            const menu = document.getElementById('logs-filter-menu');
+            if (menu.style.display === 'flex') {
+                menu.style.display = 'none';
+            } else {
+                menu.style.display = 'flex';
+                // Close other menus
+                document.getElementById('send-options-menu').style.display = 'none';
+            }
+        }
+
+        // Select a tool filter for execution logs
+        function selectLogsFilter(toolName) {
+            const label = document.getElementById('logs-filter-label');
+            label.innerText = toolName;
+
+            // Highlight active item
+            document.querySelectorAll('#logs-filter-menu .dropdown-item').forEach(item => {
+                const titleEl = item.querySelector('.dropdown-item-title');
+                if (titleEl && (titleEl.innerText === toolName || (toolName === 'All Tools' && titleEl.innerText.startsWith('All Tools')))) {
+                    item.classList.add('active');
+                } else {
+                    item.classList.remove('active');
+                }
+            });
+
+            // Filter log rows
+            const rows = document.querySelectorAll('.logs-list-card .log-row');
+            rows.forEach(row => {
+                const logNameEl = row.querySelector('.log-name');
+                if (!logNameEl) return;
+                const logName = logNameEl.innerText.toLowerCase();
+                const searchTool = toolName.toLowerCase();
+
+                if (toolName === 'All Tools') {
+                    row.style.display = 'flex';
+                } else {
+                    let match = false;
+                    // Special mappings for log events matching the tool functions
+                    if (searchTool === 'deploy_to_device') {
+                        match = logName.includes('deploy_config') || logName.includes('deploy_to_device');
+                    } else if (searchTool === 'run_cli_on_device' || searchTool === 'run_command_on_device') {
+                        match = logName.includes('show ip') || logName.includes('executing') || logName.includes('run_cli') || logName.includes('run_command');
+                    } else {
+                        match = logName.includes(searchTool);
+                    }
+                    row.style.display = match ? 'flex' : 'none';
+                }
+            });
+
+            document.getElementById('logs-filter-menu').style.display = 'none';
+        }
+
+        // Clear Execution Logs Mock
+        function clearExecutionLogs() {
+            const card = document.querySelector('.logs-list-card');
+            if (card) {
+                card.innerHTML = `<div style="padding: 24px; text-align: center; color: var(--text-sec); font-size: 13px;">No tool logs in this session.</div>`;
+            }
+            const rawContainer = document.querySelector('.raw-logs-container');
+            if (rawContainer) {
+                rawContainer.innerHTML = `<div class="raw-log-placeholder" style="color: var(--text-muted); text-align: center; padding: 20px 0; font-family: sans-serif; font-size: 13px;">Waiting for network operations or agent reasoning...</div>`;
+            }
+        }
+
+        // Toggle Settings Modal Dialog
+        function toggleSettingsModal() {
+            const modal = document.getElementById('settings-modal');
+            if (modal.style.display === 'flex') {
+                modal.style.display = 'none';
+            } else {
+                modal.style.display = 'flex';
+                // Reset to first tab General
+                switchSettingsTab('general');
+                loadSavedConfigSettings();
+                renderWorkspaceSettingsTable();
+            }
+        }
+
+        function closeSettingsModal(event) {
+            toggleSettingsModal();
+        }
+
+        // Switch Tabs inside Settings Dialog
+        function switchSettingsTab(tabName) {
+            // Hide all tab content
+            document.querySelectorAll('.settings-tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+            // Deactivate all sidebar items
+            document.querySelectorAll('.settings-nav-item').forEach(item => {
+                item.classList.remove('active');
+            });
+
+            // Show active tab and button
+            document.getElementById(`settings-tab-${tabName}`).classList.add('active');
+            document.getElementById(`settings-nav-${tabName}`).classList.add('active');
+            
+            if (tabName === 'workspace') {
+                renderWorkspaceSettingsTable();
+            }
+        }
+
+        // Load config from LocalStorage
+        function loadSavedConfigSettings() {
+            const rawDeployCheck = document.getElementById('settings-allow-raw-deploy');
+            const maxTokensInput = document.getElementById('settings-max-tokens');
+            const timeoutInput = document.getElementById('settings-timeout');
+            const providerSelect = document.getElementById('settings-provider');
+            const modelSelect = document.getElementById('settings-model');
+            const apiKeyInput = document.getElementById('settings-api-key');
+            
+            if (rawDeployCheck) {
+                rawDeployCheck.checked = localStorage.getItem('agent_allow_raw_deploy') === 'true';
+            }
+            if (maxTokensInput) {
+                maxTokensInput.value = localStorage.getItem('agent_max_tokens') || '8192';
+            }
+            if (timeoutInput) {
+                timeoutInput.value = localStorage.getItem('agent_timeout') || '30';
+            }
+            if (providerSelect) {
+                providerSelect.value = localStorage.getItem('agent_provider') || 'openrouter';
+            }
+            if (modelSelect) {
+                modelSelect.value = localStorage.getItem('agent_model') || 'openai/gpt-4o-mini';
+            }
+            if (apiKeyInput) {
+                apiKeyInput.value = localStorage.getItem('agent_api_key') || '';
+            }
+            
+            updateHeaderModelPill();
+        }
+
+        function updateHeaderModelPill() {
+            const model = localStorage.getItem('agent_model') || 'openai/gpt-4o-mini';
+            const pills = document.querySelectorAll('.model-pill');
+            pills.forEach(pill => {
+                pill.textContent = model;
+            });
+        }
+
+        // Save Settings Actions — sends to Python bridge
+        function saveSettings() {
+            const settings = {
+                provider: (document.getElementById('settings-provider') || {}).value || 'openrouter',
+                model: (document.getElementById('settings-model') || {}).value || 'openai/gpt-4o-mini',
+                apiKey: (document.getElementById('settings-api-key') || {}).value || '',
+                allowRaw: (document.getElementById('settings-allow-raw-deploy') || {}).checked || false,
+                maxTokens: (document.getElementById('settings-max-tokens') || {}).value || '8192',
+                timeout: (document.getElementById('settings-timeout') || {}).value || '30'
+            };
+            
+            // Also save to localStorage as backup
+            localStorage.setItem('agent_provider', settings.provider);
+            localStorage.setItem('agent_model', settings.model);
+            localStorage.setItem('agent_api_key', settings.apiKey);
+            localStorage.setItem('agent_allow_raw_deploy', settings.allowRaw);
+            localStorage.setItem('agent_max_tokens', settings.maxTokens);
+            localStorage.setItem('agent_timeout', settings.timeout);
+            
+            updateHeaderModelPill();
+            
+            // Send to Python backend
+            if (window.bridge) {
+                window.bridge.saveSettings(JSON.stringify(settings));
+            }
+            
+            toggleSettingsModal();
+        }
+
+        // Toggle Device Discovery Modal
+        function toggleAddDeviceModal() {
+            const modal = document.getElementById('add-device-modal');
+            if (modal.style.display === 'flex') {
+                modal.style.display = 'none';
+            } else {
+                modal.style.display = 'flex';
+                // Reset discovery state
+                switchDiscoveryTab('auto');
+                clearDiscoveryState();
+            }
+        }
+
+        function closeAddDeviceModal(event) {
+            toggleAddDeviceModal();
+        }
+
+        // Switch Tabs inside Device Discovery dialog
+        function switchDiscoveryTab(tabName) {
+            document.querySelectorAll('.discovery-tab-content').forEach(c => c.style.display = 'none');
+            document.querySelectorAll('.discovery-tab').forEach(t => t.classList.remove('active'));
+            
+            if (tabName === 'auto') {
+                document.getElementById('discovery-tab-auto').style.display = 'flex';
+                document.getElementById('tab-auto-discover').classList.add('active');
+            } else {
+                document.getElementById('discovery-tab-manual').style.display = 'flex';
+                document.getElementById('tab-manual-add').classList.add('active');
+            }
+        }
+
+        // Clear Discovery form fields & mock results
+        function clearDiscoveryState() {
+            document.getElementById('new-device-ip').value = '';
+            document.getElementById('new-device-user').value = '';
+            document.getElementById('new-device-pass').value = '';
+            document.getElementById('new-device-enable').value = '';
+            
+            document.getElementById('discovery-progress-container').style.display = 'none';
+            document.getElementById('discovered-results-section').style.display = 'none';
+            document.getElementById('btn-start-discovery').style.display = 'block';
+            document.getElementById('btn-stop-discovery').style.display = 'none';
+            document.getElementById('discovery-progress-bar').style.width = '0%';
+            document.getElementById('discovered-devices-tbody').innerHTML = '';
+        }
+
+        // Mock Discovery Data matching Figma Frame
+        const mockDiscoveredPool = [
+            { hostname: "R1", ip: "192.168.1.1", vendor: "Cisco", os: "IOS XE", model: "ISR4431", status: "Reachable", checked: true },
+            { hostname: "R2", ip: "192.168.1.2", vendor: "Cisco", os: "IOS XE", model: "ISR4431", status: "Reachable", checked: true },
+            { hostname: "R3", ip: "192.168.1.3", vendor: "Cisco", os: "IOS XE", model: "ISR4331", status: "Unreachable", checked: false },
+            { hostname: "SW1", ip: "192.168.1.10", vendor: "Cisco", os: "IOS XE", model: "C9300-24T", status: "Reachable", checked: true },
+            { hostname: "FW1", ip: "192.168.1.20", vendor: "Cisco", os: "IOS XE", model: "FPR1120", status: "Reachable", checked: false }
+        ];
+
+        let discoveryInterval = null;
+
+        // Start Auto Discovery Scan simulation
+        function startAutoDiscovery() {
+            const progressContainer = document.getElementById('discovery-progress-container');
+            const startBtn = document.getElementById('btn-start-discovery');
+            const stopBtn = document.getElementById('btn-stop-discovery');
+            const progressBar = document.getElementById('discovery-progress-bar');
+            const percentText = document.getElementById('discovery-percent');
+            const statusText = document.getElementById('discovery-status-text');
+            const resultsSection = document.getElementById('discovered-results-section');
+
+            startBtn.style.display = 'none';
+            stopBtn.style.display = 'block';
+            progressContainer.style.display = 'flex';
+            resultsSection.style.display = 'none';
+            
+            let percent = 0;
+            progressBar.style.width = '0%';
+            percentText.innerText = '0%';
+            statusText.innerText = 'Scanning subnet...';
+
+            if (discoveryInterval) clearInterval(discoveryInterval);
+
+            discoveryInterval = setInterval(() => {
+                percent += 5;
+                progressBar.style.width = `${percent}%`;
+                percentText.innerText = `${percent}%`;
+
+                if (percent === 30) {
+                    statusText.innerText = 'Querying SNMP agents...';
+                } else if (percent === 70) {
+                    statusText.innerText = 'Resolving hostnames...';
+                }
+
+                if (percent >= 100) {
+                    clearInterval(discoveryInterval);
+                    stopAutoDiscovery();
+                    renderDiscoveredDevices();
+                }
+            }, 100);
+        }
+
+        function stopAutoDiscovery() {
+            if (discoveryInterval) clearInterval(discoveryInterval);
+            document.getElementById('btn-start-discovery').style.display = 'block';
+            document.getElementById('btn-stop-discovery').style.display = 'none';
+            document.getElementById('discovery-progress-container').style.display = 'none';
+        }
+
+        // Render discovered table
+        function renderDiscoveredDevices() {
+            const tbody = document.getElementById('discovered-devices-tbody');
+            tbody.innerHTML = '';
+
+            mockDiscoveredPool.forEach((dev, idx) => {
+                const tr = document.createElement('tr');
+                tr.style.borderBottom = '1px solid rgba(255,255,255,0.03)';
+                tr.innerHTML = `
+                    <td style="padding: 8px 10px; text-align: center;"><input type="checkbox" class="disc-checkbox" data-idx="${idx}" ${dev.checked ? 'checked' : ''} onclick="updateDiscoveredSelectionCount()" style="accent-color: var(--accent);"></td>
+                    <td style="padding: 8px 10px; font-weight: 500;">${dev.hostname}</td>
+                    <td style="padding: 8px 10px; font-family: monospace;">${dev.ip}</td>
+                    <td style="padding: 8px 10px;">${dev.vendor}</td>
+                    <td style="padding: 8px 10px;">${dev.os}</td>
+                    <td style="padding: 8px 10px; font-family: monospace;">${dev.model}</td>
+                    <td style="padding: 8px 10px;"><span style="color: ${dev.status === 'Reachable' ? 'var(--green)' : '#EF4444'}; font-weight: 600;">${dev.status}</span></td>
+                `;
+                tbody.appendChild(tr);
+            });
+
+            document.getElementById('discovered-results-section').style.display = 'flex';
+            document.getElementById('discovered-count-label').innerText = `Discovered Devices (${mockDiscoveredPool.length})`;
+            
+            // Check select all state
+            const allChecked = mockDiscoveredPool.every(d => d.checked);
+            document.getElementById('select-all-discovered').checked = allChecked;
+
+            updateDiscoveredSelectionCount();
+        }
+
+        function toggleSelectAllDiscovered(masterCheckbox) {
+            const checked = masterCheckbox.checked;
+            document.querySelectorAll('.disc-checkbox').forEach(cb => {
+                cb.checked = checked;
+            });
+            updateDiscoveredSelectionCount();
+        }
+
+        function updateDiscoveredSelectionCount() {
+            const checkboxes = document.querySelectorAll('.disc-checkbox');
+            let selectedCount = 0;
+            checkboxes.forEach(cb => {
+                if (cb.checked) selectedCount++;
+            });
+
+            document.getElementById('selection-count-label').innerText = `${selectedCount} Selected`;
+            
+            const addBtn = document.getElementById('btn-add-selected');
+            addBtn.innerText = `Add Selected (${selectedCount})`;
+            addBtn.disabled = selectedCount === 0;
+            addBtn.style.opacity = selectedCount === 0 ? '0.5' : '1';
+        }
+
+        function clearDiscoveredSelection() {
+            document.querySelectorAll('.disc-checkbox').forEach(cb => cb.checked = false);
+            document.getElementById('select-all-discovered').checked = false;
+            updateDiscoveredSelectionCount();
+        }
+
+        function refreshDiscovery() {
+            startAutoDiscovery();
+        }
+
+        // Add selected discovered devices to central workspace list
+        function addSelectedDiscoveredDevices() {
+            const checkboxes = document.querySelectorAll('.disc-checkbox');
+            let addedCount = 0;
+
+            checkboxes.forEach(cb => {
+                if (cb.checked) {
+                    const idx = parseInt(cb.getAttribute('data-idx'));
+                    const poolDev = mockDiscoveredPool[idx];
+                    
+                    // Check if already in devices list
+                    const exists = devices.some(d => d.ip === poolDev.ip || d.name === poolDev.hostname);
+                    if (!exists) {
+                        const newDev = {
+                            id: poolDev.hostname,
+                            name: poolDev.hostname,
+                            status: poolDev.status === 'Reachable' ? 'connected' : 'offline',
+                            ip: poolDev.ip,
+                            platform: `${poolDev.vendor} ${poolDev.os}`,
+                            lastSeen: "Just now",
+                            x: 20 + (devices.length * 15) % 70,
+                            y: 60
+                        };
+                        devices.push(newDev);
+                        addedCount++;
+                    }
+                }
+            });
+
+            if (addedCount > 0) {
+                renderDevicePills();
+                renderWorkspaceSettingsTable();
+                alert(`${addedCount} new devices added to workspace.`);
+            } else {
+                alert("Selected devices are already in workspace.");
+            }
+
+            toggleAddDeviceModal();
+        }
+
+        // Add Custom Device in Workspace List (Manual Add)
+        function addCustomDevice() {
+            const proto = document.getElementById('new-device-proto').value;
+            const ip = document.getElementById('new-device-ip').value.trim();
+            const port = document.getElementById('new-device-port').value.trim();
+            const user = document.getElementById('new-device-user').value.trim();
+
+            if (!ip) {
+                alert("Please specify a Hostname / IP address.");
+                return;
+            }
+
+            // Check duplicate
+            if (devices.some(d => d.ip === ip)) {
+                alert("Device with this IP already exists in workspace.");
+                return;
+            }
+
+            // Derive Name based on current length + type
+            const index = devices.length + 1;
+            let name = `DEV${index}`;
+            if (proto === 'SSH') name = `R${index-3}`; // custom router naming
+            if (proto === 'Telnet') name = `SW${index-4}`; // switch naming
+
+            // Add node to state
+            const newDev = {
+                id: name,
+                name: name,
+                status: "connected",
+                ip: ip,
+                platform: "Cisco IOS XE",
+                lastSeen: "Just now",
+                x: 10 + (devices.length * 12) % 80, // dynamic layout position
+                y: 50
+            };
+
+            devices.push(newDev);
+            
+            // Re-render
+            renderDevicePills();
+            renderWorkspaceSettingsTable();
+            
+            // Close nested modal
+            toggleAddDeviceModal();
+            alert(`Device ${name} (${ip}) successfully added to workspace.`);
+        }
+
+        function toggleThought(id) {
+            const el = document.getElementById(id);
+            if (el) {
+                el.classList.toggle('expanded');
+            }
+        }
+
+        // Click outside dropdown to close it
+        window.addEventListener('click', () => {
+            document.getElementById('send-options-menu').style.display = 'none';
+            document.getElementById('logs-filter-menu').style.display = 'none';
+        });
+
+        // ═══════════════════════════════════════════════════════
+        // PYTHON BRIDGE — QWebChannel integration
+        // ═══════════════════════════════════════════════════════
+        
+        // Append a user chat bubble
+        function _appendUserMessage(text) {
+            const chatHistory = document.querySelector('.chat-history');
+            if (!chatHistory) return;
+            const time = new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            const div = document.createElement('div');
+            div.className = 'user-message-container';
+            div.innerHTML = `
+                <div class="user-message">
+                    <span class="user-name">You</span>
+                    <div class="user-content">${_escapeHtml(text)}</div>
+                    <span class="msg-time">${time}</span>
+                </div>
+            `;
+            chatHistory.appendChild(div);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+        
+        // Append an AI/agent chat bubble (content is HTML)
+        function _appendAgentMessage(html, timestamp) {
+            const chatHistory = document.querySelector('.chat-history');
+            if (!chatHistory) return;
+            const time = timestamp || new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'});
+            const div = document.createElement('div');
+            div.className = 'ai-message-container';
+            div.innerHTML = `
+                <span class="ai-name">✦ ANCS Agent</span>
+                <div class="ai-content">${html}</div>
+                <span class="msg-time">${time}</span>
+            `;
+            chatHistory.appendChild(div);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+        
+        // Append a system message
+        function _appendSystemMessage(text) {
+            const chatHistory = document.querySelector('.chat-history');
+            if (!chatHistory) return;
+            const div = document.createElement('div');
+            div.style.cssText = 'text-align:center; padding:8px 0; color:var(--text-muted); font-size:12px;';
+            div.textContent = text;
+            chatHistory.appendChild(div);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+        }
+        
+        // Show/hide thinking indicator
+        function _showThinking(active, label) {
+            let thinkingEl = document.getElementById('bridge-thinking');
+            if (active) {
+                if (!thinkingEl) {
+                    const chatHistory = document.querySelector('.chat-history');
+                    if (!chatHistory) return;
+                    thinkingEl = document.createElement('div');
+                    thinkingEl.id = 'bridge-thinking';
+                    thinkingEl.className = 'loading-status-container';
+                    thinkingEl.innerHTML = `
+                        <div class="bouncing-dots"><span></span><span></span><span></span></div>
+                        <span id="bridge-thinking-label">${_escapeHtml(label || 'Processing...')}</span>
+                    `;
+                    chatHistory.appendChild(thinkingEl);
+                    chatHistory.scrollTop = chatHistory.scrollHeight;
+                } else {
+                    const lbl = document.getElementById('bridge-thinking-label');
+                    if (lbl) lbl.textContent = label || 'Processing...';
+                }
+            } else {
+                if (thinkingEl) thinkingEl.remove();
+            }
+        }
+        
+        // Update connection status in header
+        function _setConnectionStatus(status, modelName) {
+            const dot = document.querySelector('.status-dot');
+            const badge = document.querySelector('.status-badge');
+            if (dot) {
+                dot.className = 'status-dot';
+                if (status === 'connected') {
+                    dot.style.backgroundColor = 'var(--green)';
+                    dot.classList.add('pulsing');
+                } else if (status === 'connecting') {
+                    dot.style.backgroundColor = 'var(--yellow)';
+                } else {
+                    dot.style.backgroundColor = 'var(--text-muted)';
+                    dot.classList.remove('pulsing');
+                }
+            }
+            if (badge) {
+                const textEl = badge.querySelector('span:last-child') || badge;
+                if (status === 'connected') textEl.textContent = 'Connected';
+                else if (status === 'connecting') textEl.textContent = 'Connecting...';
+                else textEl.textContent = 'Offline';
+            }
+            if (modelName) {
+                const pills = document.querySelectorAll('.model-pill');
+                pills.forEach(p => p.textContent = modelName);
+            }
+        }
+        
+        // Append a tool execution log entry
+        function _addToolLogEntry(jsonStr) {
+            try {
+                const entry = JSON.parse(jsonStr);
+                const card = document.querySelector('.logs-list-card');
+                if (!card) return;
+                // Remove empty placeholder if present
+                const empty = card.querySelector('div[style*="text-align: center"]');
+                if (empty && !card.querySelector('.log-row')) empty.remove();
+                
+                const row = document.createElement('div');
+                row.className = 'log-row';
+                const statusClass = entry.status === 'running' ? 'running' : '';
+                const dotHtml = entry.status === 'running'
+                    ? '<div class="spinner-ring"></div>'
+                    : '<div class="log-dot success"></div>';
+                const badgeClass = entry.type === 'tool' ? 'tool' : (entry.type === 'info' ? 'info' : 'pending');
+                row.innerHTML = `
+                    <span class="log-time">${_escapeHtml(entry.time || '')}</span>
+                    <span class="log-badge-col"><span class="log-badge ${badgeClass}">${_escapeHtml(entry.type || 'tool')}</span></span>
+                    <span class="log-name">${_escapeHtml(entry.name || '')}</span>
+                    <span class="log-desc">${_escapeHtml(entry.description || '')}</span>
+                    <span class="log-status-col ${statusClass}">${dotHtml} ${_escapeHtml(entry.status || '')}</span>
+                `;
+                card.appendChild(row);
+            } catch(e) { console.error('_addToolLogEntry error:', e); }
+        }
+        
+        // Append raw HTML to execution log stream
+        function _appendExecutionLog(html) {
+            const container = document.querySelector('.raw-logs-container');
+            if (!container) return;
+
+            // Remove placeholder if it exists
+            const placeholder = container.querySelector('.raw-log-placeholder');
+            if (placeholder) {
+                placeholder.remove();
+            }
+
+            // Create a row for the log
+            const logLine = document.createElement('div');
+            logLine.style.wordBreak = 'break-all';
+            logLine.style.whiteSpace = 'pre-wrap';
+            
+            // Format colors or styling if we see tags like [Thinking] or [Tool]
+            let styledHtml = html;
+            if (html.includes('[Thinking]') || html.includes('💭')) {
+                styledHtml = `<span style="color: #A78BFA; font-weight: 500;">${html}</span>`;
+            } else if (html.includes('[Tool Call]') || html.includes('[Tool Result]') || html.includes('[Tool Error]')) {
+                styledHtml = `<span style="color: #F472B6;">${html}</span>`;
+            } else if (html.includes('[Success]') || html.includes('✓')) {
+                styledHtml = `<span style="color: #34D399;">${html}</span>`;
+            } else if (html.includes('Error') || html.includes('Fail')) {
+                styledHtml = `<span style="color: #F87171;">${html}</span>`;
+            } else if (html.includes('[User]')) {
+                styledHtml = `<span style="color: #60A5FA;">${html}</span>`;
+            }
+
+            logLine.innerHTML = styledHtml;
+            container.appendChild(logLine);
+
+            // Auto scroll to bottom
+            container.scrollTop = container.scrollHeight;
+        }
+        
+        // Update devices from Python
+        function _updateDevices(jsonStr) {
+            try {
+                devices = JSON.parse(jsonStr);
+                renderDevicePills();
+                // Re-render topology if visible
+                if (document.getElementById('page-logs') && 
+                    document.getElementById('page-logs').style.display !== 'none') {
+                    renderConnections();
+                    renderTopologyNodes();
+                    renderDetailsCard();
+                    renderStatsDashboard();
+                }
+                renderWorkspaceSettingsTable();
+            } catch(e) { console.error('_updateDevices error:', e); }
+        }
+        
+        // Push settings from Python to populate the settings modal
+        function _pushSettings(jsonStr) {
+            try {
+                const s = JSON.parse(jsonStr);
+                const el = (id) => document.getElementById(id);
+                if (s.provider && el('settings-provider')) el('settings-provider').value = s.provider;
+                if (s.model && el('settings-model')) el('settings-model').value = s.model;
+                if (s.apiKey !== undefined && el('settings-api-key')) el('settings-api-key').value = s.apiKey;
+                if (s.allowRaw !== undefined && el('settings-allow-raw-deploy')) el('settings-allow-raw-deploy').checked = s.allowRaw;
+                if (s.maxTokens && el('settings-max-tokens')) el('settings-max-tokens').value = s.maxTokens;
+                if (s.timeout && el('settings-timeout')) el('settings-timeout').value = s.timeout;
+                // Update localStorage too
+                if (s.provider) localStorage.setItem('agent_provider', s.provider);
+                if (s.model) localStorage.setItem('agent_model', s.model);
+                if (s.apiKey) localStorage.setItem('agent_api_key', s.apiKey);
+                updateHeaderModelPill();
+            } catch(e) { console.error('_pushSettings error:', e); }
+        }
+        
+        // Escape HTML to prevent XSS
+        function _escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+        
+        // Window control buttons and drag initialization
+        function _initWindowControls() {
+            if (!window.bridge) return;
+
+            let _dragStartX = 0, _dragStartY = 0, _isDragging = false;
+            const header = document.querySelector('.header');
+            if (header) {
+                header.addEventListener('mousedown', (e) => {
+                    if (e.target.closest('button, .window-btn, .settings-trigger')) return;
+                    _isDragging = true;
+                    _dragStartX = e.screenX;
+                    _dragStartY = e.screenY;
+                });
+
+                // Double-click on header to toggle maximize
+                header.addEventListener('dblclick', (e) => {
+                    if (e.target.closest('button, .window-btn, .settings-trigger')) return;
+                    if (window.bridge && window.bridge.maximizeWindow) {
+                        window.bridge.maximizeWindow();
+                    }
+                });
+            }
+
+            document.addEventListener('mousemove', (e) => {
+                if (_isDragging && window.bridge && window.bridge.moveWindow) {
+                    const dx = Math.round(e.screenX - _dragStartX);
+                    const dy = Math.round(e.screenY - _dragStartY);
+                    _dragStartX = e.screenX;
+                    _dragStartY = e.screenY;
+                    window.bridge.moveWindow(dx, dy);
+                }
+            });
+
+            document.addEventListener('mouseup', () => { _isDragging = false; });
+
+            // Wire minimize
+            document.querySelectorAll('.window-btn.minimize').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    if (window.bridge && window.bridge.minimizeWindow) {
+                        window.bridge.minimizeWindow();
+                    }
+                });
+            });
+
+            // Wire maximize
+            document.querySelectorAll('.window-btn.maximize').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    if (window.bridge && window.bridge.maximizeWindow) {
+                        window.bridge.maximizeWindow();
+                    }
+                });
+            });
+
+            // Wire close
+            document.querySelectorAll('.window-btn.close').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    if (window.bridge && window.bridge.closeWindow) {
+                        window.bridge.closeWindow();
+                    }
+                });
+            });
+        }
+
+        // Enter key sends message
+        document.addEventListener('keydown', (e) => {
+            const input = document.getElementById('chat-text-input');
+            if (e.key === 'Enter' && !e.shiftKey && document.activeElement === input) {
+                e.preventDefault();
+                triggerSend();
+            }
+        });
+
+        // Initial setup on page load + WebChannel init
+        window.addEventListener('DOMContentLoaded', () => {
+            loadSavedConfigSettings();
+            renderDevicePills();
+            
+            // Initialize QWebChannel bridge
+            if (typeof QWebChannel !== 'undefined' && typeof qt !== 'undefined') {
+                new QWebChannel(qt.webChannelTransport, function(channel) {
+                    window.bridge = channel.objects.bridge;
+                    console.log('[ANCS] Bridge connected');
+                    
+                    // Initialize window controls inside QWebChannel connection
+                    _initWindowControls();
+                    
+                    // Connect Python → JS signals
+                    if (window.bridge.addChatMessage) {
+                        window.bridge.addChatMessage.connect(function(sender, html, timestamp) {
+                            _showThinking(false, '');
+                            if (sender === 'user') {
+                                _appendUserMessage(html);
+                            } else if (sender === 'system') {
+                                _appendSystemMessage(html);
+                            } else {
+                                _appendAgentMessage(html, timestamp);
+                            }
+                        });
+                    }
+                    
+                    if (window.bridge.setThinking) {
+                        window.bridge.setThinking.connect(function(active, label) {
+                            _showThinking(active, label);
+                        });
+                    }
+                    
+                    if (window.bridge.setConnectionStatus) {
+                        window.bridge.setConnectionStatus.connect(function(status, model) {
+                            _setConnectionStatus(status, model);
+                        });
+                    }
+                    
+                    if (window.bridge.addToolLog) {
+                        window.bridge.addToolLog.connect(function(json) {
+                            _addToolLogEntry(json);
+                        });
+                    }
+                    
+                    if (window.bridge.appendExecutionLog) {
+                        window.bridge.appendExecutionLog.connect(function(html) {
+                            _appendExecutionLog(html);
+                        });
+                    }
+                    
+                    if (window.bridge.updateDevices) {
+                        window.bridge.updateDevices.connect(function(json) {
+                            _updateDevices(json);
+                        });
+                    }
+                    
+                    if (window.bridge.pushSettings) {
+                        window.bridge.pushSettings.connect(function(json) {
+                            _pushSettings(json);
+                        });
+                    }
+                    
+                    // Notify Python that JS is ready
+                    if (window.bridge.jsReady) {
+                        window.bridge.jsReady();
+                    }
+                });
+            } else {
+                console.log('[ANCS] Running standalone (no QWebChannel)');
+            }
+        });
+    </script>
+</body>
+</html>
