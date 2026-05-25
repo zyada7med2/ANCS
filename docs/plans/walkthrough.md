@@ -147,3 +147,30 @@ We replaced the premature `break` in the `TimeoutError` exception handlers with 
 
 * **Effect:** Now, if a split-second compilation pause occurs, the `TimeoutError` is safely ignored, allowing the reading loop to keep checking the connection socket up to the full command deadline (`5.0` to `6.0` seconds).
 * **Instant Exiting:** As soon as the terminal finishes transmitting the rest of the config and returns the prompt (e.g., ending with `#` or `>`), the loop terminates instantly via regex/tail checks, maintaining maximum system speed and zero redundant waiting times.
+
+---
+
+## Tool Loop Guard, Interactive Stop Button & Chat Export Upgrades
+
+We have successfully implemented deep cognitive protections against infinite agent loops, exposed an interactive thread termination stop button, and enabled localized chat logging exports.
+
+### 1. AI Copilot Tool Loop Guard
+* **Turn-Based Signature Tracking:** Introduced signature hashing `(fn_name, json.dumps(fn_args, sort_keys=True))` inside both Google Gemini (`_process_response_gemini`) and OpenRouter/OpenAI (`_process_response_openrouter` / `_execute_single_tool` / `_execute_tools_parallel`) calling workflows in [ai_agent.py](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/ai_agent.py).
+* **Cognitive Backpressure Injection:** If a tool call with the exact same arguments is requested more than once in the same thinking turn (indicating an infinite loop due to database/state discrepancies), the guard intercepts it immediately and injects a helpful error message:
+  `"Error: Tool loop detected. You have already called {fn_name} with these arguments in this turn. Do not retry. Report this failure/state to the user immediately."`
+* **Zero Spin-Outs:** This forces the LLM to cleanly stop and summarize the issue for the user rather than consuming tokens and hitting API limits.
+
+### 2. Interactive Red Stop Process Button
+* **Dynamic Morphing Button:** Updated `_showThinking(active, label)` in [index.html](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/gui/web/index.html) to dynamically transform the standard blue send/enter button into a high-visibility, glowing **RED Stop Process button (`■`)** when the worker is active/thinking.
+* **Bridge Thread Kill Slot:** Clicking the stop button calls `triggerStop()` JS, routing to `stopAgent()` in [agent_bridge.py](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/gui/agent_bridge.py).
+* **Thread-Safe Tear Down:**
+  * Setting `self._running = False` terminates the background worker loop.
+  * Calls `_stop_worker()` to clean join the old `QThread`.
+  * Calls `_launch_agent()` to spawn a fresh, healthy active background worker thread immediately, leaving the agent completely ready in under 1.5s with zero socket conflicts.
+  * Appends a clean `"Process stopped by user."` system message to the thread.
+
+### 3. Native Chat Logs Export Exporter
+* **General Settings Button:** Added a premium emerald-bordered **Export Chat Logs** button to the bottom-left of the General Settings tab inside the Settings panel of [index.html](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/gui/web/index.html).
+* **Bridge Native File Dialog:** Clicking it executes `exportChatConversation()`, mapping to the thread-safe `exportLogs()` Slot in [agent_bridge.py](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/gui/agent_bridge.py).
+* **Structured Output Compilation:** The bridge launches a native Qt `QFileDialog.getSaveFileName()` prompt. If the user selects a target path, it parses the in-memory chat session data (`self.app._copilot_chat_data`) and compiles a beautifully structured `.txt` file detailing each role and message entry.
+

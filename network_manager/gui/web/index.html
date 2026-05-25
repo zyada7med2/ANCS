@@ -2018,7 +2018,8 @@
                         </label>
                     </div>
 
-                    <div class="settings-actions">
+                    <div class="settings-actions" style="display: flex; width: 100%;">
+                        <button class="settings-btn secondary" onclick="exportChatConversation()" style="margin-right: auto; background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.2); color: #34d399;">Export Chat Logs</button>
                         <button class="settings-btn secondary" onclick="toggleSettingsModal()">Cancel</button>
                         <button class="settings-btn primary" onclick="saveSettings()">Save Changes</button>
                     </div>
@@ -3029,6 +3030,21 @@
             }
         }
 
+        // Trigger stop action — routes through Python bridge
+        function triggerStop() {
+            _showThinking(true, 'Stopping process...');
+            if (window.bridge && window.bridge.stopAgent) {
+                window.bridge.stopAgent();
+            }
+        }
+
+        // Trigger export action — routes through Python bridge
+        function exportChatConversation() {
+            if (window.bridge && window.bridge.exportLogs) {
+                window.bridge.exportLogs();
+            }
+        }
+
         let _currentSendMode = 'chat';
 
         // Toggle logs tool filter dropdown
@@ -3590,6 +3606,9 @@
         // Show/hide thinking indicator
         function _showThinking(active, label) {
             let thinkingEl = document.getElementById('bridge-thinking');
+            const sendBtn = document.getElementById('send-mode-btn');
+            const dropdownBtn = document.querySelector('.split-btn-dropdown');
+            
             if (active) {
                 if (!thinkingEl) {
                     const chatHistory = document.querySelector('.chat-history');
@@ -3607,8 +3626,34 @@
                     const lbl = document.getElementById('bridge-thinking-label');
                     if (lbl) lbl.textContent = label || 'Processing...';
                 }
+                
+                // Transform into RED Stop Process button
+                if (sendBtn) {
+                    sendBtn.title = "Stop Agent Process";
+                    sendBtn.setAttribute('onclick', 'triggerStop()');
+                    sendBtn.style.background = 'rgba(239, 68, 68, 0.2)';
+                    sendBtn.style.borderColor = 'rgba(239, 68, 68, 0.4)';
+                    sendBtn.style.color = '#f87171';
+                    sendBtn.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect></svg>`;
+                }
+                if (dropdownBtn) {
+                    dropdownBtn.style.pointerEvents = 'none';
+                    dropdownBtn.style.opacity = '0.4';
+                }
             } else {
                 if (thinkingEl) thinkingEl.remove();
+                
+                if (sendBtn) {
+                    sendBtn.style.background = '';
+                    sendBtn.style.borderColor = '';
+                    sendBtn.style.color = '';
+                    sendBtn.setAttribute('onclick', 'triggerSend()');
+                }
+                if (dropdownBtn) {
+                    dropdownBtn.style.pointerEvents = 'auto';
+                    dropdownBtn.style.opacity = '1';
+                }
+                selectSendMode(_currentSendMode || 'chat');
                 
                 // Mark all running "info" (Thinking) entries as completed
                 const card = document.querySelector('.logs-list-card');

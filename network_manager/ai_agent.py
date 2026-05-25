@@ -2712,7 +2712,10 @@ class CopilotWorker(QThread):
     def _process_response_gemini(self, response):
         """Handle the agentic tool-calling loop and return final text."""
         MAX_TURNS = 10
+        turn_tool_calls = set()
         for turn in range(MAX_TURNS):
+            if not self._running:
+                break
             function_calls = []
             if response.candidates:
                 for candidate in response.candidates:
@@ -2735,17 +2738,23 @@ class CopilotWorker(QThread):
                 fn_name = fc.name
                 fn_args = dict(fc.args) if fc.args else {}
 
-                t0 = time.monotonic()
-                if fn_name in TOOL_MAP:
-                    try:
-                        result = TOOL_MAP[fn_name](**fn_args)
-                    except Exception as e:
-                        result = f"Tool error: {e}"
+                # Track duplicate tool calls to prevent loops
+                call_key = (fn_name, json.dumps(fn_args, sort_keys=True))
+                if call_key in turn_tool_calls:
+                    result = f"Error: Tool loop detected. You have already called {fn_name} with these arguments in this turn. Do not retry. Report this failure/state to the user immediately."
+                    ctx.log(f"<span style='color:#d29922'>[Copilot] Loop prevented: {fn_name} called again with same args</span>\n")
                 else:
-                    result = f"Unknown tool: {fn_name}"
-                    ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: Unknown tool</span>\n")
-                dt_ms = (time.monotonic() - t0) * 1000.0
-
+                    turn_tool_calls.add(call_key)
+                    t0 = time.monotonic()
+                    if fn_name in TOOL_MAP:
+                        try:
+                            result = TOOL_MAP[fn_name](**fn_args)
+                        except Exception as e:
+                            result = f"Tool error: {e}"
+                    else:
+                        result = f"Unknown tool: {fn_name}"
+                        ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: Unknown tool</span>\n")
+                    dt_ms = (time.monotonic() - t0) * 1000.0
 
                 function_responses.append(
                     types.Part.from_function_response(
@@ -2796,7 +2805,10 @@ class CopilotWorker(QThread):
         Single tool calls run directly on the current thread (no overhead).
         """
         MAX_TURNS = 10
+        turn_tool_calls = set()
         for turn in range(MAX_TURNS):
+            if not self._running:
+                break
             message = response.choices[0].message
 
             # If no tool calls, we're done
@@ -2811,7 +2823,7 @@ class CopilotWorker(QThread):
             if len(tool_calls) == 1:
                 # Single tool call — run directly, no thread pool overhead
                 tc = tool_calls[0]
-                result_str = self._execute_single_tool(tc)
+                result_str = self._execute_single_tool(tc, turn_tool_calls)
                 self._messages.append({
                     "role": "tool",
                     "tool_call_id": tc.id,
@@ -2822,7 +2834,7 @@ class CopilotWorker(QThread):
                 ctx.log(
                     f"<span style='color:#58A6FF'><b>[Copilot]</b> Executing {len(tool_calls)} tool calls in parallel</span>\n"
                 )
-                results = self._execute_tools_parallel(tool_calls)
+                results = self._execute_tools_parallel(tool_calls, turn_tool_calls)
                 # Add results in order (matching tool_call_id)
                 for tc in tool_calls:
                     self._messages.append({
@@ -2894,7 +2906,7 @@ class CopilotWorker(QThread):
 
         return final_text or "I completed the requested actions. Check the Execution Logs for details."
 
-    def _execute_single_tool(self, tc):
+    def _execute_single_tool(self, tc, turn_tool_calls=None):
         """Execute a single tool call and return the result string."""
         fn_name = tc.function.name
         try:
@@ -2902,6 +2914,13 @@ class CopilotWorker(QThread):
         except json.JSONDecodeError:
             fn_args = {}
             ctx.log(f"<span style='color:#d29922'>[Copilot] Warning: bad JSON args for {fn_name}</span>\n")
+
+        if turn_tool_calls is not None:
+            call_key = (fn_name, json.dumps(fn_args, sort_keys=True))
+            if call_key in turn_tool_calls:
+                ctx.log(f"<span style='color:#d29922'>[Copilot] Loop prevented: {fn_name} called again with same args</span>\n")
+                return f"Error: Tool loop detected. You have already called {fn_name} with these arguments in this turn. Do not retry. Report this failure/state to the user immediately."
+            turn_tool_calls.add(call_key)
 
         if fn_name in _MAJOR_TOOL_STATUS:
             self.terminal_log_signal.emit(
@@ -2925,7 +2944,7 @@ class CopilotWorker(QThread):
 
         return str(result)
 
-    def _execute_tools_parallel(self, tool_calls):
+    def _execute_tools_parallel(self, tool_calls, turn_tool_calls=None):
         """Execute multiple tool calls concurrently using a thread pool.
 
         Returns dict mapping tool_call_id -> result string.
@@ -2937,7 +2956,7 @@ class CopilotWorker(QThread):
         def _run_one(tc, stagger_delay=0.0):
             if stagger_delay > 0:
                 time.sleep(stagger_delay)
-            return tc.id, self._execute_single_tool(tc)
+            return tc.id, self._execute_single_tool(tc, turn_tool_calls)
 
         # Stagger deploy calls slightly to avoid GNS3 telnet port contention
         futures = {}

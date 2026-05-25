@@ -181,3 +181,11 @@ class AgentBridge(QObject):
     @Slot()
     def closeWindow(self):
         self._dialog.hide()
+
+    @Slot()
+    def stopAgent(self):
+        """Forcefully stops the current worker thread and restarts a clean one."""
+        self._dialog._stop_worker()
+        self._dialog._launch_agent()
+        self.setThinking.emit(False, "")
+        self.addChatMessage.emit("system", "Process stopped by user.", "")
