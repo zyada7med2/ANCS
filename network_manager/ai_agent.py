@@ -3068,7 +3068,7 @@ class CopilotWorker(QThread):
                             if os.path.exists(CONFIG_FILE):
                                 with open(CONFIG_FILE, "r", encoding="utf-8") as f:
                                     cfg_data = json.load(f)
-                                    location = cfg_data.get("gemini_location", "us-central1")
+                                    location = cfg_data.get("gemini_location", "global")
                         except Exception:
                             pass
                         
