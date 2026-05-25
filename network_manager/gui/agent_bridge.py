@@ -225,3 +225,28 @@ class AgentBridge(QObject):
         if hasattr(self._dialog, '_active_attachment'):
             self._dialog._active_attachment = None
         self.clearAttachment.emit()
+
+    @Slot()
+    def exportPDF(self):
+        """Generates a premium PDF of the chat history using native print-to-PDF."""
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getSaveFileName(
+            self._dialog, "Export Chat PDF", "ancs_chat_export.pdf",
+            "PDF Files (*.pdf);;All Files (*)"
+        )
+        if not path:
+            return
+
+        def handle_pdf_result(data):
+            if not data.isEmpty():
+                try:
+                    with open(path, "wb") as f:
+                        f.write(data.data())
+                except Exception:
+                    pass
+
+        # Request QWebEngineView to print to PDF asynchronously
+        web_view = getattr(self._dialog, '_web', None)
+        if web_view:
+            web_view.page().printToPdf(handle_pdf_result)
+

@@ -553,6 +553,100 @@
             color: #ef4444;
         }
 
+        /* Executive PDF Print Stylesheet */
+        @media print {
+            /* Hide all non-essential UI containers */
+            .window-header,
+            .tabs-container,
+            .settings-modal,
+            .chat-input-area,
+            .split-btn,
+            .settings-actions,
+            .device-bar,
+            .dropdown-menu,
+            #logs-filter-menu,
+            .loading-status-container {
+                display: none !important;
+            }
+            
+            /* Enforce clean black and white print contrast */
+            body, html {
+                background: #ffffff !important;
+                color: #000000 !important;
+                font-family: 'Outfit', 'Inter', -apple-system, sans-serif !important;
+                padding: 0 !important;
+                margin: 0 !important;
+            }
+            
+            .container {
+                display: block !important;
+                padding: 0 !important;
+                margin: 0 !important;
+                background: transparent !important;
+                box-shadow: none !important;
+                border: none !important;
+                width: 100% !important;
+                max-width: 100% !important;
+            }
+            
+            #page-chat {
+                display: block !important;
+                width: 100% !important;
+                padding: 0 !important;
+                margin: 0 !important;
+            }
+            
+            .chat-history {
+                height: auto !important;
+                overflow: visible !important;
+                display: block !important;
+                background: transparent !important;
+                box-shadow: none !important;
+                padding: 0 !important;
+                margin: 0 !important;
+            }
+            
+            /* Render message bubbles as flat clean blocks with standard borders */
+            .chat-msg {
+                background: transparent !important;
+                border: none !important;
+                border-bottom: 1px solid #e2e8f0 !important;
+                color: #000000 !important;
+                padding: 16px 0 !important;
+                margin: 0 !important;
+                box-shadow: none !important;
+                display: flex !important;
+                flex-direction: column !important;
+                page-break-inside: avoid;
+            }
+            
+            .chat-msg.agent {
+                background: rgba(163, 113, 247, 0.04) !important;
+                padding-left: 12px !important;
+                padding-right: 12px !important;
+                border-radius: 6px !important;
+            }
+            
+            /* Hide collapsible thought tags in printed report for clean executive look */
+            .thought-collapse-container,
+            .thought-badge,
+            .thought-header {
+                display: none !important;
+            }
+            
+            /* Standard high-contrast rendering for CLI outputs and codes */
+            pre, code {
+                background: #f8fafc !important;
+                color: #0f172a !important;
+                border: 1px solid #e2e8f0 !important;
+                padding: 10px !important;
+                font-family: monospace !important;
+                white-space: pre-wrap !important;
+                word-break: break-all !important;
+                page-break-inside: avoid;
+            }
+        }
+
         .chat-input-box input {
             flex: 1;
             background: transparent;
@@ -2071,8 +2165,9 @@
                         </label>
                     </div>
 
-                    <div class="settings-actions" style="display: flex; width: 100%;">
-                        <button class="settings-btn secondary" onclick="exportChatConversation()" style="margin-right: auto; background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.2); color: #34d399;">Export Chat Logs</button>
+                    <div class="settings-actions" style="display: flex; width: 100%; gap: 8px;">
+                        <button class="settings-btn secondary" onclick="exportChatConversation()" style="margin-right: auto; background: rgba(52, 211, 153, 0.1); border: 1px solid rgba(52, 211, 153, 0.2); color: #34d399;">Export Logs</button>
+                        <button class="settings-btn secondary" onclick="exportChatPDF()" style="background: rgba(163, 113, 247, 0.1); border: 1px solid rgba(163, 113, 247, 0.2); color: #a371f7;">Export PDF</button>
                         <button class="settings-btn secondary" onclick="toggleSettingsModal()">Cancel</button>
                         <button class="settings-btn primary" onclick="saveSettings()">Save Changes</button>
                     </div>
@@ -3088,6 +3183,13 @@
             _showThinking(true, 'Stopping process...');
             if (window.bridge && window.bridge.stopAgent) {
                 window.bridge.stopAgent();
+            }
+        }
+
+        // Trigger export PDF — routes through Python bridge
+        function exportChatPDF() {
+            if (window.bridge && window.bridge.exportPDF) {
+                window.bridge.exportPDF();
             }
         }
 
