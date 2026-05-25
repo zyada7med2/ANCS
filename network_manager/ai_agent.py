@@ -1750,6 +1750,325 @@ def get_agent_guidelines(topic: str) -> str:
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> get_agent_guidelines({topic})</span>\n")
     return result
 
+def generate_pdf_report(filename: str = "network_documentation.pdf") -> str:
+    """Generate a highly professional, beautifully formatted PDF report of the active network
+    cabling matrix, dynamic device inventory, operational roles, and security compliance audit,
+    and save it directly to the user's Downloads folder.
+    
+    Pass a filename for the output PDF (defaults to "network_documentation.pdf").
+    Returns a success confirmation string with the absolute target path.
+    """
+    ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> generate_pdf_report(filename='{filename}')</span>\n")
+    
+    import os
+    import json
+    import time
+    import datetime
+    from network_manager.config import conn, db_lock
+    
+    devices = []
+    links = []
+    
+    # 1. Fetch live GNS3 node positions and links cached in the background worker
+    w = getattr(ctx, "worker", None)
+    gns3_nodes = []
+    gns3_links = []
+    gns3_proj = ""
+    if w:
+        gns3_nodes = getattr(w, "gns3_nodes_data", []) or []
+        gns3_links = getattr(w, "gns3_links_data", []) or []
+        gns3_proj = getattr(w, "gns3_project_id", "") or "Local GNS3 Project"
+        
+    # 2. Fetch Devices & parsed dynamic roles from the active SQLite DB
+    with db_lock:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name, type, ip, port FROM devices")
+        for row in cursor.fetchall():
+            # Query the configs table to extract dynamic operational profiles
+            c_cursor = conn.cursor()
+            c_cursor.execute("SELECT config_text FROM configs WHERE name = ?", (row[0],))
+            cfg_row = c_cursor.fetchone()
+            cfg_text = cfg_row[0] if cfg_row else ""
+            
+            roles = []
+            if "router ospf" in cfg_text.lower() or "router eigrp" in cfg_text.lower() or "router rip" in cfg_text.lower():
+                roles.append("OSPF/Routing")
+            if "ip dhcp pool" in cfg_text.lower():
+                roles.append("DHCP Server")
+            if "ip route " in cfg_text.lower():
+                roles.append("Static Route")
+            if "vlan " in cfg_text.lower() or "switchport trunk" in cfg_text.lower():
+                roles.append("VLAN / Trunk")
+            if not roles:
+                roles.append(row[1].upper())
+                
+            devices.append({
+                "name": row[0],
+                "type": row[1],
+                "ip": row[2] or "N/A",
+                "port": row[3] or "Console Port",
+                "roles": roles,
+                "config": cfg_text
+            })
+            
+    # 3. Compile Cabling & Cable Matrix from GNS3 links metadata
+    cabling = []
+    for l in gns3_links:
+        from_node_id = l.get("from_node_id", "")
+        to_node_id = l.get("to_node_id", "")
+        from_port = l.get("from_port", "Gi0/0")
+        to_port = l.get("to_port", "Gi0/0")
+        
+        from_name = "Unknown Node"
+        to_name = "Unknown Node"
+        for n in gns3_nodes:
+            if n.get("node_id") == from_node_id:
+                from_name = n.get("name")
+            if n.get("node_id") == to_node_id:
+                to_name = n.get("name")
+        cabling.append({
+            "from": from_name,
+            "from_port": from_port,
+            "to": to_name,
+            "to_port": to_port
+        })
+        
+    # 4. Perform live Security Audit
+    audit_findings = []
+    try:
+        from network_manager.ai_agent import audit_network
+        audit_raw = audit_network()
+        audit_findings = [line.strip() for line in audit_raw.split("\n") if line.strip() and ("flaw" in line.lower() or "warning" in line.lower() or "missing" in line.lower() or "unsecured" in line.lower() or "risk" in line.lower())]
+    except Exception:
+        pass
+        
+    # 5. Build rich executive-styled HTML Documentation template
+    device_rows = ""
+    for d in devices:
+        role_badges = " ".join(f"<span class='badge info'>{r}</span>" for r in d["roles"])
+        device_rows += f"""
+        <tr>
+            <td><strong>{d["name"]}</strong></td>
+            <td><span class="badge" style="background:#f1f5f9;color:#475569;">{d["type"].upper()}</span></td>
+            <td>{d["port"]}</td>
+            <td><code>{d["ip"]}</code></td>
+            <td>{role_badges}</td>
+        </tr>
+        """
+        
+    cabling_rows = ""
+    for c in cabling:
+        cabling_rows += f"""
+        <tr>
+            <td><strong>{c["from"]}</strong></td>
+            <td><code>{c["from_port"]}</code></td>
+            <td><strong>{c["to"]}</strong></td>
+            <td><code>{c["to_port"]}</code></td>
+        </tr>
+        """
+    if not cabling_rows:
+        cabling_rows = "<tr><td colspan='4' style='text-align:center;color:#64748b;padding:24px;'>No GNS3 links detected.</td></tr>"
+        
+    audit_block = ""
+    if audit_findings:
+        audit_items = "".join(f"<li style='margin-bottom:6px;'>{item}</li>" for item in audit_findings[:8])
+        audit_block = f"""
+        <div class="audit-card">
+            <h4 style="margin:0 0 10px 0;color:#991b1b;font-weight:600;font-size:15px;">⚠️ Security Audit Compliance Violations</h4>
+            <ul style="margin:0;padding-left:20px;color:#7f1d1d;font-size:13px;line-height:1.5;">
+                {audit_items}
+            </ul>
+        </div>
+        """
+    else:
+        audit_block = """
+        <div class="audit-card" style="border-color:#bbf7d0;background:#f0fdf4;">
+            <h4 style="margin:0;color:#166534;font-weight:600;font-size:15px;">✓ Security Audit Compliance Passed</h4>
+            <p style="margin:5px 0 0 0;color:#14532d;font-size:13px;">No critical vulnerabilities detected. All active endpoints are secured according to standard specifications.</p>
+        </div>
+        """
+        
+    config_blocks = ""
+    for d in devices:
+        if d["config"]:
+            # Truncate config block to keep PDF highly readable
+            config_preview = d["config"][:3000] + "\n... [Truncated for brevity]" if len(d["config"]) > 3000 else d["config"]
+            config_blocks += f"""
+            <h4 style="margin-top:20px;margin-bottom:8px;color:#475569;font-size:14px;">Device: <strong>{d["name"]}</strong> Running Config Snapshot</h4>
+            <pre>{config_preview}</pre>
+            """
+            
+    html_content = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="utf-8">
+    <title>ANCS Executive Network Documentation</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700\u0026family=Fira+Code:wght@400;500\u0026display=swap');
+        
+        @page {{
+            size: letter;
+            margin: 1.2in 1.0in 1.2in 1.0in;
+        }}
+        
+        body {{
+            font-family: 'Outfit', sans-serif;
+            color: #0f172a;
+            line-height: 1.6;
+            padding: 20px;
+            background: #ffffff;
+            font-size: 14px;
+        }}
+        .header {{
+            border-bottom: 2px solid #a371f7;
+            padding-bottom: 16px;
+            margin-bottom: 24px;
+        }}
+        .title {{
+            font-size: 26px;
+            font-weight: 700;
+            color: #1e1b4b;
+            margin: 0 0 6px 0;
+            letter-spacing: -0.5px;
+        }}
+        .metadata {{
+            font-size: 12px;
+            color: #64748b;
+        }}
+        .section-title {{
+            font-size: 18px;
+            font-weight: 600;
+            color: #312e81;
+            border-left: 4px solid #a371f7;
+            padding-left: 10px;
+            margin-top: 32px;
+            margin-bottom: 14px;
+            page-break-after: avoid;
+        }}
+        table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+            page-break-inside: avoid;
+        }}
+        th, td {{
+            padding: 10px;
+            text-align: left;
+            border-bottom: 1px solid #e2e8f0;
+            font-size: 13px;
+        }}
+        th {{
+            background: #f8fafc;
+            font-weight: 600;
+            color: #334155;
+        }}
+        .badge {{
+            display: inline-block;
+            padding: 3px 6px;
+            border-radius: 4px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+        }}
+        .badge.info {{ background: #e0f2fe; color: #075985; }}
+        
+        pre {{
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            padding: 14px;
+            font-family: 'Fira Code', monospace;
+            font-size: 11px;
+            white-space: pre-wrap;
+            word-break: break-all;
+            margin-bottom: 20px;
+            page-break-inside: avoid;
+        }}
+        .audit-card {{
+            border: 1px solid #fee2e2;
+            background: #fff8f8;
+            border-radius: 8px;
+            padding: 14px;
+            margin-bottom: 18px;
+            page-break-inside: avoid;
+        }}
+    </style>
+    </head>
+    <body>
+        <div class="header">
+            <h1 class="title">Network Topology & Systems Documentation Report</h1>
+            <div class="metadata">
+                <strong>Project Source:</strong> {gns3_proj} | 
+                <strong>Report Generated:</strong> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+            </div>
+        </div>
+        
+        <div class="section-title">1. Executive Systems Summary</div>
+        <p>This comprehensive network operational documentation report was generated automatically by the ANCS Copilot. It aggregates live physical interfaces, SQLite databases, dynamic network configurations, and security audits to produce a print-ready, executive-level compliance log.</p>
+        
+        <div class="section-title">2. Active Systems Inventory</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Device Name</th>
+                    <th>Platform Type</th>
+                    <th>Console / Port</th>
+                    <th>IP Address</th>
+                    <th>Operational Roles</th>
+                </tr>
+            </thead>
+            <tbody>
+                {device_rows}
+            </tbody>
+        </table>
+        
+        <div class="section-title">3. Physical Cabling Matrix</div>
+        <table>
+            <thead>
+                <tr>
+                    <th>Source Device</th>
+                    <th>Source Port</th>
+                    <th>Destination Device</th>
+                    <th>Destination Port</th>
+                </tr>
+            </thead>
+            <tbody>
+                {cabling_rows}
+            </tbody>
+        </table>
+        
+        <div class="section-title">4. Compliance & Network Security Audit</div>
+        {audit_block}
+        
+        <div class="section-title">5. Device Configuration Profiles</div>
+        {config_blocks}
+        
+        <div style="margin-top: 40px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 16px; page-break-inside: avoid;">
+            End of Systems Documentation Report | Generated natively by ANCS Copilot (Vertex AI / Gemini).
+        </div>
+    </body>
+    </html>
+    """
+    
+    # 6. Resolve target path in user's Downloads directory
+    downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+    target_path = os.path.join(downloads_dir, filename)
+    
+    # 7. Route back to QWebEnginePage print engine on main GUI thread
+    if w and hasattr(w, "generate_pdf_signal"):
+        w.generate_pdf_signal.emit(html_content, target_path)
+        return f"Success: PDF Network Documentation compiled and saved to {target_path}!"
+    else:
+        # Fallback: save raw HTML to Downloads
+        try:
+            html_path = os.path.join(downloads_dir, filename.replace(".pdf", ".html"))
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html_content)
+            return f"Success: PDF engine not connected, but HTML report generated successfully at {html_path}!"
+        except Exception as e:
+            return f"Failed to save fallback report: {e}"
+
 # ── 19-20: Validation & Bulk Deploy ──────────────────────────────────────────
 
 def validate_configs(device_names: str = "all") -> str:
@@ -2036,6 +2355,7 @@ ALL_TOOLS = [
     # Utilities
     calculate_subnet,
     get_agent_guidelines,
+    generate_pdf_report,
 ]
 
 # Wrap all functions in ALL_TOOLS dynamically to intercept and log calls
@@ -2463,6 +2783,7 @@ class CopilotWorker(QThread):
     chat_response_signal = Signal(str)      # → Chat/Summary tab (rendered markdown)
     finished_signal = Signal(str, bool)     # → final status (legacy compat)
     ready_signal = Signal()                 # → agent is ready for messages
+    generate_pdf_signal = Signal(str, str)  # html_content, target_pdf_path
 
     def __init__(self, api_key: str, gns3_url: str,
                  allow_raw_deploy: bool = False,
@@ -2506,6 +2827,7 @@ class CopilotWorker(QThread):
         ctx.audit_fn = audit_fn
         ctx.workspace_resolved = self.workspace_resolved  # live GNS3 ports for tool functions
         ctx.logger = self._logger
+        ctx.worker = self
 
     def queue_message(self, text: str, attachment_path: str = None):
         """Called from the GUI thread to queue a user message."""

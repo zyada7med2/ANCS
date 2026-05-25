@@ -333,6 +333,7 @@ class ANCSAgentDialog(QDialog):
             w.chat_response_signal.connect(self._on_chat_response, Qt.ConnectionType.QueuedConnection)
             w.finished_signal.connect(self._on_finished, Qt.ConnectionType.QueuedConnection)
             w.ready_signal.connect(self._on_ready, Qt.ConnectionType.QueuedConnection)
+            w.generate_pdf_signal.connect(self._on_generate_pdf, Qt.ConnectionType.QueuedConnection)
         except Exception:
             pass
 
@@ -345,6 +346,7 @@ class ANCSAgentDialog(QDialog):
             w.chat_response_signal.disconnect(self._on_chat_response)
             w.finished_signal.disconnect(self._on_finished)
             w.ready_signal.disconnect(self._on_ready)
+            w.generate_pdf_signal.disconnect(self._on_generate_pdf)
         except Exception:
             pass
 
@@ -582,6 +584,44 @@ class ANCSAgentDialog(QDialog):
             self._bridge.addChatMessage.emit("system", f"Error: {summary}", "")
         self._current_thoughts = []
         self._waiting_for_reply = False
+
+    def _on_generate_pdf(self, html_content, target_path):
+        """Generates a premium PDF file in the background from HTML content using headless QWebEnginePage."""
+        from PySide6.QtWebEngineCore import QWebEnginePage
+        import os
+        
+        # Maintain reference in list to prevent GC garbage collection during async printToPdf
+        if not hasattr(self, '_bg_pdf_pages'):
+            self._bg_pdf_pages = []
+            
+        page = QWebEnginePage(self)
+        self._bg_pdf_pages.append(page)
+        
+        # Load the HTML document
+        page.setHtml(html_content)
+        
+        def handle_pdf_result(data):
+            if not data.isEmpty():
+                try:
+                    with open(target_path, "wb") as f:
+                        f.write(data.data())
+                    self._bridge.addChatMessage.emit(
+                        "system",
+                        f"📄 <b>PDF Report Successfully Generated!</b><br>"
+                        f"Saved to: <a href='file:///{target_path.replace(os.sep, '/')}' style='color:#a371f7;font-weight:600;'>{os.path.basename(target_path)}</a>",
+                        ""
+                    )
+                except Exception as e:
+                    self._bridge.addChatMessage.emit("system", f"❌ Failed to write PDF: {e}", "")
+            else:
+                self._bridge.addChatMessage.emit("system", "❌ Failed to generate PDF report from systems data.", "")
+                
+            # Free background QWebEnginePage resources
+            if page in self._bg_pdf_pages:
+                self._bg_pdf_pages.remove(page)
+
+        # Trigger PDF generation when loading completes
+        page.loadFinished.connect(lambda ok: page.printToPdf(handle_pdf_result) if ok else handle_pdf_result(None))
 
     def _on_ready(self):
         """Worker ready (connected successfully)."""
