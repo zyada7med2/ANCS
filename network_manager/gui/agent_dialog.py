@@ -15,7 +15,7 @@ import time
 from datetime import datetime
 from html import unescape
 
-from PySide6.QtWidgets import QDialog, QVBoxLayout, QMessageBox
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QMessageBox, QWidget
 from PySide6.QtCore import Qt, QTimer, QUrl, QEvent
 from PySide6.QtGui import QColor
 from PySide6.QtWebEngineWidgets import QWebEngineView
@@ -43,6 +43,95 @@ class ANCSWebEnginePage(QWebEnginePage):
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
         print(f"[JS Console] {message} (Line: {lineNumber}, Source: {sourceID})")
 
+class _EdgeGrip(QWidget):
+    """Invisible widget placed on a window edge/corner to handle resize."""
+    _CURSORS = {
+        'left':         Qt.CursorShape.SizeHorCursor,
+        'right':        Qt.CursorShape.SizeHorCursor,
+        'top':          Qt.CursorShape.SizeVerCursor,
+        'bottom':       Qt.CursorShape.SizeVerCursor,
+        'top-left':     Qt.CursorShape.SizeFDiagCursor,
+        'bottom-right': Qt.CursorShape.SizeFDiagCursor,
+        'top-right':    Qt.CursorShape.SizeBDiagCursor,
+        'bottom-left':  Qt.CursorShape.SizeBDiagCursor,
+    }
+
+    def __init__(self, parent: QDialog, edge: str, thickness: int = 6):
+        super().__init__(parent)
+        self._edge = edge
+        self._thickness = thickness
+        self._drag_start_pos = None
+        self._drag_start_geo = None
+        self.setMouseTracking(True)
+        self.setCursor(self._CURSORS.get(edge, Qt.CursorShape.ArrowCursor))
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setStyleSheet("background: transparent;")
+        self.raise_()
+
+    def reposition(self):
+        """Recompute geometry relative to parent window size."""
+        pw = self.parent().width()
+        ph = self.parent().height()
+        t = self._thickness
+        e = self._edge
+        if e == 'left':
+            self.setGeometry(0, t, t, ph - 2 * t)
+        elif e == 'right':
+            self.setGeometry(pw - t, t, t, ph - 2 * t)
+        elif e == 'top':
+            self.setGeometry(t, 0, pw - 2 * t, t)
+        elif e == 'bottom':
+            self.setGeometry(t, ph - t, pw - 2 * t, t)
+        elif e == 'top-left':
+            self.setGeometry(0, 0, t, t)
+        elif e == 'top-right':
+            self.setGeometry(pw - t, 0, t, t)
+        elif e == 'bottom-left':
+            self.setGeometry(0, ph - t, t, t)
+        elif e == 'bottom-right':
+            self.setGeometry(pw - t, ph - t, t, t)
+        self.raise_()
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.globalPosition().toPoint()
+            self._drag_start_geo = self.parent().geometry()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if self._drag_start_pos is None or self._drag_start_geo is None:
+            return
+        delta = event.globalPosition().toPoint() - self._drag_start_pos
+        geo = self._drag_start_geo
+        parent = self.parent()
+        min_w = parent.minimumWidth()
+        min_h = parent.minimumHeight()
+
+        new_x, new_y = geo.x(), geo.y()
+        new_w, new_h = geo.width(), geo.height()
+
+        e = self._edge
+        if 'left' in e:
+            proposed_w = geo.width() - delta.x()
+            if proposed_w >= min_w:
+                new_x = geo.x() + delta.x()
+                new_w = proposed_w
+        if 'right' in e:
+            new_w = max(min_w, geo.width() + delta.x())
+        if 'top' in e:
+            proposed_h = geo.height() - delta.y()
+            if proposed_h >= min_h:
+                new_y = geo.y() + delta.y()
+                new_h = proposed_h
+        if 'bottom' in e:
+            new_h = max(min_h, geo.height() + delta.y())
+
+        parent.setGeometry(new_x, new_y, new_w, new_h)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_pos = None
+        self._drag_start_geo = None
+        super().mouseReleaseEvent(event)
 
 # ═══════════════════════════════════════════════════════════════════════
 # MAIN DIALOG
@@ -106,6 +195,24 @@ class ANCSAgentDialog(QDialog):
         self._chips_timer.setInterval(4000)
         self._chips_timer.timeout.connect(self._refresh_device_chips)
         self._chips_timer.start()
+
+        # ── Invisible edge grips for frameless resize ──────────────────
+        self._resize_grips = []
+        for edge in ('left', 'right', 'top', 'bottom',
+                     'top-left', 'top-right', 'bottom-left', 'bottom-right'):
+            g = _EdgeGrip(self, edge, thickness=6)
+            self._resize_grips.append(g)
+
+        # ── Enable native Windows drop shadow for frameless dialog ────
+        import sys
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                hwnd = int(self.winId())
+                margins = ctypes.c_int * 4
+                ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(hwnd, margins(1, 1, 1, 1))
+            except Exception:
+                pass
 
     # ──────────────────────────────────────────────────────────────────
     # JS READY CALLBACK
@@ -718,6 +825,15 @@ class ANCSAgentDialog(QDialog):
         else:
             self.showMaximized()
             self._is_maximized = True
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        for grip in getattr(self, '_resize_grips', []):
+            if self._is_maximized:
+                grip.hide()
+            else:
+                grip.reposition()
+                grip.show()
 
     # ──────────────────────────────────────────────────────────────────
     # CLOSE HANDLING
