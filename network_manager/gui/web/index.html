@@ -970,6 +970,50 @@
             height: 320px;
         }
 
+        /* Focus / Zen Mode Styles */
+        .zen-mode .logs-filter-row,
+        .zen-mode #logs-split-pane,
+        .zen-mode .topology-header-row,
+        .zen-mode #topology-details-card,
+        .zen-mode #topology-stats-dashboard {
+            display: none !important;
+        }
+
+        .zen-mode #topology-panel-container {
+            height: 660px !important;
+            gap: 0 !important;
+        }
+
+        .zen-mode .topology-canvas {
+            border-color: var(--cyan) !important;
+            box-shadow: 0 0 25px rgba(6, 182, 212, 0.2);
+        }
+
+        /* Floating Exit Indicator */
+        .zen-focus-badge {
+            position: absolute;
+            top: 15px;
+            right: 15px;
+            background: rgba(4, 7, 16, 0.9);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(6, 182, 212, 0.4);
+            color: var(--cyan);
+            font-size: 10px;
+            font-family: ui-monospace, monospace;
+            padding: 5px 12px;
+            border-radius: 6px;
+            z-index: 10;
+            pointer-events: none;
+            display: none;
+            align-items: center;
+            gap: 8px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6);
+        }
+
+        .zen-mode .zen-focus-badge {
+            display: inline-flex;
+        }
+
         /* Topology Canvas Panel */
         .topology-canvas {
             flex: 2;
@@ -1038,17 +1082,41 @@
             }
         }
 
+        /* High-tech Glassmorphic HUD Info Capsule for Nodes */
+        .node-info-capsule {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            background: rgba(4, 7, 16, 0.85);
+            backdrop-filter: blur(6px);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 3px 8px;
+            border-radius: 5px;
+            margin-top: 5px;
+            pointer-events: none;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.6);
+            transition: border-color 0.2s, box-shadow 0.2s;
+        }
+
+        .topo-node:hover .node-info-capsule {
+            border-color: rgba(6, 182, 212, 0.3);
+            box-shadow: 0 4px 12px rgba(6, 182, 212, 0.15);
+        }
+
         .node-label {
-            font-size: 13px;
+            font-size: 11px;
             font-weight: 700;
             color: var(--text-pri);
-            margin-top: 6px;
+            line-height: 1.2;
+            text-align: center;
         }
 
         .node-ip {
-            font-size: 11px;
-            color: var(--text-sec);
-            margin-top: 1px;
+            font-size: 9px;
+            color: var(--text-muted);
+            line-height: 1.2;
+            margin-top: 2px;
+            text-align: center;
         }
 
         /* Device Details Side Panel */
@@ -1789,11 +1857,12 @@
                         </div>
                     </div>
                 </div>
+                <button id="toggle-logs-btn" class="clear-logs-btn" style="background: rgba(163, 113, 247, 0.1); border-color: rgba(163, 113, 247, 0.2); color: #c084fc; margin-right: 8px;" onclick="toggleLogsPanel()">Show Logs & Events</button>
                 <button class="clear-logs-btn" onclick="clearExecutionLogs()">Clear Logs</button>
             </div>
 
             <!-- Split Pane for Logs -->
-            <div style="display: flex; gap: 20px; height: 280px; align-items: stretch; min-height: 0;">
+            <div id="logs-split-pane" style="display: none; gap: 20px; height: 280px; align-items: stretch; min-height: 0; margin-bottom: 20px;">
                 
                 <!-- Left Pane: Console Stream & Model Reasoning -->
                 <div style="flex: 1.2; display: flex; flex-direction: column; gap: 10px; min-width: 0;">
@@ -1836,9 +1905,14 @@
             </div>
 
             <!-- Topology Grid & Detail Card -->
-            <div class="topology-panel">
+            <div id="topology-panel-container" class="topology-panel" style="height: 560px; transition: height 0.3s;">
                 <!-- Visual Graph Canvas -->
                 <div class="topology-canvas" id="topology-canvas-container">
+                    <!-- Floating Exit Indicator -->
+                    <div class="zen-focus-badge">
+                        <span style="display:inline-block; width:6px; height:6px; background:var(--cyan); border-radius:50%; box-shadow: 0 0 8px var(--cyan);"></span>
+                        ZEN FOCUS MODE: Double-click empty canvas or press ESC to exit
+                    </div>
                     <!-- Connections Drawer (SVG) -->
                     <svg class="connections-svg" id="topology-connections">
                         <!-- Rendered dynamically by JS -->
@@ -2285,11 +2359,15 @@
 
         let selectedDeviceId = "R3"; // Default selected device for the details card
 
-        // Helper to auto detect type based on device name
-        function detectDeviceType(name) {
+        // Helper to auto detect type based on device name or explicit type
+        function detectDeviceType(name, explicitType) {
+            if (explicitType) {
+                if (explicitType === 'core switch') return 'switch';
+                return explicitType;
+            }
             const lower = name.toLowerCase();
-            if (lower.startsWith('r') || lower.includes('router')) return 'router';
-            if (lower.startsWith('sw') || lower.includes('switch')) return 'switch';
+            if (lower.startsWith('r') || lower.includes('router') || lower.startsWith('iou')) return 'router';
+            if (lower.startsWith('sw') || lower.includes('switch') || lower.startsWith('esw')) return 'switch';
             if (lower.startsWith('fw') || lower.includes('firewall') || lower.startsWith('asa')) return 'firewall';
             if (lower.startsWith('ap') || lower.includes('accesspoint') || lower.includes('wifi')) return 'ap';
             return 'router'; // fallback
@@ -2425,7 +2503,7 @@
             `;
 
             devices.forEach(dev => {
-                const type = detectDeviceType(dev.name);
+                const type = detectDeviceType(dev.name, dev.type);
                 const iconSvg = getDeviceIconSVG(type, 'small');
                 
                 let dotColor = 'var(--green)';
@@ -2476,9 +2554,66 @@
                 const toDev = devices.find(d => d.id === conn.to);
                 
                 if (fromDev && toDev) {
+                    // Draw main link line
                     html += `
-                        <line x1="${fromDev.x}%" y1="${fromDev.y}%" x2="${toDev.x}%" y2="${toDev.y}%" stroke="#10B981" stroke-width="2" />
+                        <line x1="${fromDev.x}%" y1="${fromDev.y}%" x2="${toDev.x}%" y2="${toDev.y}%" stroke="#10B981" stroke-width="1.5" />
                     `;
+                    
+                    // Draw port labels if available
+                    if (conn.port_from || conn.port_to) {
+                        const x1 = fromDev.x;
+                        const y1 = fromDev.y;
+                        const x2 = toDev.x;
+                        const y2 = toDev.y;
+                        
+                        const dx = x2 - x1;
+                        const dy = y2 - y1;
+                        const L = Math.sqrt(dx * dx + dy * dy);
+                        
+                        if (L > 0) {
+                            const nx = dx / L;
+                            const ny = dy / L;
+                            
+                            // Perpendicular vector for shifting labels slightly off-wire
+                            // (creates a beautiful "floating" style to avoid overlapping the line)
+                            const px = -ny;
+                            const py = nx;
+                            
+                            // ── UX Unified Solution: Parallel Same-Side Offsetting ──
+                            // 1. Scale perpendicular shift based on verticality (|ny|). 
+                            //    Vertical wires get wide clearance (4.8%) to clear centered device name/IP capsules.
+                            //    Horizontal wires get tight clearance (2.2%) to keep the diagram clean.
+                            const perpShift = 2.2 + 2.6 * Math.abs(ny);
+                            
+                            // 2. Symmetric Spacing along the wire:
+                            //    We place them at 22% of the wire length (capped at 10% of canvas size).
+                            //    This ensures they stay physically close to their respective nodes for obvious
+                            //    spatial association, while maintaining a clean separation on short links.
+                            const kFrom = Math.min(0.22 * L, 10);
+                            const kTo = Math.min(0.22 * L, 10);
+                            
+                            // 3. Shift 'from' and 'to' ports to the SAME side of the wire.
+                            //    This matches professional network diagram standards (e.g. Cisco Packet Tracer),
+                            //    ensuring their relative order (higher/lower or left/right) perfectly matches 
+                            //    the physical nodes themselves, completely removing all association confusion!
+                            const pFromX = x1 + kFrom * nx + perpShift * px;
+                            const pFromY = y1 + kFrom * ny + perpShift * py;
+                            
+                            const pToX = x2 - kTo * nx + perpShift * px;
+                            const pToY = y2 - kTo * ny + perpShift * py;
+                            
+                            if (conn.port_from) {
+                                html += `
+                                    <text x="${pFromX}%" y="${pFromY}%" fill="var(--cyan)" font-size="8.5px" font-family="'Outfit', 'Inter', sans-serif" font-weight="700" text-anchor="middle" dominant-baseline="central" style="text-shadow: 0 0 5px #060A10, 0 0 5px #060A10, 0 0 5px #060A10; pointer-events: none; opacity: 0.95; letter-spacing: 0.5px;">${_escapeHtml(conn.port_from)}</text>
+                                `;
+                            }
+                            if (conn.port_to) {
+                                html += `
+                                    <text x="${pToX}%" y="${pToY}%" fill="var(--cyan)" font-size="8.5px" font-family="'Outfit', 'Inter', sans-serif" font-weight="700" text-anchor="middle" dominant-baseline="central" style="text-shadow: 0 0 5px #060A10, 0 0 5px #060A10, 0 0 5px #060A10; pointer-events: none; opacity: 0.95; letter-spacing: 0.5px;">${_escapeHtml(conn.port_to)}</text>
+                                `;
+                            }
+                        }
+                    }
                 }
             });
             svg.innerHTML = html;
@@ -2494,7 +2629,7 @@
             oldNodes.forEach(n => n.remove());
 
             devices.forEach(dev => {
-                const type = detectDeviceType(dev.name);
+                const type = detectDeviceType(dev.name, dev.type);
                 const iconSvg = getDeviceIconSVG(type, 'large');
                 const isActive = (dev.id === selectedDeviceId) ? 'active' : '';
 
@@ -2509,8 +2644,10 @@
                         ${isActive ? '<div class="node-pulse-ring"></div>' : ''}
                         ${iconSvg}
                     </div>
-                    <span class="node-label">${dev.name}</span>
-                    <span class="node-ip">${dev.ip}</span>
+                    <div class="node-info-capsule">
+                        <span class="node-label">${dev.name}</span>
+                        <span class="node-ip">${dev.ip}</span>
+                    </div>
                 `;
 
                 canvas.appendChild(nodeDiv);
@@ -2542,30 +2679,165 @@
                 `;
             }
 
+            // ── 1. Dynamic Cyber-Role Pills ──
+            let rolePillsHtml = '';
+            if (dev.roles && dev.roles.length > 0) {
+                rolePillsHtml = `
+                    <div class="device-roles-container" style="display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; margin-bottom: 12px; pointer-events: none;">
+                `;
+                dev.roles.forEach(role => {
+                    let bg = 'rgba(6, 182, 212, 0.1)';
+                    let border = 'rgba(6, 182, 212, 0.2)';
+                    let color = 'var(--cyan)';
+                    
+                    if (role === 'OSPF') {
+                        bg = 'rgba(249, 115, 22, 0.1)';
+                        border = 'rgba(249, 115, 22, 0.3)';
+                        color = '#FB923C'; // bright orange
+                    } else if (role === 'DHCP') {
+                        bg = 'rgba(59, 130, 246, 0.1)';
+                        border = 'rgba(59, 130, 246, 0.3)';
+                        color = '#60A5FA'; // bright blue
+                    } else if (role === 'STATIC' || role === 'VLANS') {
+                        bg = 'rgba(167, 139, 250, 0.1)';
+                        border = 'rgba(167, 139, 250, 0.3)';
+                        color = '#C084FC'; // bright purple
+                    }
+                    
+                    rolePillsHtml += `
+                        <span style="font-size: 9px; font-weight: 700; background: ${bg}; border: 1px solid ${border}; color: ${color}; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.5px; text-transform: uppercase;">${role}</span>
+                    `;
+                });
+                rolePillsHtml += '</div>';
+            }
+
+            // ── 2. Uplinks, Downlinks & Transit Links Mapping ──
+            const devConnections = connections.filter(c => c.from === dev.id || c.to === dev.id);
+            const uplinks = [];
+            const downlinks = [];
+            const transitLinks = [];
+            
+            devConnections.forEach(conn => {
+                const isFromMe = (conn.from === dev.id);
+                const neighborId = isFromMe ? conn.to : conn.from;
+                const neighborPort = isFromMe ? conn.port_to : conn.port_from;
+                const myPort = isFromMe ? conn.port_from : conn.port_to;
+                
+                const neighbor = devices.find(d => d.id === neighborId);
+                if (!neighbor) return;
+                
+                // Determine tiers to classify: Tier 1 (Router/Core), Tier 2 (Access Switch)
+                const myTier = (dev.type === 'router' || dev.name.toLowerCase().includes('core')) ? 1 : 2;
+                const neighborTier = (neighbor.type === 'router' || neighbor.name.toLowerCase().includes('core')) ? 1 : 2;
+                
+                const linkInfo = {
+                    myPort: myPort || '—',
+                    neighborName: neighbor.name,
+                    neighborPort: neighborPort || '—'
+                };
+                
+                if (myTier === 2 && neighborTier === 1) {
+                    uplinks.push(linkInfo);
+                } else if (myTier === 1 && neighborTier === 2) {
+                    downlinks.push(linkInfo);
+                } else {
+                    transitLinks.push(linkInfo);
+                }
+            });
+            
+            let connectionsHtml = `
+                <div style="margin-top: 15px; border-top: 1px solid var(--border); padding-top: 15px;">
+                    <span style="font-size: 11px; font-weight: 600; color: var(--text-muted); display: block; margin-bottom: 8px; text-transform: uppercase; letter-spacing: 0.5px;">Physical Links Map</span>
+            `;
+            
+            if (uplinks.length === 0 && downlinks.length === 0 && transitLinks.length === 0) {
+                connectionsHtml += `
+                    <div style="font-size: 11px; color: var(--text-muted); font-style: italic; padding: 10px; text-align: center; background: rgba(255,255,255,0.01); border-radius: 4px; border: 1px dashed rgba(255,255,255,0.04);">No active GNS3 links mapped.</div>
+                `;
+            } else {
+                connectionsHtml += `<div style="display: flex; flex-direction: column; gap: 10px;">`;
+                
+                if (uplinks.length > 0) {
+                    connectionsHtml += `
+                        <div>
+                            <span style="font-size: 9px; font-weight: 700; color: #34D399; text-transform: uppercase; display: block; margin-bottom: 4px; letter-spacing: 0.5px;">▲ Uplinks (To Core/WAN)</span>
+                    `;
+                    uplinks.forEach(link => {
+                        connectionsHtml += `
+                            <div style="font-family: Consolas, Monaco, monospace; font-size: 10px; color: var(--text-pri); background: rgba(52, 211, 153, 0.03); border: 1px solid rgba(52, 211, 153, 0.08); padding: 5px 8px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-weight: 700; color: var(--cyan);">${link.myPort}</span>
+                                <span style="color: var(--text-muted); font-size: 8px;">────></span>
+                                <span style="font-weight: 700; color: #E2E8F0;">${link.neighborName} <span style="color: var(--text-muted); font-size: 8.5px; font-weight: 500;">(${link.neighborPort})</span></span>
+                            </div>
+                        `;
+                    });
+                    connectionsHtml += `</div>`;
+                }
+                
+                if (downlinks.length > 0) {
+                    connectionsHtml += `
+                        <div>
+                            <span style="font-size: 9px; font-weight: 700; color: #60A5FA; text-transform: uppercase; display: block; margin-bottom: 4px; letter-spacing: 0.5px;">▼ Downlinks (To Switch/Access)</span>
+                    `;
+                    downlinks.forEach(link => {
+                        connectionsHtml += `
+                            <div style="font-family: Consolas, Monaco, monospace; font-size: 10px; color: var(--text-pri); background: rgba(96, 165, 250, 0.03); border: 1px solid rgba(96, 165, 250, 0.08); padding: 5px 8px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-weight: 700; color: var(--cyan);">${link.myPort}</span>
+                                <span style="color: var(--text-muted); font-size: 8px;">────></span>
+                                <span style="font-weight: 700; color: #E2E8F0;">${link.neighborName} <span style="color: var(--text-muted); font-size: 8.5px; font-weight: 500;">(${link.neighborPort})</span></span>
+                            </div>
+                        `;
+                    });
+                    connectionsHtml += `</div>`;
+                }
+                
+                if (transitLinks.length > 0) {
+                    connectionsHtml += `
+                        <div>
+                            <span style="font-size: 9px; font-weight: 700; color: #A78BFA; text-transform: uppercase; display: block; margin-bottom: 4px; letter-spacing: 0.5px;">◆ Transit / Backbone Links</span>
+                    `;
+                    transitLinks.forEach(link => {
+                        connectionsHtml += `
+                            <div style="font-family: Consolas, Monaco, monospace; font-size: 10px; color: var(--text-pri); background: rgba(167, 139, 250, 0.03); border: 1px solid rgba(167, 139, 250, 0.08); padding: 5px 8px; border-radius: 4px; display: flex; justify-content: space-between; align-items: center;">
+                                <span style="font-weight: 700; color: var(--cyan);">${link.myPort}</span>
+                                <span style="color: var(--text-muted); font-size: 8px;">────></span>
+                                <span style="font-weight: 700; color: #E2E8F0;">${link.neighborName} <span style="color: var(--text-muted); font-size: 8.5px; font-weight: 500;">(${link.neighborPort})</span></span>
+                            </div>
+                        `;
+                    });
+                    connectionsHtml += `</div>`;
+                }
+                
+                connectionsHtml += `</div>`;
+            }
+            connectionsHtml += `</div>`;
+
             panel.innerHTML = `
-                <div class="details-header">
+                <div class="details-header" style="margin-bottom: 5px;">
                     <h4 class="details-title">${dev.name}</h4>
                     <span class="details-badge ${badgeClass}">${statusText}</span>
                 </div>
+                
+                ${rolePillsHtml}
 
                 <div class="details-grid">
                     <div class="details-row">
-                        <span class="details-key">IP Address</span>
-                        <span class="details-val">${dev.ip}</span>
+                        <span class="details-key">Console Target (GNS3)</span>
+                        <span class="details-val" style="font-family: Consolas, Monaco, monospace;">${dev.ip}</span>
+                    </div>
+                    <div class="details-row">
+                        <span class="details-key">Operational IP</span>
+                        <span class="details-val bold-highlight" style="font-family: Consolas, Monaco, monospace;">${dev.op_ip || '—'}</span>
                     </div>
                     <div class="details-row">
                         <span class="details-key">Platform</span>
-                        <span class="details-val bold-highlight">${dev.platform}</span>
-                    </div>
-                    <div class="details-row">
-                        <span class="details-key">OSPF Area</span>
-                        <span class="details-val">${dev.area !== undefined ? dev.area : '—'}</span>
+                        <span class="details-val">${dev.platform}</span>
                     </div>
                     
                     <hr class="details-divider">
                     
                     <div class="details-row">
-                        <span class="details-key">Status</span>
+                        <span class="details-key">Connectivity</span>
                         <span class="details-val ${dev.status === 'pending' ? 'status-loading' : ''}">
                             ${statusValHtml}
                         </span>
@@ -2575,6 +2847,8 @@
                         <span class="details-val" style="color: var(--text-muted)">${dev.lastSeen}</span>
                     </div>
                 </div>
+
+                ${connectionsHtml}
             `;
         }
 
@@ -2820,6 +3094,72 @@
                 rawContainer.innerHTML = `<div class="raw-log-placeholder" style="color: var(--text-muted); text-align: center; padding: 20px 0; font-family: sans-serif; font-size: 13px;">Waiting for network operations or agent reasoning...</div>`;
             }
         }
+
+        // Collapse/Expand Split Pane and scale Topology Panel
+        function toggleLogsPanel() {
+            const pane = document.getElementById('logs-split-pane');
+            const topo = document.getElementById('topology-panel-container');
+            const btn = document.getElementById('toggle-logs-btn');
+            if (!pane || !topo || !btn) return;
+
+            // If Zen Mode is active, exit it first to return to layout state
+            const logsPage = document.getElementById('page-logs');
+            if (logsPage && logsPage.classList.contains('zen-mode')) {
+                toggleZenMode();
+            }
+
+            if (pane.style.display === 'none') {
+                pane.style.display = 'flex';
+                topo.style.height = '320px';
+                btn.textContent = 'Hide Logs & Events';
+                btn.style.background = 'rgba(239, 68, 68, 0.1)';
+                btn.style.borderColor = 'rgba(239, 68, 68, 0.2)';
+                btn.style.color = '#f87171'; // red accent
+            } else {
+                pane.style.display = 'none';
+                topo.style.height = '560px';
+                btn.textContent = 'Show Logs & Events';
+                btn.style.background = 'rgba(163, 113, 247, 0.1)';
+                btn.style.borderColor = 'rgba(163, 113, 247, 0.2)';
+                btn.style.color = '#c084fc'; // purple accent
+            }
+        }
+
+        // Toggle Sleek Focus Mode for Topology Canvas
+        function toggleZenMode() {
+            const logsPage = document.getElementById('page-logs');
+            if (!logsPage) return;
+
+            const isZen = logsPage.classList.toggle('zen-mode');
+            
+            // Re-render coordinate proportions to fill expanded screen perfectly
+            renderConnections();
+            renderTopologyNodes();
+        }
+
+        // ESC key to exit Zen Focus Mode
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'Escape') {
+                const logsPage = document.getElementById('page-logs');
+                if (logsPage && logsPage.classList.contains('zen-mode')) {
+                    toggleZenMode();
+                }
+            }
+        });
+
+        // Double-click on empty canvas container background to trigger Focus Mode
+        document.addEventListener('DOMContentLoaded', function() {
+            const canvas = document.getElementById('topology-canvas-container');
+            if (canvas) {
+                canvas.addEventListener('dblclick', function(e) {
+                    // Ignore double click if clicking a device node or action buttons
+                    if (e.target.closest('.topo-node') || e.target.closest('button')) {
+                        return;
+                    }
+                    toggleZenMode();
+                });
+            }
+        });
 
         // Toggle Settings Modal Dialog
         function toggleSettingsModal() {
@@ -3266,6 +3606,20 @@
                 }
             } else {
                 if (thinkingEl) thinkingEl.remove();
+                
+                // Mark all running "info" (Thinking) entries as completed
+                const card = document.querySelector('.logs-list-card');
+                if (card) {
+                    const existingRows = card.querySelectorAll('.log-row');
+                    existingRows.forEach(r => {
+                        const badge = r.querySelector('.log-badge');
+                        const statusCol = r.querySelector('.log-status-col');
+                        if (badge && badge.textContent.trim() === 'info' && statusCol && statusCol.classList.contains('running')) {
+                            statusCol.className = 'log-status-col';
+                            statusCol.innerHTML = '<div class="log-dot success"></div> completed';
+                        }
+                    });
+                }
             }
         }
         
@@ -3303,16 +3657,60 @@
                 const entry = JSON.parse(jsonStr);
                 const card = document.querySelector('.logs-list-card');
                 if (!card) return;
+                
                 // Remove empty placeholder if present
                 const empty = card.querySelector('div[style*="text-align: center"]');
                 if (empty && !card.querySelector('.log-row')) empty.remove();
                 
+                // ── 1. If this is a new "info" (Thinking), mark all previous running "info" entries as completed
+                if (entry.type === 'info' && entry.name === 'Thinking') {
+                    const existingRows = card.querySelectorAll('.log-row');
+                    existingRows.forEach(r => {
+                        const badge = r.querySelector('.log-badge');
+                        const statusCol = r.querySelector('.log-status-col');
+                        if (badge && badge.textContent.trim() === 'info' && statusCol && statusCol.classList.contains('running')) {
+                            statusCol.className = 'log-status-col';
+                            statusCol.innerHTML = '<div class="log-dot success"></div> completed';
+                        }
+                    });
+                }
+                
+                // ── 2. If this is a tool result/error (status !== 'running'), try to update the running tool entry in-place
+                if (entry.type === 'tool' && entry.status !== 'running') {
+                    const existingRows = card.querySelectorAll('.log-row');
+                    for (let i = existingRows.length - 1; i >= 0; i--) {
+                        const r = existingRows[i];
+                        const nameEl = r.querySelector('.log-name');
+                        const statusCol = r.querySelector('.log-status-col');
+                        const badge = r.querySelector('.log-badge');
+                        if (badge && badge.textContent.trim() === 'tool' && nameEl && nameEl.textContent.trim() === entry.name && statusCol && statusCol.classList.contains('running')) {
+                            // Update the existing row!
+                            const descEl = r.querySelector('.log-desc');
+                            if (descEl) descEl.textContent = entry.description || '';
+                            statusCol.className = 'log-status-col';
+                            const isError = entry.status.toLowerCase().includes('error') || entry.status.toLowerCase().includes('fail');
+                            const dotHtml = isError
+                                ? '<div class="log-dot error" style="background-color: var(--red);"></div>'
+                                : '<div class="log-dot success"></div>';
+                            statusCol.innerHTML = `${dotHtml} ${entry.status || ''}`;
+                            return; // Do not append a new row
+                        }
+                    }
+                }
+                
+                // Otherwise, append a new row as normal
                 const row = document.createElement('div');
                 row.className = 'log-row';
                 const statusClass = entry.status === 'running' ? 'running' : '';
-                const dotHtml = entry.status === 'running'
-                    ? '<div class="spinner-ring"></div>'
-                    : '<div class="log-dot success"></div>';
+                let dotHtml = '';
+                if (entry.status === 'running') {
+                    dotHtml = '<div class="spinner-ring"></div>';
+                } else if (entry.status.toLowerCase().includes('error') || entry.status.toLowerCase().includes('fail')) {
+                    dotHtml = '<div class="log-dot error" style="background-color: var(--red);"></div>';
+                } else {
+                    dotHtml = '<div class="log-dot success"></div>';
+                }
+                
                 const badgeClass = entry.type === 'tool' ? 'tool' : (entry.type === 'info' ? 'info' : 'pending');
                 row.innerHTML = `
                     <span class="log-time">${_escapeHtml(entry.time || '')}</span>
@@ -3322,6 +3720,7 @@
                     <span class="log-status-col ${statusClass}">${dotHtml} ${_escapeHtml(entry.status || '')}</span>
                 `;
                 card.appendChild(row);
+                card.scrollTop = card.scrollHeight;
             } catch(e) { console.error('_addToolLogEntry error:', e); }
         }
         
@@ -3377,6 +3776,16 @@
                 }
                 renderWorkspaceSettingsTable();
             } catch(e) { console.error('_updateDevices error:', e); }
+        }
+
+        // Update GNS3 connections from Python
+        function _updateConnections(jsonStr) {
+            try {
+                const newConns = JSON.parse(jsonStr);
+                connections.length = 0; // Clear existing
+                newConns.forEach(c => connections.push(c));
+                renderConnections();
+            } catch(e) { console.error('_updateConnections error:', e); }
         }
         
         // Push settings from Python to populate the settings modal
@@ -3532,6 +3941,12 @@
                     if (window.bridge.updateDevices) {
                         window.bridge.updateDevices.connect(function(json) {
                             _updateDevices(json);
+                        });
+                    }
+                    
+                    if (window.bridge.updateConnections) {
+                        window.bridge.updateConnections.connect(function(json) {
+                            _updateConnections(json);
                         });
                     }
                     

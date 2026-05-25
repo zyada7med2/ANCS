@@ -37,11 +37,12 @@ class _AgentContext:
     audit_fn = None  # callable(device_name, action, details, config_snapshot)
     workspace_resolved: list | None = None  # live GNS3 connection info (host/port/creds)
     _gns3_connector_instance = None  # lazy singleton
+    logger = None
 
     @staticmethod
     def log(msg: str):
-        if _AgentContext.log_fn:
-            _AgentContext.log_fn(msg)
+        if ctx.log_fn:
+            ctx.log_fn(msg)
 
     @staticmethod
     def get_gns3_connector():
@@ -2045,39 +2046,76 @@ def log_tool_execution(fn):
     (via automatic function calling), the logs are intercepted at the local Python level
     and correctly output to the Console Stream and parsed by the UI for structured cards.
     """
-    import functools
-    @functools.wraps(fn)
-    def wrapper(*args, **kwargs):
-        fn_name = fn.__name__
-        args_preview = ", ".join(
-            [repr(a)[:80] for a in args] +
-            [f"{k}={repr(v)[:80]}" for k, v in kwargs.items()]
-        ).replace('<', '&lt;').replace('>', '&gt;')
+    sig = inspect.signature(fn)
+    fn_name = fn.__name__
+    
+    param_strs = []
+    call_strs = []
+    
+    for name, param in sig.parameters.items():
+        if param.kind == inspect.Parameter.VAR_POSITIONAL:
+            param_strs.append(f"*{name}")
+            call_strs.append(f"*{name}")
+        elif param.kind == inspect.Parameter.VAR_KEYWORD:
+            param_strs.append(f"**{name}")
+            call_strs.append(f"**{name}")
+        else:
+            if param.default is inspect.Parameter.empty:
+                param_strs.append(name)
+            else:
+                param_strs.append(f"{name}=_DEFAULTS['{name}']")
+            call_strs.append(f"{name}={name}")
+
+    sig_str = ", ".join(param_strs)
+    call_str = ", ".join(call_strs)
+    
+    local_env = {
+        '_ORIG_FN': fn,
+        '_DEFAULTS': {k: v.default for k, v in sig.parameters.items() if v.default is not inspect.Parameter.empty},
+        '_TIME': time,
+        '_CTX': ctx,
+    }
+    
+    # Dynamically build args_preview string based on exact parameters
+    preview_parts = []
+    for name, param in sig.parameters.items():
+        preview_parts.append(f"{name}={{repr({name})[:80]}}")
+            
+    preview_str = ", ".join(preview_parts)
+    
+    args_dict_items = ", ".join(f'"{k}": {k}' for k in sig.parameters.keys() if sig.parameters[k].kind not in (inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD))
+    
+    code = f"""
+def {fn_name}({sig_str}):
+    t0 = _TIME.monotonic()
+    args_preview = f"{preview_str}".replace('<', '&lt;').replace('>', '&gt;')
+    
+    _CTX.log(f"<span style='color:#a371f7'><b>[Tool Call]</b> {fn_name}({{args_preview}})</span>\\n")
+    if hasattr(_CTX, 'logger') and _CTX.logger:
+        _CTX.logger.log_tool_call("{fn_name}", {{{args_dict_items}}})
         
-        # Emit [Tool Call] log
-        ctx.log(
-            f"<span style='color:#a371f7'><b>[Tool Call]</b> {fn_name}({args_preview})</span>\n"
+    try:
+        res = _ORIG_FN({call_str})
+        dt = (_TIME.monotonic() - t0) * 1000.0
+        res_preview = str(res)[:300].replace('<', '&lt;').replace('>', '&gt;')
+        _CTX.log(
+            f"<span style='color:#8b949e'>[Tool Result] {fn_name} → {{dt:.0f}}ms | "
+            f"{{res_preview}}{{'…' if len(str(res)) > 300 else ''}}</span>\\n"
         )
-        
-        t0 = time.monotonic()
-        try:
-            result = fn(*args, **kwargs)
-            dt_ms = (time.monotonic() - t0) * 1000.0
-            
-            # Format and emit [Tool Result] log
-            result_preview = str(result)[:300].replace('<', '&lt;').replace('>', '&gt;')
-            ctx.log(
-                f"<span style='color:#8b949e'>[Tool Result] {fn_name} → {dt_ms:.0f}ms | "
-                f"{result_preview}{'…' if len(str(result)) > 300 else ''}</span>\n"
-            )
-            return result
-        except Exception as e:
-            dt_ms = (time.monotonic() - t0) * 1000.0
-            # Format and emit [Tool Error] log
-            ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {e}</span>\n")
-            raise
-            
-    return wrapper
+        if hasattr(_CTX, 'logger') and _CTX.logger:
+            _CTX.logger.log_tool_result("{fn_name}", str(res), dt)
+        return res
+    except Exception as e:
+        _CTX.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: {{e}}</span>\\n")
+        if hasattr(_CTX, 'logger') and _CTX.logger:
+            _CTX.logger.log_error(f"{fn_name} error: {{e}}")
+        raise
+"""
+    exec(code, local_env)
+    wrapped = local_env[fn_name]
+    wrapped.__doc__ = fn.__doc__
+    wrapped.__annotations__ = fn.__annotations__
+    return wrapped
 
 ALL_TOOLS = [log_tool_execution(fn) for fn in ALL_TOOLS]
 
@@ -2450,6 +2488,8 @@ class CopilotWorker(QThread):
         self._msg_queue = []
         self._running = True
         self._messages = initial_messages or []  # For OpenRouter chat history management
+        self.gns3_nodes_data = []
+        self.gns3_links_data = []
 
         # Session logger
         self._logger = CopilotLogger()
@@ -2465,6 +2505,7 @@ class CopilotWorker(QThread):
         ctx.log_fn = lambda msg: self.terminal_log_signal.emit(msg)
         ctx.audit_fn = audit_fn
         ctx.workspace_resolved = self.workspace_resolved  # live GNS3 ports for tool functions
+        ctx.logger = self._logger
 
     def queue_message(self, text: str):
         """Called from the GUI thread to queue a user message."""
@@ -2679,7 +2720,7 @@ class CopilotWorker(QThread):
                         for part in candidate.content.parts:
                             # Stream thinking to Logs tab (Gemini 3.5 Flash)
                             if getattr(part, 'thought', False) and hasattr(part, 'text') and part.text:
-                                thought_preview = part.text[:500]
+                                thought_preview = part.text
                                 self.terminal_log_signal.emit(
                                     f"<span style='color: #d2a8ff'>💭 [Thinking] {thought_preview}</span>\n"
                                 )
@@ -2705,9 +2746,6 @@ class CopilotWorker(QThread):
                     ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: Unknown tool</span>\n")
                 dt_ms = (time.monotonic() - t0) * 1000.0
 
-                # Session logger
-                self._logger.log_tool_call(fn_name, fn_args)
-                self._logger.log_tool_result(fn_name, str(result), dt_ms)
 
                 function_responses.append(
                     types.Part.from_function_response(
@@ -2745,13 +2783,7 @@ class CopilotWorker(QThread):
             for candidate in response.candidates:
                 if candidate.content and candidate.content.parts:
                     for part in candidate.content.parts:
-                        # Stream any remaining thoughts from final response
-                        if getattr(part, 'thought', False) and hasattr(part, 'text') and part.text:
-                            thought_preview = part.text[:500]
-                            self.terminal_log_signal.emit(
-                                f"<span style='color: #d2a8ff'>💭 [Thinking] {thought_preview}</span>\n"
-                            )
-                        elif hasattr(part, 'text') and part.text:
+                        if hasattr(part, 'text') and part.text and not getattr(part, 'thought', False):
                             final_text += part.text
 
         return final_text or "I completed the requested actions. Check the Execution Logs for details."
@@ -2890,9 +2922,6 @@ class CopilotWorker(QThread):
             ctx.log(f"<span style='color:#d73a49'><b>[Tool Error]</b> {fn_name}: Unknown tool</span>\n")
         dt_ms = (time.monotonic() - t0) * 1000.0
 
-        # Session logger
-        self._logger.log_tool_call(fn_name, fn_args)
-        self._logger.log_tool_result(fn_name, str(result), dt_ms)
 
         return str(result)
 
@@ -3123,11 +3152,32 @@ class CopilotWorker(QThread):
                 f"Ask me anything — configure devices, troubleshoot connectivity, "
                 f"audit security, or deploy configs."
             )
+            # Initial GNS3 topology fetch in background
+            if self.gns3_project_id:
+                try:
+                    gns3 = ctx.get_gns3_connector()
+                    self.gns3_nodes_data = gns3.get_nodes(self.gns3_project_id)
+                    self.gns3_links_data = gns3.get_links(self.gns3_project_id)
+                except Exception:
+                    pass
+
             self.chat_response_signal.emit(greeting_text)
             self.ready_signal.emit()
 
             # 5. Message loop
+            last_topo_fetch = time.time()
             while self._running:
+                # Background GNS3 topology refresh
+                now_t = time.time()
+                if now_t - last_topo_fetch > 6.0 and self.gns3_project_id:
+                    try:
+                        gns3 = ctx.get_gns3_connector()
+                        self.gns3_nodes_data = gns3.get_nodes(self.gns3_project_id)
+                        self.gns3_links_data = gns3.get_links(self.gns3_project_id)
+                        last_topo_fetch = now_t
+                    except Exception:
+                        pass
+
                 if self._msg_queue:
                     user_msg = self._msg_queue.pop(0)
                     self.terminal_log_signal.emit(f"\n<span style='color: #58A6FF'><b>[User]</b> {user_msg}</span>\n")

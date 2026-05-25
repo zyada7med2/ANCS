@@ -24,6 +24,7 @@ class AgentBridge(QObject):
     addToolLog = Signal(str)                      # JSON: {time, type, name, description, status}
     appendExecutionLog = Signal(str)              # raw HTML line
     updateDevices = Signal(str)                   # JSON array of device objects
+    updateConnections = Signal(str)               # JSON array of GNS3 link objects
     pushSettings = Signal(str)                    # JSON settings object
 
     def __init__(self, dialog):

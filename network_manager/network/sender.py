@@ -568,7 +568,7 @@ class Sender:
                         if stripped and (stripped[-1] in (">", "#") or stripped[-1] == "]"):
                             break
                 except asyncio.TimeoutError:
-                    break
+                    pass
             return buf
 
         results: dict[str, str] = {}
@@ -699,7 +699,7 @@ class Sender:
                         if stripped and (stripped[-1] in (">", "#") or stripped[-1] == "]"):
                             break
                 except asyncio.TimeoutError:
-                    break
+                    pass
             return buf
 
         async def read_available(timeout_sec: float = 1.0) -> str:

@@ -409,6 +409,7 @@ class ANCSAgentDialog(QDialog):
                 "description": f"{result[:100]}",
                 "status": f"✓ {duration}ms"
             }))
+            self._refresh_device_chips() # Force immediate GNS3 topology and details refresh on tool completion
             return
 
         if error_match:
@@ -419,6 +420,7 @@ class ANCSAgentDialog(QDialog):
                 "description": f"Error: {error_text[:100]}",
                 "status": "error"
             }))
+            self._refresh_device_chips() # Force immediate refresh on tool error to show status update
             return
 
         if legacy_tool_match:
@@ -463,6 +465,7 @@ class ANCSAgentDialog(QDialog):
         })
         self._current_thoughts = []
         self._waiting_for_reply = False
+        self._refresh_device_chips() # Force immediate GNS3 topology and details refresh on final chat response
 
     def _on_finished(self, summary, success):
         """Worker finished (disconnected or error)."""
@@ -490,33 +493,202 @@ class ANCSAgentDialog(QDialog):
             self._bridge.updateDevices.emit("[]")
             return
 
+        # ── Fetch GNS3 coordinates and links cached in the CopilotWorker ──
+        gns3_nodes = []
+        gns3_links = []
+        w = getattr(self.app, "_copilot_worker", None)
+        if w:
+            gns3_nodes = getattr(w, "gns3_nodes_data", []) or []
+            gns3_links = getattr(w, "gns3_links_data", []) or []
+
+        # Map node positions if GNS3 data is available
+        node_coords = {}
+        if gns3_nodes:
+            try:
+                x_coords = [n.get("x", 0) for n in gns3_nodes]
+                y_coords = [n.get("y", 0) for n in gns3_nodes]
+                
+                min_x, max_x = min(x_coords), max(x_coords)
+                min_y, max_y = min(y_coords), max(y_coords)
+                
+                x_span = max_x - min_x if max_x != min_x else 1
+                y_span = max_y - min_y if max_y != min_y else 1
+                
+                for n in gns3_nodes:
+                    nid = n.get("node_id") or n.get("id")
+                    name = n.get("name")
+                    # Scale to 15% - 85% range for HTML container
+                    px = 15 + ((n.get("x", 0) - min_x) / x_span) * 70
+                    py = 15 + ((n.get("y", 0) - min_y) / y_span) * 70
+                    
+                    if nid:
+                        node_coords[str(nid)] = (px, py)
+                    if name:
+                        node_coords[str(name).lower()] = (px, py)
+            except Exception:
+                pass
+
         dev_list = []
         total = len(self.app.devices)
+        
+        # Import models inside function to avoid circular imports
+        from network_manager.models.devices import RouterModel, CoreSwitchModel, SwitchModel
+
         for i, (name, model, meta) in enumerate(self.app.devices[:20]):
             has_config = any(model.templates.values()) if hasattr(model, 'templates') else False
             status = "configured" if has_config else ("connected" if meta.get("console_host") else "pending")
             ip = meta.get("console_host", "N/A")
             platform = getattr(model, "platform", "Cisco IOS") if model else "Cisco IOS"
 
-            # Auto-layout for topology — spread devices in a grid
+            # Determine device type
+            dev_type = "router"
+            if isinstance(model, CoreSwitchModel):
+                dev_type = "switch"
+            elif isinstance(model, SwitchModel):
+                dev_type = "switch"
+            elif isinstance(model, RouterModel):
+                dev_type = "router"
+            else:
+                lower_name = name.lower()
+                if "switch" in lower_name or "esw" in lower_name or "sw" in lower_name:
+                    dev_type = "switch"
+                else:
+                    dev_type = "router"
+
+            # Fallback auto-layout spread in a grid
             cols = max(3, int(total ** 0.5) + 1)
             row = i // cols
             col = i % cols
-            x = 15 + (col * 70 // cols)
-            y = 25 + (row * 50)
+            fallback_x = 15 + (col * 70 // cols)
+            fallback_y = 25 + (row * 50)
+
+            # Try GNS3 resolved coordinates, fall back to grid
+            nid = meta.get("node_id")
+            x, y = fallback_x, fallback_y
+            if nid and str(nid) in node_coords:
+                x, y = node_coords[str(nid)]
+            elif name and str(name).lower() in node_coords:
+                x, y = node_coords[str(name).lower()]
+
+            # Get operational IP and active roles from model state
+            op_ip = "—"
+            roles = []
+            
+            if model and hasattr(model, 'state') and model.state:
+                # Try to get WAN/uplink interface IP
+                wan = model.state.get("wan", {})
+                if wan and wan.get("ip"):
+                    op_ip = f"{wan.get('ip')}"
+                
+                # Check for routing protocols, DHCP, static routes
+                routing = model.state.get("routing", {})
+                if routing and routing.get("protocol") != "none" and routing.get("protocol"):
+                    roles.append(routing.get("protocol").upper())
+                
+                dhcp = model.state.get("dhcp_pools", [])
+                if dhcp:
+                    roles.append("DHCP")
+                    
+                static_routes = model.state.get("static_routes", [])
+                if static_routes:
+                    roles.append("STATIC")
+                    
+                vlans = model.state.get("vlans", [])
+                if vlans:
+                    roles.append("VLANS")
+            
+            if not roles:
+                if dev_type == "router":
+                    roles.append("ROUTER")
+                else:
+                    roles.append("SWITCH")
 
             dev_list.append({
                 "id": name,
                 "name": name,
                 "status": status,
                 "ip": str(ip),
+                "op_ip": op_ip,
+                "roles": roles,
                 "platform": str(platform),
+                "type": dev_type,
                 "lastSeen": datetime.now().strftime("%I:%M:%S %p"),
-                "x": min(x, 85),
-                "y": min(y, 75),
+                "x": min(x, 90),
+                "y": min(y, 90),
             })
 
         self._bridge.updateDevices.emit(json.dumps(dev_list))
+
+        # ── Dynamically build connections list from GNS3 link data ──
+        connections_list = []
+        if gns3_nodes and gns3_links:
+            # Map node_id -> device workspace name
+            id_to_name = {}
+            for aname, amodel, ameta in self.app.devices:
+                nid = ameta.get("node_id")
+                if nid:
+                    id_to_name[str(nid)] = aname
+
+            # Fallback mapping from raw GNS3 nodes
+            for n in gns3_nodes:
+                nid = n.get("node_id") or n.get("id")
+                nname = n.get("name")
+                if nid and nname and str(nid) not in id_to_name:
+                    id_to_name[str(nid)] = nname
+
+            for link in gns3_links:
+                eps = link.get("nodes", [])
+                if len(eps) >= 2:
+                    nid_a = eps[0].get("node_id")
+                    nid_b = eps[1].get("node_id")
+                    name_a = id_to_name.get(str(nid_a))
+                    name_b = id_to_name.get(str(nid_b))
+                    if name_a and name_b:
+                        # Extract port names
+                        port_a = ""
+                        port_b = ""
+                        
+                        label_obj_a = eps[0].get("label") or {}
+                        label_text_a = label_obj_a.get("text", "").strip()
+                        if label_text_a:
+                            port_a = label_text_a
+                        else:
+                            adapter_a = eps[0].get("adapter_number")
+                            port_num_a = eps[0].get("port_number")
+                            if adapter_a is not None and port_num_a is not None:
+                                port_a = f"Et{adapter_a}/{port_num_a}"
+
+                        label_obj_b = eps[1].get("label") or {}
+                        label_text_b = label_obj_b.get("text", "").strip()
+                        if label_text_b:
+                            port_b = label_text_b
+                        else:
+                            adapter_b = eps[1].get("adapter_number")
+                            port_num_b = eps[1].get("port_number")
+                            if adapter_b is not None and port_num_b is not None:
+                                port_b = f"Et{adapter_b}/{port_num_b}"
+
+                        # Shorten interface names
+                        def shorten_iface(nm):
+                            for full, short in [("GigabitEthernet", "Gi"), ("FastEthernet", "Fa"),
+                                                 ("TenGigabitEthernet", "Te"), ("Ethernet", "Et"),
+                                                 ("Serial", "Se"), ("Loopback", "Lo"), ("Tunnel", "Tu"), ("Vlan", "Vl")]:
+                                if str(nm).lower().startswith(full.lower()):
+                                    return short + str(nm)[len(full):]
+                            return str(nm)
+
+                        port_a = shorten_iface(port_a)
+                        port_b = shorten_iface(port_b)
+
+                        connections_list.append({
+                            "from": name_a,
+                            "to": name_b,
+                            "port_from": port_a,
+                            "port_to": port_b
+                        })
+
+        # Emit live link connections to the JS side
+        self._bridge.updateConnections.emit(json.dumps(connections_list))
 
     # ──────────────────────────────────────────────────────────────────
     # WINDOW DRAG (frameless — handle from header mousedown events)

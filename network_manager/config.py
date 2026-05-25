@@ -196,6 +196,9 @@ try:
         FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE SET NULL
     )
     """)
+    _add_column_if_not_exists("logs", "device_name TEXT")
+    _add_column_if_not_exists("logs", "config_snapshot TEXT")
+    _add_column_if_not_exists("logs", "timestamp TEXT")
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS training_data (
