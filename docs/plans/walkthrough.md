@@ -174,3 +174,27 @@ We have successfully implemented deep cognitive protections against infinite age
 * **Bridge Native File Dialog:** Clicking it executes `exportChatConversation()`, mapping to the thread-safe `exportLogs()` Slot in [agent_bridge.py](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/gui/agent_bridge.py).
 * **Structured Output Compilation:** The bridge launches a native Qt `QFileDialog.getSaveFileName()` prompt. If the user selects a target path, it parses the in-memory chat session data (`self.app._copilot_chat_data`) and compiles a beautifully structured `.txt` file detailing each role and message entry.
 
+---
+
+## Add File & Multimodal Attachments Support (Images, PDFs)
+
+We have successfully completed the implementation of the file attachment pipeline, enabling users to upload and attach both images (photos) and document PDFs natively in the desktop Copilot interface.
+
+### 1. Native Desktop File Dialog (`agent_bridge.py`)
+* **Qt native QFileDialog:** Associated the static Web UI `Add File` button with a new PySide6 Slot `selectFile()`. When clicked, it launches a native system `QFileDialog.getOpenFileName` prompt.
+* **Safe Absolute Path Resolution:** Stores the selected absolute file path directly in Python memory (`self._dialog._active_attachment`). This avoids serializing large base64 strings or files over `QWebChannel` during selection, maintaining 100% desktop speeds.
+
+### 2. Glassmorphic Attachment UI Pill (`index.html`)
+* **Dynamic Signals:** Exposed `fileAttached` and `clearAttachment` signals from Python to Web Channel.
+* **Cyber-Monospace Pill:** When a file is selected, JS receives `fileAttached(filename)` and renders a gorgeous glassmorphic purple pill (`.attachment-container`) displaying a paperclip icon and the filename directly above the input bar.
+* **Cancel Interaction:** Users can hover and click a red `"x"` close button to trigger `removeAttachment()`, instantly clearing the selection from memory.
+
+### 3. Unified Multimodal Thread Processing (`ai_agent.py`)
+* **Gemini/Vertex AI Integration:** When sending a message, if an attachment is detected, the `CopilotWorker` loads the file, determines its MIME type (using Python's `mimetypes` library), and wraps it as a `types.Part.from_bytes` object. It passes both the part and the text prompt to `self._chat.send_message()`.
+  * **Photos:** PNG, JPG, JPEG, and WebP are processed inline.
+  * **PDFs:** Small-to-medium PDFs (under 14MB) are processed natively.
+* **OpenRouter Multimodal Fallback:** If using other compatible models (e.g. OpenAI/Hapuppy):
+  * **Images:** Automatically converted to a base64 Data URI block in the message payload.
+  * **PDFs/Other Files:** Appends a clean textual reference notice so the model retains file awareness.
+
+
