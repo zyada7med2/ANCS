@@ -195,3 +195,20 @@ class GNS3Connector:
     def stop_node(self, project_id: str, node_id: str):
         return self._post(f"/v2/projects/{project_id}/nodes/{node_id}/stop", {})
 
+    def get_drawings(self, project_id: str):
+        return self._get(f"/v2/projects/{project_id}/drawings")
+
+    def create_drawing(self, project_id: str, x: int, y: int, svg: str, z: int = -1):
+        payload = {
+            "x": x,
+            "y": y,
+            "z": z,
+            "svg": svg,
+            "rotation": 0,
+            "locked": False
+        }
+        return self._post(f"/v2/projects/{project_id}/drawings", payload)
+
+    def delete_drawing(self, project_id: str, drawing_id: str):
+        return self._delete(f"/v2/projects/{project_id}/drawings/{drawing_id}")
+

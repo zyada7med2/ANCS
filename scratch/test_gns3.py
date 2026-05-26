@@ -101,5 +101,31 @@ class TestGNS3Connector(unittest.TestCase):
         connector.delete_link_between_nodes("proj1", "node_a", "node_b")
         mock_requests.delete.assert_called_once_with("http://localhost:3080/v2/projects/proj1/links/link123", timeout=5)
 
+    @patch('network_manager.network.gns3.requests')
+    def test_drawing_methods(self, mock_requests):
+        connector = GNS3Connector("http://localhost:3080")
+        mock_resp = MagicMock()
+        mock_resp.text = '{"status": "ok"}'
+        mock_resp.json.return_value = {"status": "ok"}
+        mock_requests.get.return_value = mock_resp
+        mock_requests.post.return_value = mock_resp
+        mock_requests.delete.return_value = mock_resp
+        
+        # Test get_drawings
+        connector.get_drawings("proj1")
+        mock_requests.get.assert_any_call("http://localhost:3080/v2/projects/proj1/drawings", timeout=5)
+        
+        # Test create_drawing
+        connector.create_drawing("proj1", 10, 20, "<svg></svg>", z=-1)
+        mock_requests.post.assert_any_call(
+            "http://localhost:3080/v2/projects/proj1/drawings",
+            json={"x": 10, "y": 20, "z": -1, "svg": "<svg></svg>", "rotation": 0, "locked": False},
+            timeout=5
+        )
+        
+        # Test delete_drawing
+        connector.delete_drawing("proj1", "draw123")
+        mock_requests.delete.assert_any_call("http://localhost:3080/v2/projects/proj1/drawings/draw123", timeout=5)
+
 if __name__ == '__main__':
     unittest.main()
