@@ -38,6 +38,7 @@ class _AgentContext:
     workspace_resolved: list | None = None  # live GNS3 connection info (host/port/creds)
     _gns3_connector_instance = None  # lazy singleton
     logger = None
+    refresh_ui_fn = None  # thread-safe callable() to refresh GNS3 connection in UI
 
     @staticmethod
     def log(msg: str):
@@ -3225,6 +3226,7 @@ class CopilotWorker(QThread):
     finished_signal = Signal(str, bool)     # → final status (legacy compat)
     ready_signal = Signal()                 # → agent is ready for messages
     generate_pdf_signal = Signal(str, str)  # → HTML content, PDF target path
+    refresh_gns3_signal = Signal()          # → trigger GUI GNS3 refresh
 
     def __init__(self, api_key: str, gns3_url: str,
                  allow_raw_deploy: bool = False,
@@ -3269,6 +3271,7 @@ class CopilotWorker(QThread):
         ctx.workspace_resolved = self.workspace_resolved  # live GNS3 ports for tool functions
         ctx.logger = self._logger
         ctx.generate_pdf_signal = self.generate_pdf_signal
+        ctx.refresh_ui_fn = self.refresh_gns3_signal.emit
 
     def queue_message(self, text: str, attachment_path: str = None):
         """Called from the GUI thread to queue a user message."""
