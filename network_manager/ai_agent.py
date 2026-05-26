@@ -573,6 +573,105 @@ def move_gns3_node(node_id_or_name: str, x: int, y: int) -> str:
         return f"Error moving node: {e}"
 
 
+def add_gns3_annotation(
+    annotation_type: str,
+    text: str = "",
+    target_devices: list = None,
+    x: int = 0,
+    y: int = 0,
+    width: int = 200,
+    height: int = 80,
+    fill_color: str = "",
+    border_color: str = ""
+) -> str:
+    """
+    Draw a rectangle, ellipse, or text label directly on GNS3 canvas.
+    If target_devices is specified, auto-calculates boundary enclosing those devices.
+    """
+    pid = ctx.gns3_project_id
+    if not pid:
+        return "Error: No active GNS3 project connected."
+        
+    atype = annotation_type.lower().strip()
+    if atype not in ("text", "rectangle", "ellipse"):
+        return "Error: annotation_type must be 'text', 'rectangle', or 'ellipse'."
+
+    try:
+        gns3 = ctx.get_gns3_connector()
+        
+        # Determine coordinates/size
+        final_x, final_y = x, y
+        final_w, final_h = width, height
+        
+        if target_devices:
+            # Query nodes to resolve target boundaries
+            nodes = gns3.get_nodes(pid)
+            matched = []
+            for name in target_devices:
+                name_l = name.lower().strip()
+                node = next((n for n in nodes if n.get("name", "").lower().strip() == name_l or n.get("node_id") == name_l), None)
+                if node:
+                    matched.append(node)
+                    
+            if not matched:
+                return f"Error: No devices found matching target list: {target_devices}"
+                
+            xs = [n.get("x", 0) for n in matched]
+            ys = [n.get("y", 0) for n in matched]
+            
+            min_x, max_x = min(xs), max(xs)
+            min_y, max_y = min(ys), max(ys)
+            
+            # Auto dimensions with 80px padding
+            final_w = (max_x - min_x) + 160
+            final_h = (max_y - min_y) + 160
+            final_x = min_x - 80
+            final_y = min_y - 80
+            
+            # Single node override
+            if len(matched) == 1:
+                final_w = 160
+                final_h = 120
+                final_x = matched[0].get("x", 0) - 80
+                final_y = matched[0].get("y", 0) - 60
+
+        # Colors fallback
+        fill = fill_color or "rgba(167, 139, 250, 0.15)"
+        border = border_color or "rgba(167, 139, 250, 0.8)"
+
+        # Generate SVG
+        if atype == "rectangle":
+            svg = (
+                f'<svg width="{final_w}" height="{final_h}">'
+                f'<rect class="ancs-annotation" width="{final_w}" height="{final_h}" '
+                f'fill="{fill}" stroke="{border}" stroke-width="2" rx="8" ry="8" />'
+                f'</svg>'
+            )
+        elif atype == "ellipse":
+            svg = (
+                f'<svg width="{final_w}" height="{final_h}">'
+                f'<ellipse class="ancs-annotation" cx="{final_w // 2}" cy="{final_h // 2}" '
+                f'rx="{final_w // 2}" ry="{final_h // 2}" fill="{fill}" stroke="{border}" stroke-width="2" />'
+                f'</svg>'
+            )
+        else: # text label
+            svg = (
+                f'<svg width="{final_w}" height="{final_h}">'
+                f'<rect class="ancs-annotation" width="{final_w}" height="{final_h}" fill="rgba(30, 41, 59, 0.9)" stroke="{border}" stroke-width="1.5" rx="5" ry="5" />'
+                f'<text x="12" y="{final_h // 2 + 4}" font-family="monospace" font-size="11" font-weight="bold" fill="#38BDF8">{text}</text>'
+                f'</svg>'
+            )
+            
+        gns3.create_drawing(pid, final_x, final_y, svg, z=-1)
+        
+        if ctx.refresh_ui_fn:
+            ctx.refresh_ui_fn()
+            
+        return f"Success: Added {atype} annotation at coordinates ({final_x}, {final_y}) with size {final_w}x{final_h}."
+    except Exception as e:
+        return f"Error adding annotation: {e}"
+
+
 def get_node_ports(project_id: str, node_id: str) -> str:
     """Get the interfaces/ports of a specific GNS3 node. Returns JSON array of port objects."""
     try:
