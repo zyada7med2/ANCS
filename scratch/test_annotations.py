@@ -77,5 +77,11 @@ class TestAnnotations(unittest.TestCase):
         mock_conn.delete_drawing.assert_any_call("test-proj", "d2")
         ctx.refresh_ui_fn.assert_called_once()
 
+    def test_tools_registration(self):
+        from network_manager.ai_agent import ALL_TOOLS
+        tool_names = [t.__name__ for t in ALL_TOOLS if hasattr(t, '__name__')]
+        self.assertIn("add_gns3_annotation", tool_names)
+        self.assertIn("clear_gns3_annotations", tool_names)
+
 if __name__ == '__main__':
     unittest.main()
