@@ -84,5 +84,71 @@ class TestAgentTools(unittest.TestCase):
             mock_cur.execute.assert_called()
             ctx.refresh_ui_fn.assert_called_once()
 
+    @patch('network_manager.ai_agent.ctx.get_gns3_connector')
+    def test_connect_and_disconnect_links(self, mock_get_connector):
+        from network_manager.ai_agent import connect_gns3_nodes, delete_gns3_link
+        
+        # Verify tools are in ALL_TOOLS
+        tool_names = [t.__name__ for t in ALL_TOOLS if hasattr(t, '__name__')]
+        self.assertIn("connect_gns3_nodes", tool_names)
+        self.assertIn("delete_gns3_link", tool_names)
+        
+        # Setup mock connector
+        mock_connector = MagicMock()
+        mock_connector.get_nodes.return_value = [
+            {"node_id": "node-a", "name": "R1", "status": "stopped"},
+            {"node_id": "node-b", "name": "SW1", "status": "stopped"}
+        ]
+        mock_connector.get_node_ports.side_effect = lambda pid, nid: (
+            [{"name": "Ethernet0/0", "short_name": "e0/0", "adapter_number": 0, "port_number": 0}] if nid == "node-a" else
+            [{"name": "Ethernet0/1", "short_name": "e0/1", "adapter_number": 0, "port_number": 1}]
+        )
+        mock_get_connector.return_value = mock_connector
+        
+        # Reset mock
+        ctx.refresh_ui_fn.reset_mock()
+        
+        # 1. Test connect
+        res = connect_gns3_nodes(node_a="R1", port_a="Ethernet0/0", node_b="SW1", port_b="Ethernet0/1")
+        self.assertIn("Success", res)
+        mock_connector.create_link.assert_called_once_with("test-proj-id", "node-a", 0, 0, "node-b", 0, 1)
+        ctx.refresh_ui_fn.assert_called_once()
+        
+        # 2. Test delete/disconnect link
+        ctx.refresh_ui_fn.reset_mock()
+        res_del = delete_gns3_link(node_a="R1", node_b="SW1")
+        self.assertIn("Success", res_del)
+        mock_connector.delete_link_between_nodes.assert_called_once_with("test-proj-id", "node-a", "node-b")
+        ctx.refresh_ui_fn.assert_called_once()
+
+    @patch('network_manager.ai_agent.ctx.get_gns3_connector')
+    def test_control_gns3_node_power(self, mock_get_connector):
+        from network_manager.ai_agent import control_gns3_node_power
+        
+        # Verify tool is in ALL_TOOLS
+        tool_names = [t.__name__ for t in ALL_TOOLS if hasattr(t, '__name__')]
+        self.assertIn("control_gns3_node_power", tool_names)
+        
+        # Setup mock connector
+        mock_connector = MagicMock()
+        mock_connector.get_nodes.return_value = [{"node_id": "node-a", "name": "R1"}]
+        mock_get_connector.return_value = mock_connector
+        
+        # Reset mock
+        ctx.refresh_ui_fn.reset_mock()
+        
+        with patch('network_manager.config.db_lock'), \
+             patch('network_manager.config.conn') as mock_conn:
+             
+            mock_cur = MagicMock()
+            mock_conn.cursor.return_value = mock_cur
+            
+            res = control_gns3_node_power(node_id_or_name="R1", action="start")
+            
+            self.assertIn("Success", res)
+            mock_connector.start_node.assert_called_once_with("test-proj-id", "node-a")
+            mock_cur.execute.assert_called_once()
+            ctx.refresh_ui_fn.assert_called_once()
+
 if __name__ == '__main__':
     unittest.main()

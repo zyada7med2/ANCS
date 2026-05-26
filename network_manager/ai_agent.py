@@ -379,6 +379,170 @@ def delete_gns3_node(node_id_or_name: str) -> str:
         return f"Error deleting node: {e}"
 
 
+def connect_gns3_nodes(node_a: str, port_a: str, node_b: str, port_b: str) -> str:
+    """
+    Connect two GNS3 nodes using specified port/interface names (e.g. Ethernet0/0).
+    """
+    pid = ctx.gns3_project_id
+    if not pid:
+        return "Error: No active GNS3 project connected."
+    try:
+        gns3 = ctx.get_gns3_connector()
+        nodes = gns3.get_nodes(pid)
+        
+        id_a, id_b = "", ""
+        name_a, name_b = "", ""
+        for n in nodes:
+            n_id = n.get("node_id")
+            n_name = n.get("name", "")
+            if n_id == node_a or n_name.lower() == node_a.lower():
+                id_a = n_id
+                name_a = n_name
+            if n_id == node_b or n_name.lower() == node_b.lower():
+                id_b = n_id
+                name_b = n_name
+        if not id_a or not id_b:
+            return f"Error: Could not resolve node IDs. Node A: '{node_a}' ({'resolved' if id_a else 'missing'}), Node B: '{node_b}' ({'resolved' if id_b else 'missing'})"
+            
+        # Resolve port names to GNS3 numbers
+        def resolve_port(node_id, device_name, target_port):
+            ports = gns3.get_node_ports(pid, node_id)
+            for p in ports:
+                name_l = p.get("name", "").lower()
+                short_l = p.get("short_name", "").lower()
+                target_l = target_port.lower()
+                if target_l in (name_l, short_l) or target_l.replace(" ", "") in (name_l.replace(" ", ""), short_l.replace(" ", "")):
+                    return p.get("adapter_number"), p.get("port_number")
+            # If not found, list ports
+            avail = [f"{p.get('name')} ({p.get('short_name')})" for p in ports]
+            raise RuntimeError(f"Port '{target_port}' not found on {device_name}. Available ports: {avail}")
+            
+        try:
+            adapter_a, port_num_a = resolve_port(id_a, name_a, port_a)
+            adapter_b, port_num_b = resolve_port(id_b, name_b, port_b)
+        except RuntimeError as err:
+            return f"Error: {err}"
+            
+        # Hot-plug check: stop if running, then connect
+        state_a, state_b = "stopped", "stopped"
+        for n in nodes:
+            if n.get("node_id") == id_a:
+                state_a = n.get("status")
+            if n.get("node_id") == id_b:
+                state_b = n.get("status")
+                
+        stopped_a, stopped_b = False, False
+        if state_a == "started":
+            gns3.stop_node(pid, id_a)
+            stopped_a = True
+        if state_b == "started":
+            gns3.stop_node(pid, id_b)
+            stopped_b = True
+            
+        try:
+            gns3.create_link(pid, id_a, adapter_a, port_num_a, id_b, adapter_b, port_num_b)
+        finally:
+            # Restart if stopped
+            if stopped_a:
+                gns3.start_node(pid, id_a)
+            if stopped_b:
+                gns3.start_node(pid, id_b)
+                
+        if ctx.refresh_ui_fn:
+            ctx.refresh_ui_fn()
+            
+        return f"Success: Connected {name_a} ({port_a}) to {name_b} ({port_b})."
+    except Exception as e:
+        return f"Error establishing connection: {e}"
+
+
+def delete_gns3_link(node_a: str, node_b: str) -> str:
+    """
+    Disconnect the cable/link between node_a and node_b.
+    """
+    pid = ctx.gns3_project_id
+    if not pid:
+        return "Error: No active GNS3 project connected."
+    try:
+        gns3 = ctx.get_gns3_connector()
+        nodes = gns3.get_nodes(pid)
+        
+        id_a, id_b = "", ""
+        name_a, name_b = "", ""
+        for n in nodes:
+            n_id = n.get("node_id")
+            n_name = n.get("name", "")
+            if n_id == node_a or n_name.lower() == node_a.lower():
+                id_a = n_id
+                name_a = n_name
+            if n_id == node_b or n_name.lower() == node_b.lower():
+                id_b = n_id
+                name_b = n_name
+        if not id_a or not id_b:
+            return f"Error: Could not resolve node IDs. Node A: '{node_a}' ({'resolved' if id_a else 'missing'}), Node B: '{node_b}' ({'resolved' if id_b else 'missing'})"
+            
+        gns3.delete_link_between_nodes(pid, id_a, id_b)
+        
+        if ctx.refresh_ui_fn:
+            ctx.refresh_ui_fn()
+            
+        return f"Success: Disconnected link between {name_a} and {name_b}."
+    except Exception as e:
+        return f"Error deleting link: {e}"
+
+
+def control_gns3_node_power(node_id_or_name: str, action: str) -> str:
+    """
+    Control node power state. Action must be 'start', 'stop', or 'restart'.
+    """
+    pid = ctx.gns3_project_id
+    if not pid:
+        return "Error: No active GNS3 project connected."
+    act = action.lower().strip()
+    if act not in ("start", "stop", "restart"):
+        return "Error: Action must be 'start', 'stop', or 'restart'."
+    try:
+        gns3 = ctx.get_gns3_connector()
+        nodes = gns3.get_nodes(pid)
+        node_id = ""
+        resolved_name = ""
+        for n in nodes:
+            if n.get("node_id") == node_id_or_name or n.get("name", "").lower() == node_id_or_name.lower():
+                node_id = n.get("node_id")
+                resolved_name = n.get("name")
+                break
+        if not node_id:
+            return f"Error: Node '{node_id_or_name}' not found."
+            
+        if act == "start":
+            gns3.start_node(pid, node_id)
+        elif act == "stop":
+            gns3.stop_node(pid, node_id)
+        else:
+            gns3.stop_node(pid, node_id)
+            import time
+            time.sleep(1.0)
+            gns3.start_node(pid, node_id)
+            
+        # Sync database state
+        from network_manager.config import conn, db_lock
+        with db_lock:
+            cur = conn.cursor()
+            cur.execute(
+                "UPDATE devices SET status=? WHERE name=?",
+                ("started" if act in ("start", "restart") else "stopped", resolved_name)
+            )
+            conn.commit()
+            cur.close()
+            
+        if ctx.refresh_ui_fn:
+            ctx.refresh_ui_fn()
+            
+        return f"Success: Node '{resolved_name}' power state set to '{action}'."
+    except Exception as e:
+        return f"Error changing node power: {e}"
+
+
 def get_node_ports(project_id: str, node_id: str) -> str:
     """Get the interfaces/ports of a specific GNS3 node. Returns JSON array of port objects."""
     try:
@@ -2926,6 +3090,9 @@ ALL_TOOLS = [
     list_gns3_nodes,
     add_gns3_node,
     delete_gns3_node,
+    connect_gns3_nodes,
+    delete_gns3_link,
+    control_gns3_node_power,
     get_node_ports,
     get_topology_links,
     get_network_overview,
@@ -3049,6 +3216,9 @@ _MAJOR_TOOL_STATUS = {
     "get_topology_links": "Mapping topology links...",
     "add_gns3_node": "Spawning new GNS3 device...",
     "delete_gns3_node": "Deleting GNS3 device...",
+    "connect_gns3_nodes": "Connecting network interfaces...",
+    "delete_gns3_link": "Disconnecting network interfaces...",
+    "control_gns3_node_power": "Toggling device power state...",
     "audit_network": "Running security audit...",
     "trace_connectivity": "Tracing connectivity path...",
     "validate_configs": "Validating configurations...",
