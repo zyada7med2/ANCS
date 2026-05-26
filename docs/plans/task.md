@@ -9,9 +9,9 @@
 | TASK-7 | Implementation | Task 1: Add POST/DELETE helpers to GNS3Connector | Completed |
 | TASK-8 | Implementation | Task 2: Add topology editing methods to GNS3Connector | Completed |
 | TASK-9 | Implementation | Task 3: Add custom signal and callback to CopilotWorker | Completed |
-| TASK-10 | Implementation | Task 4: Handle signal in AgentDialog | Pending |
-| TASK-11 | Implementation | Task 5: Implement add_gns3_node tool | Pending |
-| TASK-12 | Implementation | Task 6: Implement delete_gns3_node tool | Pending |
-| TASK-13 | Implementation | Task 7: Implement connect_gns3_nodes and delete_gns3_link tools | Pending |
-| TASK-14 | Implementation | Task 8: Implement control_gns3_node_power tool | Pending |
-| TASK-15 | Verification | Run end-to-end integration verification and write walkthrough.md | Pending |
+| TASK-10 | Implementation | Task 4: Handle signal in AgentDialog | Completed |
+| TASK-11 | Implementation | Task 5: Implement add_gns3_node tool | Completed |
+| TASK-12 | Implementation | Task 6: Implement delete_gns3_node tool | Completed |
+| TASK-13 | Implementation | Task 7: Implement connect_gns3_nodes and delete_gns3_link tools | Completed |
+| TASK-14 | Implementation | Task 8: Implement control_gns3_node_power tool | Completed |
+| TASK-15 | Verification | Run end-to-end integration verification and write walkthrough.md | In Progress |
