@@ -47,6 +47,62 @@ class GNS3Connector:
         except ValueError as exc:
             raise RuntimeError(f"GNS3 returned non-JSON response: {exc}")
 
+    def _post(self, path: str, json_data: dict = None, timeout: int = 5):
+        """Internal POST helper with consistent error handling."""
+        if requests is None:
+            raise RuntimeError("'requests' library is not installed")
+        try:
+            r = requests.post(f"{self.server_url}{path}", json=json_data or {}, timeout=timeout)
+            r.raise_for_status()
+            return r.json() if r.text else {}
+        except requests.exceptions.ConnectionError:
+            raise RuntimeError(
+                f"Cannot reach GNS3 server at {self.server_url}. "
+                "Make sure GNS3 is running."
+            )
+        except requests.exceptions.Timeout:
+            raise RuntimeError(
+                f"GNS3 server at {self.server_url} did not respond within "
+                f"{timeout} seconds."
+            )
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if hasattr(exc, 'response') else "unknown"
+            body = exc.response.text if hasattr(exc, 'response') else ""
+            raise RuntimeError(
+                f"GNS3 API error ({status}): {path}\n"
+                f"Response: {body[:200]}"
+            )
+        except ValueError as exc:
+            raise RuntimeError(f"GNS3 returned non-JSON response: {exc}")
+
+    def _delete(self, path: str, timeout: int = 5):
+        """Internal DELETE helper with consistent error handling."""
+        if requests is None:
+            raise RuntimeError("'requests' library is not installed")
+        try:
+            r = requests.delete(f"{self.server_url}{path}", timeout=timeout)
+            r.raise_for_status()
+            return r.json() if r.text else {}
+        except requests.exceptions.ConnectionError:
+            raise RuntimeError(
+                f"Cannot reach GNS3 server at {self.server_url}. "
+                "Make sure GNS3 is running."
+            )
+        except requests.exceptions.Timeout:
+            raise RuntimeError(
+                f"GNS3 server at {self.server_url} did not respond within "
+                f"{timeout} seconds."
+            )
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if hasattr(exc, 'response') else "unknown"
+            body = exc.response.text if hasattr(exc, 'response') else ""
+            raise RuntimeError(
+                f"GNS3 API error ({status}): {path}\n"
+                f"Response: {body[:200]}"
+            )
+        except ValueError as exc:
+            raise RuntimeError(f"GNS3 returned non-JSON response: {exc}")
+
     def get_projects(self):
         return self._get("/v2/projects")
 
