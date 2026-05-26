@@ -58,5 +58,24 @@ class TestAnnotations(unittest.TestCase):
         self.assertEqual(args[2], 70)  # calculated y
         self.assertIn('ellipse class="ancs-annotation"', args[3])
 
+    @patch('network_manager.ai_agent.ctx.get_gns3_connector')
+    def test_clear_annotations(self, mock_get_connector):
+        from network_manager.ai_agent import clear_gns3_annotations
+        mock_conn = MagicMock()
+        mock_conn.get_drawings.return_value = [
+            {"drawing_id": "d1", "svg": '<rect class="ancs-annotation" />'},
+            {"drawing_id": "d2", "svg": '<svg><ellipse class="ancs-annotation" /></svg>'},
+            {"drawing_id": "d3", "svg": '<rect fill="blue" />'} # not an ancs drawing
+        ]
+        mock_get_connector.return_value = mock_conn
+        
+        res = clear_gns3_annotations(target_type="all")
+        self.assertIn("Success", res)
+        # Verify it deleted exactly 2 drawings (d1, d2) and ignored d3
+        self.assertEqual(mock_conn.delete_drawing.call_count, 2)
+        mock_conn.delete_drawing.assert_any_call("test-proj", "d1")
+        mock_conn.delete_drawing.assert_any_call("test-proj", "d2")
+        ctx.refresh_ui_fn.assert_called_once()
+
 if __name__ == '__main__':
     unittest.main()

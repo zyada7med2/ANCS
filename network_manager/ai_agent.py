@@ -672,6 +672,54 @@ def add_gns3_annotation(
         return f"Error adding annotation: {e}"
 
 
+def clear_gns3_annotations(target_type: str = "all") -> str:
+    """
+    Remove GNS3 canvas annotations spawned by the AI agent.
+    target_type can be 'all', 'text', 'rectangle', or 'ellipse'.
+    """
+    pid = ctx.gns3_project_id
+    if not pid:
+        return "Error: No active GNS3 project connected."
+        
+    ttype = target_type.lower().strip()
+    if ttype not in ("all", "text", "rectangle", "ellipse"):
+        return "Error: target_type must be 'all', 'text', 'rectangle', or 'ellipse'."
+
+    try:
+        gns3 = ctx.get_gns3_connector()
+        drawings = gns3.get_drawings(pid)
+        deleted_count = 0
+        
+        for d in drawings:
+            svg = d.get("svg", "")
+            if 'class="ancs-annotation"' not in svg:
+                continue
+                
+            # Type filtering checks
+            is_match = False
+            if ttype == "all":
+                is_match = True
+            elif ttype == "rectangle" and "rect " in svg and "text " not in svg:
+                is_match = True
+            elif ttype == "ellipse" and "ellipse " in svg:
+                is_match = True
+            elif ttype == "text" and "text " in svg:
+                is_match = True
+                
+            if is_match:
+                drawing_id = d.get("drawing_id")
+                if drawing_id:
+                    gns3.delete_drawing(pid, drawing_id)
+                    deleted_count += 1
+                    
+        if deleted_count > 0 and ctx.refresh_ui_fn:
+            ctx.refresh_ui_fn()
+            
+        return f"Success: Cleared {deleted_count} {ttype} GNS3 canvas annotations."
+    except Exception as e:
+        return f"Error clearing annotations: {e}"
+
+
 def get_node_ports(project_id: str, node_id: str) -> str:
     """Get the interfaces/ports of a specific GNS3 node. Returns JSON array of port objects."""
     try:
