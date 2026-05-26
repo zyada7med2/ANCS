@@ -6,9 +6,9 @@
 | TASK-4 | Brainstorming | Present design sections and obtain user approval | Completed |
 | TASK-5 | Brainstorming | Write design document to `docs/plans/2026-05-26-gns3-topology-editing-design.md` and commit | Completed |
 | TASK-6 | Brainstorming | Invoke writing-plans skill to create implementation plan | Completed |
-| TASK-7 | Implementation | Task 1: Add POST/DELETE helpers to GNS3Connector | Pending |
-| TASK-8 | Implementation | Task 2: Add topology editing methods to GNS3Connector | Pending |
-| TASK-9 | Implementation | Task 3: Add custom signal and callback to CopilotWorker | Pending |
+| TASK-7 | Implementation | Task 1: Add POST/DELETE helpers to GNS3Connector | Completed |
+| TASK-8 | Implementation | Task 2: Add topology editing methods to GNS3Connector | Completed |
+| TASK-9 | Implementation | Task 3: Add custom signal and callback to CopilotWorker | Completed |
 | TASK-10 | Implementation | Task 4: Handle signal in AgentDialog | Pending |
 | TASK-11 | Implementation | Task 5: Implement add_gns3_node tool | Pending |
 | TASK-12 | Implementation | Task 6: Implement delete_gns3_node tool | Pending |
