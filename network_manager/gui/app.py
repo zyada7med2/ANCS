@@ -786,6 +786,10 @@ class App(QMainWindow):
         self.right_sidebar_visible = True
         self._main_thread_call.connect(self._execute_main_thread_call)
 
+        # Purge leftover database devices, configs, and credentials on startup
+        # to ensure the persistent DB represents ONLY the live active session.
+        self._clear_all_devices_from_db()
+
         self._build_ui()
         self._apply_main_window_min_size()
         if self._use_custom_title_bar:
@@ -2343,7 +2347,30 @@ class App(QMainWindow):
         obj = cls(name)
         if metadata is None:
             metadata = {}
-        self.devices.append((name, obj, metadata))
+        
+        # Avoid duplicate additions to the in-memory list
+        if not any(d[0] == name for d in self.devices):
+            self.devices.append((name, obj, metadata))
+            
+        # Automatically insert/update the device in the SQLite database to keep DB in sync
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        ip = metadata.get("ip", metadata.get("console_host", ""))
+        port = str(metadata.get("port", metadata.get("console_port", "")))
+        conn_type = "gns3-console" if metadata.get("gns3_node") else "manual"
+        added_gns3 = 1 if metadata.get("gns3_node") else 0
+        proj_id = metadata.get("project_id", "")
+        node_id = metadata.get("node_id", "")
+        
+        try:
+            with db_lock:
+                cur.execute(
+                    "INSERT OR REPLACE INTO devices (name, type, ip, port, connection_type, added_from_gns3, project_id, node_id, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (name, type_key, ip, port, conn_type, added_gns3, proj_id, node_id, ts)
+                )
+                conn.commit()
+        except Exception as e:
+            self.log(f"[db] error auto-syncing added device '{name}': {e}")
 
     def refresh_device_list(self):
         self.device_list.blockSignals(True)
@@ -2428,6 +2455,18 @@ class App(QMainWindow):
         self.add_device_instance(dtype, name.strip())
         self.refresh_device_list()
 
+    def _clear_all_devices_from_db(self):
+        """Purge leftover devices, configs, and credentials from the database to avoid ghost/old devices."""
+        try:
+            with db_lock:
+                cur.execute("DELETE FROM configs")
+                cur.execute("DELETE FROM credentials")
+                cur.execute("DELETE FROM devices")
+                conn.commit()
+            self.log("[db] Cleared leftover devices, configs, and credentials from SQLite database.")
+        except Exception as e:
+            self.log(f"[db] error clearing database: {e}")
+
     def remove_selected_device(self):
         if not self.selected_device_name:
             QMessageBox.information(self, "Info", "Select a device first")
@@ -2442,6 +2481,16 @@ class App(QMainWindow):
         name = self.devices[idx][0]
         ret = QMessageBox.question(self, "Confirm", f"Remove {name}?")
         if ret == QMessageBox.Yes:
+            # Clean up device and its configs from SQLite database
+            try:
+                with db_lock:
+                    cur.execute("DELETE FROM configs WHERE device_id = (SELECT id FROM devices WHERE name = ?)", (name,))
+                    cur.execute("DELETE FROM credentials WHERE device_name = ?", (name,))
+                    cur.execute("DELETE FROM devices WHERE name = ?", (name,))
+                    conn.commit()
+                self.log(f"[db] Manually removed device '{name}' and its configs from database.")
+            except Exception as e:
+                self.log(f"[db] error deleting device '{name}': {e}")
             del self.devices[idx]
             self.refresh_device_list()
 
@@ -2596,7 +2645,10 @@ class App(QMainWindow):
     def log(self, msg):
         def _do():
             ts = time.strftime("%H:%M:%S")
-            self.txt_logs.appendPlainText(f"[{ts}] {msg}")
+            if hasattr(self, "txt_logs") and self.txt_logs is not None:
+                self.txt_logs.appendPlainText(f"[{ts}] {msg}")
+            else:
+                print(f"[{ts}] {msg}")
         self._run_on_main(_do)
 
     def _refresh_logs_history(self):
@@ -3326,6 +3378,7 @@ class App(QMainWindow):
 
         if replace_mode:
             self.devices.clear()
+            self._clear_all_devices_from_db()
             self.refresh_device_list()
 
         added = 0
@@ -4269,6 +4322,48 @@ class App(QMainWindow):
         imported = 0
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         project_id = self.gns3_project_id if hasattr(self, 'gns3_project_id') else ""
+
+        # ── WIPE STALE/OLD GHOST DEVICES FROM DATABASE AND MEMORY ──
+        # Ensure ONLY live devices in the current GNS3 project session exist.
+        live_node_ids = {d["node_id"] for d in new_devices}
+        
+        try:
+            with db_lock:
+                # Get all GNS3 devices from the database
+                cur.execute("SELECT name, node_id, project_id FROM devices WHERE added_from_gns3 = 1")
+                db_gns3_devices = cur.fetchall()
+                
+                # Identify ghost devices to delete
+                to_delete = []
+                for name, node_id, pid in db_gns3_devices:
+                    if pid != project_id or node_id not in live_node_ids:
+                        to_delete.append(name)
+                        
+                for name in to_delete:
+                    # Clean up configurations first (foreign key reference)
+                    cur.execute("DELETE FROM configs WHERE device_id = (SELECT id FROM devices WHERE name = ?)", (name,))
+                    # Clean up device credentials
+                    cur.execute("DELETE FROM credentials WHERE device_name = ?", (name,))
+                    # Clean up the device itself
+                    cur.execute("DELETE FROM devices WHERE name = ?", (name,))
+                    self.log(f"[db] Wiped stale ghost device '{name}' from database.")
+                conn.commit()
+        except Exception as exc:
+            self.log(f"[db] error cleaning stale ghost devices: {exc}")
+
+        # Remove stale ghost devices from in-memory workspace list
+        stale_indices = []
+        for idx, (name, _, meta) in enumerate(self.devices):
+            if meta.get("gns3_node"):
+                if meta.get("project_id") != project_id or meta.get("node_id") not in live_node_ids:
+                    stale_indices.append(idx)
+                    
+        # Delete indices in reverse order to preserve list positions
+        for idx in sorted(stale_indices, reverse=True):
+            self.log(f"[UI] Removed stale ghost device '{self.devices[idx][0]}' from active workspace.")
+            del self.devices[idx]
+
+        # Ingest active/live nodes
         for d in new_devices:
             name, node_id = d["name"], d["node_id"]
             already = any(x[2].get("node_id") == node_id and x[2].get("project_id") == project_id for x in self.devices)
