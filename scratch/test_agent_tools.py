@@ -55,5 +55,34 @@ class TestAgentTools(unittest.TestCase):
             mock_cur.execute.assert_called_once()
             ctx.refresh_ui_fn.assert_called_once()
 
+    @patch('network_manager.ai_agent.ctx.get_gns3_connector')
+    def test_delete_gns3_node(self, mock_get_connector):
+        from network_manager.ai_agent import delete_gns3_node
+        
+        # Verify tool is in ALL_TOOLS
+        tool_names = [t.__name__ for t in ALL_TOOLS if hasattr(t, '__name__')]
+        self.assertIn("delete_gns3_node", tool_names)
+        
+        # Setup mock connector
+        mock_connector = MagicMock()
+        mock_connector.get_nodes.return_value = [{"node_id": "node-123", "name": "R3"}]
+        mock_get_connector.return_value = mock_connector
+        
+        # Reset mock
+        ctx.refresh_ui_fn.reset_mock()
+        
+        with patch('network_manager.config.db_lock'), \
+             patch('network_manager.config.conn') as mock_conn:
+             
+            mock_cur = MagicMock()
+            mock_conn.cursor.return_value = mock_cur
+            
+            res = delete_gns3_node(node_id_or_name="R3")
+            
+            self.assertIn("Success", res)
+            mock_connector.delete_node.assert_called_once_with("test-proj-id", "node-123")
+            mock_cur.execute.assert_called()
+            ctx.refresh_ui_fn.assert_called_once()
+
 if __name__ == '__main__':
     unittest.main()

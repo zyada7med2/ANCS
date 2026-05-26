@@ -339,6 +339,46 @@ def add_gns3_node(name: str, device_role: str, x: int = 0, y: int = 0, template_
         return f"Error adding node: {e}"
 
 
+def delete_gns3_node(node_id_or_name: str) -> str:
+    """
+    Delete a device/node from GNS3 and synchronize database and UI.
+    """
+    pid = ctx.gns3_project_id
+    if not pid:
+        return "Error: No active GNS3 project connected."
+    try:
+        gns3 = ctx.get_gns3_connector()
+        nodes = gns3.get_nodes(pid)
+        node_id = ""
+        resolved_name = ""
+        for n in nodes:
+            if n.get("node_id") == node_id_or_name or n.get("name", "").lower() == node_id_or_name.lower():
+                node_id = n.get("node_id")
+                resolved_name = n.get("name")
+                break
+        if not node_id:
+            return f"Error: Node '{node_id_or_name}' not found."
+            
+        gns3.delete_node(pid, node_id)
+        
+        # Delete from local DB
+        from network_manager.config import conn, db_lock
+        with db_lock:
+            cur = conn.cursor()
+            cur.execute("DELETE FROM configs WHERE device_id = (SELECT id FROM devices WHERE name = ?)", (resolved_name,))
+            cur.execute("DELETE FROM credentials WHERE device_name = ?", (resolved_name,))
+            cur.execute("DELETE FROM devices WHERE name = ?", (resolved_name,))
+            conn.commit()
+            cur.close()
+            
+        if ctx.refresh_ui_fn:
+            ctx.refresh_ui_fn()
+            
+        return f"Success: Deleted node '{resolved_name}' ({node_id}) from topology."
+    except Exception as e:
+        return f"Error deleting node: {e}"
+
+
 def get_node_ports(project_id: str, node_id: str) -> str:
     """Get the interfaces/ports of a specific GNS3 node. Returns JSON array of port objects."""
     try:
@@ -2885,6 +2925,7 @@ ALL_TOOLS = [
     list_gns3_projects,
     list_gns3_nodes,
     add_gns3_node,
+    delete_gns3_node,
     get_node_ports,
     get_topology_links,
     get_network_overview,
@@ -3007,6 +3048,7 @@ _MAJOR_TOOL_STATUS = {
     "list_all_devices": "Fetching device list...",
     "get_topology_links": "Mapping topology links...",
     "add_gns3_node": "Spawning new GNS3 device...",
+    "delete_gns3_node": "Deleting GNS3 device...",
     "audit_network": "Running security audit...",
     "trace_connectivity": "Tracing connectivity path...",
     "validate_configs": "Validating configurations...",
