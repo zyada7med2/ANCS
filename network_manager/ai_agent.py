@@ -543,6 +543,36 @@ def control_gns3_node_power(node_id_or_name: str, action: str) -> str:
         return f"Error changing node power: {e}"
 
 
+def move_gns3_node(node_id_or_name: str, x: int, y: int) -> str:
+    """
+    Move/reposition an existing GNS3 node on the canvas.
+    """
+    pid = ctx.gns3_project_id
+    if not pid:
+        return "Error: No active GNS3 project connected."
+    try:
+        gns3 = ctx.get_gns3_connector()
+        nodes = gns3.get_nodes(pid)
+        node_id = ""
+        resolved_name = ""
+        for n in nodes:
+            if n.get("node_id") == node_id_or_name or n.get("name", "").lower() == node_id_or_name.lower():
+                node_id = n.get("node_id")
+                resolved_name = n.get("name")
+                break
+        if not node_id:
+            return f"Error: Node '{node_id_or_name}' not found."
+            
+        gns3.update_node(pid, node_id, {"x": x, "y": y})
+        
+        if ctx.refresh_ui_fn:
+            ctx.refresh_ui_fn()
+            
+        return f"Success: Moved node '{resolved_name}' to coordinate ({x}, {y})."
+    except Exception as e:
+        return f"Error moving node: {e}"
+
+
 def get_node_ports(project_id: str, node_id: str) -> str:
     """Get the interfaces/ports of a specific GNS3 node. Returns JSON array of port objects."""
     try:
@@ -3093,6 +3123,7 @@ ALL_TOOLS = [
     connect_gns3_nodes,
     delete_gns3_link,
     control_gns3_node_power,
+    move_gns3_node,
     get_node_ports,
     get_topology_links,
     get_network_overview,
@@ -3219,6 +3250,7 @@ _MAJOR_TOOL_STATUS = {
     "connect_gns3_nodes": "Connecting network interfaces...",
     "delete_gns3_link": "Disconnecting network interfaces...",
     "control_gns3_node_power": "Toggling device power state...",
+    "move_gns3_node": "Repositioning GNS3 device...",
     "audit_network": "Running security audit...",
     "trace_connectivity": "Tracing connectivity path...",
     "validate_configs": "Validating configurations...",

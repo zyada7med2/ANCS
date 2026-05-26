@@ -76,6 +76,11 @@ class TestGNS3Connector(unittest.TestCase):
         connector.stop_node("proj1", "node1")
         mock_requests.post.assert_any_call("http://localhost:3080/v2/projects/proj1/nodes/node1/stop", json={}, timeout=5)
 
+        # 7. update_node (PUT)
+        mock_requests.put.return_value = mock_resp
+        connector.update_node("proj1", "node1", {"x": 150, "y": 250})
+        mock_requests.put.assert_any_call("http://localhost:3080/v2/projects/proj1/nodes/node1", json={"x": 150, "y": 250}, timeout=5)
+
     @patch('network_manager.network.gns3.requests')
     def test_delete_link_between_nodes(self, mock_requests):
         connector = GNS3Connector("http://localhost:3080")

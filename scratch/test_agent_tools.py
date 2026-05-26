@@ -150,5 +150,27 @@ class TestAgentTools(unittest.TestCase):
             mock_cur.execute.assert_called_once()
             ctx.refresh_ui_fn.assert_called_once()
 
+    @patch('network_manager.ai_agent.ctx.get_gns3_connector')
+    def test_move_gns3_node(self, mock_get_connector):
+        from network_manager.ai_agent import move_gns3_node
+        
+        # Verify tool is in ALL_TOOLS
+        tool_names = [t.__name__ for t in ALL_TOOLS if hasattr(t, '__name__')]
+        self.assertIn("move_gns3_node", tool_names)
+        
+        # Setup mock connector
+        mock_connector = MagicMock()
+        mock_connector.get_nodes.return_value = [{"node_id": "node-a", "name": "R1"}]
+        mock_get_connector.return_value = mock_connector
+        
+        # Reset mock
+        ctx.refresh_ui_fn.reset_mock()
+        
+        res = move_gns3_node(node_id_or_name="R1", x=150, y=250)
+        
+        self.assertIn("Success", res)
+        mock_connector.update_node.assert_called_once_with("test-proj-id", "node-a", {"x": 150, "y": 250})
+        ctx.refresh_ui_fn.assert_called_once()
+
 if __name__ == '__main__':
     unittest.main()
