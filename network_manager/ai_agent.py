@@ -1764,10 +1764,12 @@ def generate_pdf_report(filename: str = "network_documentation.pdf") -> str:
     import json
     import time
     import datetime
+    import re
+    import ipaddress
     from network_manager.config import conn, db_lock
+    from network_manager.network.parser import IOSParser
     
     devices = []
-    links = []
     
     # 1. Fetch live GNS3 node positions and links cached in the background worker
     w = getattr(ctx, "worker", None)
@@ -1778,40 +1780,251 @@ def generate_pdf_report(filename: str = "network_documentation.pdf") -> str:
         gns3_nodes = getattr(w, "gns3_nodes_data", []) or []
         gns3_links = getattr(w, "gns3_links_data", []) or []
         gns3_proj = getattr(w, "gns3_project_id", "") or "Local GNS3 Project"
+    if not gns3_proj:
+        gns3_proj = "Local GNS3 Project"
         
     # 2. Fetch Devices & parsed dynamic roles from the active SQLite DB
     with db_lock:
         cursor = conn.cursor()
-        cursor.execute("SELECT name, type, ip, port FROM devices")
+        cursor.execute("SELECT id, name, type, ip, port, os_version, vendor_id FROM devices")
         for row in cursor.fetchall():
-            # Query the configs table to extract dynamic operational profiles
+            d_id, name, dtype, ip, port, os_ver, vendor = row
             c_cursor = conn.cursor()
-            c_cursor.execute("SELECT config_text FROM configs WHERE name = ?", (row[0],))
+            
+            # Fetch config from configs table
+            c_cursor.execute("""
+                SELECT content FROM configs 
+                WHERE device_id = ? 
+                ORDER BY created_at DESC LIMIT 1
+            """, (d_id,))
             cfg_row = c_cursor.fetchone()
             cfg_text = cfg_row[0] if cfg_row else ""
             
-            roles = []
-            if "router ospf" in cfg_text.lower() or "router eigrp" in cfg_text.lower() or "router rip" in cfg_text.lower():
-                roles.append("OSPF/Routing")
-            if "ip dhcp pool" in cfg_text.lower():
-                roles.append("DHCP Server")
-            if "ip route " in cfg_text.lower():
-                roles.append("Static Route")
-            if "vlan " in cfg_text.lower() or "switchport trunk" in cfg_text.lower():
-                roles.append("VLAN / Trunk")
-            if not roles:
-                roles.append(row[1].upper())
+            # Fallback to logs table
+            if not cfg_text:
+                c_cursor.execute("""
+                    SELECT config_snapshot FROM logs 
+                    WHERE device_name = ? AND config_snapshot IS NOT NULL AND config_snapshot != ''
+                    ORDER BY timestamp DESC LIMIT 1
+                """, (name,))
+                log_row = c_cursor.fetchone()
+                cfg_text = log_row[0] if log_row else ""
                 
             devices.append({
-                "name": row[0],
-                "type": row[1],
-                "ip": row[2] or "N/A",
-                "port": row[3] or "Console Port",
-                "roles": roles,
+                "id": d_id,
+                "name": name,
+                "type": dtype,
+                "ip": ip or "N/A",
+                "port": port or "Console Port",
+                "os_version": os_ver or "N/A",
+                "vendor": vendor or "cisco_ios",
                 "config": cfg_text
             })
             
-    # 3. Compile Cabling & Cable Matrix from GNS3 links metadata
+    # 3. Dynamic config parsing & mapping
+    all_subnets = []
+    all_vlans = []
+    all_dhcp_pools = []
+    all_static_routes = []
+    all_routing_protocols = []
+    all_etherchannels = []
+    all_hsrp = []
+    all_stp = []
+    all_acls = []
+    all_qos = []
+    
+    router_count = 0
+    switch_count = 0
+    core_switch_count = 0
+    
+    for d in devices:
+        dtype = d["type"].lower()
+        if "core" in dtype:
+            core_switch_count += 1
+        elif "switch" in dtype:
+            switch_count += 1
+        elif "router" in dtype:
+            router_count += 1
+            
+        cfg = d["config"]
+        parsed = IOSParser.parse_config(cfg) if cfg else {}
+        
+        if not cfg:
+            continue
+            
+        # Parse interfaces and subnets
+        intf_matches = re.finditer(
+            r"^interface\s+([a-zA-Z0-9/._-]+)\s*\n(.*?)(?=^\S|\Z)",
+            cfg, re.MULTILINE | re.DOTALL | re.IGNORECASE
+        )
+        for im in intf_matches:
+            intf_name = im.group(1)
+            body = im.group(2)
+            
+            ip_match = re.search(r"ip address\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", body, re.IGNORECASE)
+            if ip_match:
+                ip, mask = ip_match.groups()
+                try:
+                    net = ipaddress.IPv4Network(f"{ip}/{mask}", strict=False)
+                    subnet_str = str(net)
+                except Exception:
+                    subnet_str = f"{ip}/{mask}"
+                    
+                role = "Access LAN"
+                if "gigabit" in intf_name.lower() or "serial" in intf_name.lower() or "fastethernet0/0" in intf_name.lower():
+                    if "255.255.255.252" in mask or "30" in mask:
+                        role = "WAN / Point-to-Point Link"
+                    else:
+                        role = "Uplink"
+                elif "vlan" in intf_name.lower():
+                    role = "Switched Virtual Interface (SVI)"
+                    
+                all_subnets.append({
+                    "subnet": subnet_str,
+                    "device": d["name"],
+                    "interface": intf_name,
+                    "role": role,
+                    "mask": mask,
+                    "ip": ip
+                })
+                
+                # Standby (HSRP)
+                hsrp_m = re.search(r"standby\s+(\d+)\s+ip\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", body, re.IGNORECASE)
+                if hsrp_m:
+                    group, vip = hsrp_m.groups()
+                    pri_m = re.search(r"standby\s+\d+\s+priority\s+(\d+)", body, re.IGNORECASE)
+                    pri = pri_m.group(1) if pri_m else "100"
+                    all_hsrp.append({
+                        "device": d["name"],
+                        "interface": intf_name,
+                        "group": group,
+                        "vip": vip,
+                        "priority": pri
+                    })
+                    
+            # EtherChannel channel-group
+            chan_m = re.search(r"channel-group\s+(\d+)\s+mode\s+(\S+)", body, re.IGNORECASE)
+            if chan_m:
+                po = chan_m.group(1)
+                mode = chan_m.group(2)
+                found = False
+                for ec in all_etherchannels:
+                    if ec["device"] == d["name"] and ec["po"] == po:
+                        ec["interfaces"].append(intf_name)
+                        found = True
+                        break
+                if not found:
+                    all_etherchannels.append({
+                        "device": d["name"],
+                        "po": po,
+                        "interfaces": [intf_name],
+                        "mode": mode
+                    })
+                    
+        # Parse VLAN definitions
+        vlan_defs = re.finditer(r"^vlan\s+(\d+)(?:\s*\n\s*name\s+(\S+))?", cfg, re.MULTILINE | re.IGNORECASE)
+        for vd in vlan_defs:
+            vid = vd.group(1)
+            vname = vd.group(2) or f"VLAN_{vid}"
+            if vid != "1":
+                svi_ip = "N/A"
+                svi_sub = "N/A"
+                for sub in all_subnets:
+                    if sub["device"] == d["name"] and sub["interface"].lower() == f"vlan{vid}":
+                        svi_ip = sub["ip"]
+                        svi_sub = sub["subnet"]
+                        break
+                all_vlans.append({
+                    "vlan_id": vid,
+                    "name": vname,
+                    "subnet": svi_sub,
+                    "gateway": svi_ip,
+                    "device": d["name"]
+                })
+                
+        # DHCP pools
+        for pool in parsed.get("dhcp_pools", []):
+            all_dhcp_pools.append({
+                "device": d["name"],
+                "name": pool["name"],
+                "network": pool["network"],
+                "mask": pool["mask"],
+                "gateway": pool["gateway"] or "N/A"
+            })
+            
+        # Static Routes
+        for sr in parsed.get("static_routes", []):
+            all_static_routes.append({
+                "device": d["name"],
+                "destination": sr["destination"],
+                "mask": sr["mask"],
+                "next_hop": sr["next_hop"]
+            })
+            
+        # Routing protocol blocks
+        router_blocks = re.finditer(r"^router\s+(ospf|eigrp|rip|bgp)\s*(\d+)?\s*\n(.*?)(?=^!|^router|^\S|\Z)", cfg, re.MULTILINE | re.DOTALL | re.IGNORECASE)
+        for rb in router_blocks:
+            proto = rb.group(1).upper()
+            pid = rb.group(2) or "1"
+            body = rb.group(3)
+            nets = re.findall(r"network\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})(?:\s+([\d\.]+))?", body, re.IGNORECASE)
+            net_list = [f"{ip} {wc}".strip() for ip, wc in nets]
+            neighbors = re.findall(r"neighbor\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})", body, re.IGNORECASE)
+            all_routing_protocols.append({
+                "device": d["name"],
+                "protocol": proto,
+                "pid": pid,
+                "networks": ", ".join(net_list) if net_list else "All",
+                "neighbors": ", ".join(neighbors) if neighbors else "Dynamic Discovery"
+            })
+            
+        # Spanning-Tree
+        stp_mode_m = re.search(r"spanning-tree\s+mode\s+(\S+)", cfg, re.IGNORECASE)
+        stp_mode = stp_mode_m.group(1) if stp_mode_m else "pvst"
+        stp_pri_matches = re.finditer(r"spanning-tree\s+vlan\s+(\d+)\s+priority\s+(\d+)", cfg, re.IGNORECASE)
+        has_stp = False
+        for sp in stp_pri_matches:
+            vlan, pri = sp.groups()
+            all_stp.append({
+                "device": d["name"],
+                "vlan": vlan,
+                "priority": pri,
+                "mode": stp_mode.upper()
+            })
+            has_stp = True
+        if not has_stp and stp_mode_m:
+            all_stp.append({
+                "device": d["name"],
+                "vlan": "Default",
+                "priority": "32768",
+                "mode": stp_mode.upper()
+            })
+            
+        # Access Lists
+        acl_matches = re.finditer(r"^(access-list\s+\d+|ip access-list\s+(?:extended|standard)\s+\S+)(.*?)(?=^!|^\S|\Z)", cfg, re.MULTILINE | re.DOTALL | re.IGNORECASE)
+        for am in acl_matches:
+            name = am.group(1).strip()
+            body = am.group(2).strip()
+            rules = [line.strip() for line in body.split("\n") if line.strip()]
+            all_acls.append({
+                "device": d["name"],
+                "name": name,
+                "rules": "<br>".join(rules) if rules else "Defined"
+            })
+            
+        # QoS
+        policy_maps = re.findall(r"^policy-map\s*(\S+)(.*?)(?=^!|^\S|\Z)", cfg, re.MULTILINE | re.DOTALL | re.IGNORECASE)
+        for pm_name, pm_body in policy_maps:
+            classes = re.findall(r"class\s+(\S+)\n(.*?)(?=class|exit|\Z)", pm_body, re.DOTALL | re.IGNORECASE)
+            for cl_name, cl_body in classes:
+                all_qos.append({
+                    "device": d["name"],
+                    "policy": pm_name,
+                    "class": cl_name,
+                    "details": "<br>".join([line.strip() for line in cl_body.split("\n") if line.strip()])
+                })
+                
+    # 4. Compile Cabling & Cable Matrix from GNS3 links metadata
     cabling = []
     for l in gns3_links:
         from_node_id = l.get("from_node_id", "")
@@ -1833,7 +2046,7 @@ def generate_pdf_report(filename: str = "network_documentation.pdf") -> str:
             "to_port": to_port
         })
         
-    # 4. Perform live Security Audit
+    # 5. Perform live Security Audit
     audit_findings = []
     try:
         from network_manager.ai_agent import audit_network
@@ -1842,220 +2055,773 @@ def generate_pdf_report(filename: str = "network_documentation.pdf") -> str:
     except Exception:
         pass
         
-    # 5. Build rich executive-styled HTML Documentation template
-    device_rows = ""
+    # 6. Build section tables
+    
+    # Section 1: Executive summary text
+    protocols_found = set(rp["protocol"] for rp in all_routing_protocols)
+    protocol_str = ", ".join(protocols_found) if protocols_found else "Static Routing"
+    device_count = len(devices)
+    exec_summary_text = (
+        f"This comprehensive network design and implementation document records the as-built state "
+        f"of the GNS3 topology '{gns3_proj}'. The network integrates {device_count} active nodes: "
+        f"{router_count} routing platform(s), {switch_count} access switch(es), and "
+        f"{core_switch_count} high-availability core switch(es). Operational traffic is routed via "
+        f"{protocol_str} with default gateways and Layer 2 loop-prevention mechanisms configured. "
+        f"All device inventories, configuration snapshots, cabling maps, and operational logs are aggregated "
+        f"natively to verify regulatory compliance and design validity."
+    )
+    
+    # Section 2: Device Inventory
+    sec2_rows = ""
     for d in devices:
-        role_badges = " ".join(f"<span class='badge info'>{r}</span>" for r in d["roles"])
-        device_rows += f"""
+        role = d["type"].upper()
+        if "core" in d["type"].lower():
+            role = "Core Switching & Trunking"
+        elif "switch" in d["type"].lower():
+            role = "Layer 2 Access / VLAN Switch"
+        elif "router" in d["type"].lower():
+            role = "WAN Edge / Inter-VLAN Routing"
+        sec2_rows += f"""
         <tr>
             <td><strong>{d["name"]}</strong></td>
             <td><span class="badge" style="background:#f1f5f9;color:#475569;">{d["type"].upper()}</span></td>
-            <td>{d["port"]}</td>
+            <td><code>{d["os_version"]}</code></td>
             <td><code>{d["ip"]}</code></td>
-            <td>{role_badges}</td>
+            <td><code>{d["port"]}</code></td>
+            <td>{role}</td>
         </tr>
         """
         
-    cabling_rows = ""
+    # Section 3: Subnets
+    sec3_rows = ""
+    for sub in all_subnets:
+        sec3_rows += f"""
+        <tr>
+            <td><code>{sub["subnet"]}</code></td>
+            <td><strong>{sub["device"]}</strong></td>
+            <td><code>{sub["interface"]}</code></td>
+            <td>{sub["role"]}</td>
+        </tr>
+        """
+    if not sec3_rows:
+        sec3_rows = """
+        <tr>
+            <td colspan="4" style="text-align:center;padding:16px;color:#475569;background:#f8fafc;">
+                <strong>No active IP subnets configured on devices.</strong><br>
+                <div style="margin-top:8px;text-align:left;font-size:11px;">
+                    <strong>Recommended IP Allocation Plan:</strong><br>
+                    • Cairo HQ (Core LAN): <code>10.10.0.0/16</code><br>
+                    • Alexandria Branch: <code>10.20.0.0/16</code><br>
+                    • WAN Interconnects: <code>172.16.1.0/24</code>
+                </div>
+            </td>
+        </tr>
+        """
+        
+    # Section 4: VLANs
+    sec4_rows = ""
+    for v in all_vlans:
+        sec4_rows += f"""
+        <tr>
+            <td><code>{v["vlan_id"]}</code></td>
+            <td><strong>{v["name"]}</strong></td>
+            <td><code>{v["subnet"]}</code></td>
+            <td><code>{v["gateway"]}</code></td>
+            <td><code>2001:db8:1000:{v["vlan_id"]}::/64 (Planned)</code></td>
+        </tr>
+        """
+    if not sec4_rows:
+        sec4_rows = """
+        <tr>
+            <td colspan="5" style="text-align:center;padding:16px;color:#475569;background:#f8fafc;">
+                <strong>No active VLANs or SVIs configured.</strong><br>
+                <div style="margin-top:8px;text-align:left;font-size:11px;">
+                    <strong>Standard VLAN Matrix Guidelines:</strong><br>
+                    • VLAN 10 (Management): Subnet <code>10.10.10.0/24</code> | Gateway: <code>10.10.10.1</code><br>
+                    • VLAN 20 (Servers): Subnet <code>10.10.20.0/24</code> | Gateway: <code>10.10.20.1</code><br>
+                    • VLAN 30 (Users): Subnet <code>10.10.30.0/24</code> | Gateway: <code>10.10.30.1</code>
+                </div>
+            </td>
+        </tr>
+        """
+        
+    # Section 5: Cabling
+    sec5_rows = ""
     for c in cabling:
-        cabling_rows += f"""
+        link_type = "Access Link"
+        for ec in all_etherchannels:
+            if c["from"] == ec["device"] and c["from_port"] in ec["interfaces"]:
+                link_type = f"EtherChannel (Po{ec['po']})"
+                break
+        sec5_rows += f"""
         <tr>
             <td><strong>{c["from"]}</strong></td>
             <td><code>{c["from_port"]}</code></td>
             <td><strong>{c["to"]}</strong></td>
             <td><code>{c["to_port"]}</code></td>
+            <td>{link_type}</td>
         </tr>
         """
-    if not cabling_rows:
-        cabling_rows = "<tr><td colspan='4' style='text-align:center;color:#64748b;padding:24px;'>No GNS3 links detected.</td></tr>"
+    if not sec5_rows:
+        sec5_rows = """
+        <tr>
+            <td colspan="5" style="text-align:center;padding:16px;color:#475569;background:#f8fafc;">
+                <strong>No active GNS3 cabling links detected.</strong><br>
+                <div style="margin-top:8px;text-align:left;font-size:11px;">
+                    <strong>Standard Physical Redundancy Guidelines:</strong><br>
+                    • Connect redundant links between your Core and Distribution layers.<br>
+                    • Set up EtherChannels (LACP) using multiple physical ports (e.g., e0/0, e0/1) bundled to Po1.
+                </div>
+            </td>
+        </tr>
+        """
         
+    # Section 6: OOB Management
+    sec6_rows = ""
+    for d in devices:
+        vty_sec = "Insecure (Telnet)"
+        cfg_lower = d["config"].lower()
+        if "transport input ssh" in cfg_lower:
+            vty_sec = "Secure (SSH)"
+            if "access-class" in cfg_lower or "access-group" in cfg_lower:
+                vty_sec = "Secured (SSH + ACL)"
+        sec6_rows += f"""
+        <tr>
+            <td><strong>{d["name"]}</strong></td>
+            <td>Console (Port {d["port"]})</td>
+            <td>SSH / Telnet</td>
+            <td><span class="badge" style="background:#e0f2fe;color:#075985;">{vty_sec}</span></td>
+        </tr>
+        """
+        
+    # Section 7: WAN Links
+    sec7_rows = ""
+    for sub in all_subnets:
+        if "wan" in sub["role"].lower() or "point" in sub["role"].lower():
+            sec7_rows += f"""
+            <tr>
+                <td>WAN-Link-{sub["interface"]}</td>
+                <td><strong>{sub["device"]}</strong></td>
+                <td>Next-Hop Interface</td>
+                <td><code>{sub["subnet"]}</code></td>
+                <td>Static/OSPF</td>
+            </tr>
+            """
+    if not sec7_rows:
+        sec7_rows = """
+        <tr>
+            <td colspan="5" style="text-align:center;padding:16px;color:#475569;background:#f8fafc;">
+                <strong>No active Point-to-Point WAN interfaces configured.</strong><br>
+                <div style="margin-top:8px;text-align:left;font-size:11px;">
+                    <strong>WAN Connectivity Guidelines:</strong><br>
+                    • Assign <code>/30</code> subnets (e.g., <code>172.16.1.0/30</code>) to point-to-point links between routers.<br>
+                    • Setup secondary backup paths using IPsec tunnels over standard public Internet endpoints.
+                </div>
+            </td>
+        </tr>
+        """
+        
+    # Section 8: Routing AS Map
+    sec8_rows = ""
+    for rp in all_routing_protocols:
+        sec8_rows += f"""
+        <tr>
+            <td><strong>{rp["device"]}</strong></td>
+            <td><span class="badge" style="background:#fef08a;color:#854d0e;">{rp["protocol"]}</span></td>
+            <td>ID / Process {rp["pid"]}</td>
+            <td><code>{rp["networks"]}</code></td>
+            <td>{rp["neighbors"]}</td>
+        </tr>
+        """
+    if not sec8_rows:
+        sec8_rows = """
+        <tr>
+            <td colspan="5" style="text-align:center;padding:16px;color:#475569;background:#f8fafc;">
+                <strong>No routing protocols (OSPF/BGP) active.</strong>
+            </td>
+        </tr>
+        """
+        
+    # Section 9: EtherChannels
+    sec9_rows = ""
+    for ec in all_etherchannels:
+        intf_list = ", ".join(ec["interfaces"])
+        sec9_rows += f"""
+        <tr>
+            <td><strong>{ec["device"]}</strong></td>
+            <td>Port-channel {ec["po"]}</td>
+            <td><code>{intf_list}</code></td>
+            <td>{ec["mode"].upper()} / LACP</td>
+            <td>Active</td>
+        </tr>
+        """
+    if not sec9_rows:
+        sec9_rows = """
+        <tr>
+            <td colspan="5" style="text-align:center;padding:16px;color:#475569;background:#f8fafc;">
+                <strong>No link aggregation (EtherChannel) active on devices.</strong>
+            </td>
+        </tr>
+        """
+        
+    # Section 10: STP & HSRP
+    sec10_rows = ""
+    for st in all_stp:
+        sec10_rows += f"""
+        <tr>
+            <td><strong>{st["device"]}</strong></td>
+            <td>STP {st["mode"]}</td>
+            <td>VLAN {st["vlan"]}</td>
+            <td>Priority {st["priority"]}</td>
+            <td>Active Loop Prevention</td>
+        </tr>
+        """
+    for hs in all_hsrp:
+        sec10_rows += f"""
+        <tr>
+            <td><strong>{hs["device"]}</strong></td>
+            <td>HSRP Group {hs["group"]}</td>
+            <td>SVI {hs["interface"]}</td>
+            <td>VIP <code>{hs["vip"]}</code></td>
+            <td>Priority {hs["priority"]}</td>
+        </tr>
+        """
+    if not sec10_rows:
+        sec10_rows = """
+        <tr>
+            <td colspan="5" style="text-align:center;padding:16px;color:#475569;background:#f8fafc;">
+                <strong>No active STP parameters or HSRP gateways configured.</strong>
+            </td>
+        </tr>
+        """
+        
+    # Section 11: ACLs
+    sec11_rows = ""
+    for acl in all_acls:
+        sec11_rows += f"""
+        <tr>
+            <td><strong>{acl["name"]}</strong></td>
+            <td><strong>{acl["device"]}</strong></td>
+            <td>Filter rules</td>
+            <td><code>{acl["rules"]}</code></td>
+            <td>Security filtering</td>
+        </tr>
+        """
+    if not sec11_rows:
+        sec11_rows = """
+        <tr>
+            <td colspan="5" style="text-align:center;padding:16px;color:#475569;background:#f8fafc;">
+                <strong>No security Access Control Lists (ACLs) detected.</strong>
+            </td>
+        </tr>
+        """
+        
+    # Section 12: Infrastructure Services
+    sec12_rows = ""
+    for dp in all_dhcp_pools:
+        sec12_rows += f"""
+        <tr>
+            <td><strong>{dp["name"]}</strong></td>
+            <td><code>{dp["network"]}</code></td>
+            <td><code>{dp["gateway"]}</code></td>
+            <td><code>{dp["device"]}</code></td>
+            <td>Active DHCP Srv</td>
+        </tr>
+        """
+    if not sec12_rows:
+        sec12_rows = """
+        <tr>
+            <td colspan="5" style="text-align:center;padding:16px;color:#475569;background:#f8fafc;">
+                <strong>No dynamic DHCP pools or NTP services configured.</strong>
+            </td>
+        </tr>
+        """
+        
+    # Section 13: QoS
+    sec13_rows = ""
+    for q in all_qos:
+        sec13_rows += f"""
+        <tr>
+            <td><strong>{q["class"]}</strong></td>
+            <td>Policy: {q["policy"]}</td>
+            <td>QoS classification</td>
+            <td>Active QoS Queue</td>
+            <td><code>{q["details"]}</code></td>
+        </tr>
+        """
+    if not sec13_rows:
+        sec13_rows = """
+        <tr>
+            <td colspan="5" style="text-align:center;padding:16px;color:#475569;background:#f8fafc;">
+                <strong>No active Quality of Service (QoS) classes configured.</strong>
+            </td>
+        </tr>
+        """
+        
+    # Configuration profiles text
+    config_blocks = ""
+    for d in devices:
+        if d["config"]:
+            config_preview = d["config"][:4000] + "\n... [Truncated for brevity]" if len(d["config"]) > 4000 else d["config"]
+            config_blocks += f"""
+            <h4 style="margin-top:20px;margin-bottom:8px;color:#2F5496;font-size:13px;">Device: <strong>{d["name"]}</strong></h4>
+            <pre>{config_preview}</pre>
+            """
+            
+    # Audit card
     audit_block = ""
     if audit_findings:
         audit_items = "".join(f"<li style='margin-bottom:6px;'>{item}</li>" for item in audit_findings[:8])
         audit_block = f"""
-        <div class="audit-card">
-            <h4 style="margin:0 0 10px 0;color:#991b1b;font-weight:600;font-size:15px;">⚠️ Security Audit Compliance Violations</h4>
-            <ul style="margin:0;padding-left:20px;color:#7f1d1d;font-size:13px;line-height:1.5;">
+        <div class="audit-card" style="border: 1px solid #fee2e2; background: #fff8f8; border-radius: 8px; padding: 14px; margin-bottom: 18px;">
+            <h4 style="margin:0 0 10px 0;color:#991b1b;font-weight:bold;font-size:14px;">⚠️ Security Audit Compliance Violations</h4>
+            <ul style="margin:0;padding-left:20px;color:#7f1d1d;font-size:12px;line-height:1.5;">
                 {audit_items}
             </ul>
         </div>
         """
     else:
         audit_block = """
-        <div class="audit-card" style="border-color:#bbf7d0;background:#f0fdf4;">
-            <h4 style="margin:0;color:#166534;font-weight:600;font-size:15px;">✓ Security Audit Compliance Passed</h4>
-            <p style="margin:5px 0 0 0;color:#14532d;font-size:13px;">No critical vulnerabilities detected. All active endpoints are secured according to standard specifications.</p>
+        <div class="audit-card" style="border: 1px solid #bbf7d0; background: #f0fdf4; border-radius: 8px; padding: 14px; margin-bottom: 18px;">
+            <h4 style="margin:0;color:#166534;font-weight:bold;font-size:14px;">✓ Security Audit Compliance Passed</h4>
+            <p style="margin:5px 0 0 0;color:#14532d;font-size:12px;">No critical vulnerabilities detected. All active endpoints are secured according to standard specifications.</p>
         </div>
         """
         
-    config_blocks = ""
-    for d in devices:
-        if d["config"]:
-            # Truncate config block to keep PDF highly readable
-            config_preview = d["config"][:3000] + "\n... [Truncated for brevity]" if len(d["config"]) > 3000 else d["config"]
-            config_blocks += f"""
-            <h4 style="margin-top:20px;margin-bottom:8px;color:#475569;font-size:14px;">Device: <strong>{d["name"]}</strong> Running Config Snapshot</h4>
-            <pre>{config_preview}</pre>
-            """
-            
-    html_content = f"""
-    <!DOCTYPE html>
-    <html>
-    <head>
-    <meta charset="utf-8">
-    <title>ANCS Executive Network Documentation</title>
-    <style>
-        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700\u0026family=Fira+Code:wght@400;500\u0026display=swap');
-        
-        @page {{
-            size: letter;
-            margin: 1.2in 1.0in 1.2in 1.0in;
-        }}
-        
-        body {{
-            font-family: 'Outfit', sans-serif;
-            color: #0f172a;
-            line-height: 1.6;
-            padding: 20px;
-            background: #ffffff;
-            font-size: 14px;
-        }}
-        .header {{
-            border-bottom: 2px solid #a371f7;
-            padding-bottom: 16px;
-            margin-bottom: 24px;
-        }}
-        .title {{
-            font-size: 26px;
-            font-weight: 700;
-            color: #1e1b4b;
-            margin: 0 0 6px 0;
-            letter-spacing: -0.5px;
-        }}
-        .metadata {{
-            font-size: 12px;
-            color: #64748b;
-        }}
-        .section-title {{
-            font-size: 18px;
-            font-weight: 600;
-            color: #312e81;
-            border-left: 4px solid #a371f7;
-            padding-left: 10px;
-            margin-top: 32px;
-            margin-bottom: 14px;
-            page-break-after: avoid;
-        }}
-        table {{
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 20px;
-            page-break-inside: avoid;
-        }}
-        th, td {{
-            padding: 10px;
-            text-align: left;
-            border-bottom: 1px solid #e2e8f0;
-            font-size: 13px;
-        }}
-        th {{
-            background: #f8fafc;
-            font-weight: 600;
-            color: #334155;
-        }}
-        .badge {{
-            display: inline-block;
-            padding: 3px 6px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 600;
-            text-transform: uppercase;
-        }}
-        .badge.info {{ background: #e0f2fe; color: #075985; }}
-        
-        pre {{
-            background: #f8fafc;
-            border: 1px solid #e2e8f0;
-            border-radius: 6px;
-            padding: 14px;
-            font-family: 'Fira Code', monospace;
-            font-size: 11px;
-            white-space: pre-wrap;
-            word-break: break-all;
-            margin-bottom: 20px;
-            page-break-inside: avoid;
-        }}
-        .audit-card {{
-            border: 1px solid #fee2e2;
-            background: #fff8f8;
-            border-radius: 8px;
-            padding: 14px;
-            margin-bottom: 18px;
-            page-break-inside: avoid;
-        }}
-    </style>
-    </head>
-    <body>
-        <div class="header">
-            <h1 class="title">Network Topology & Systems Documentation Report</h1>
-            <div class="metadata">
-                <strong>Project Source:</strong> {gns3_proj} | 
-                <strong>Report Generated:</strong> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
-            </div>
+    html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>ANCS Network design & Systems Documentation</title>
+<style>
+    @page {{
+        size: letter;
+        margin: 1.0in;
+    }}
+    body {{
+        font-family: Arial, Helvetica, sans-serif;
+        color: #2D3748;
+        line-height: 1.5;
+        font-size: 13px;
+        background: #ffffff;
+    }}
+    .header {{
+        border-bottom: 3px solid #2F5496;
+        padding-bottom: 10px;
+        margin-bottom: 25px;
+    }}
+    .title {{
+        font-size: 24px;
+        font-weight: bold;
+        color: #2F5496;
+        margin: 0 0 6px 0;
+    }}
+    .metadata {{
+        font-size: 11px;
+        color: #4A5568;
+    }}
+    .part-title {{
+        font-size: 15px;
+        font-weight: bold;
+        color: #2F5496;
+        margin-top: 35px;
+        margin-bottom: 12px;
+        border-bottom: 1px solid #2F5496;
+        padding-bottom: 4px;
+        page-break-after: avoid;
+    }}
+    .section-title {{
+        font-size: 13px;
+        font-weight: bold;
+        color: #41719C;
+        margin-top: 20px;
+        margin-bottom: 8px;
+        page-break-after: avoid;
+    }}
+    table {{
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 18px;
+        page-break-inside: avoid;
+    }}
+    th, td {{
+        border: 1px solid #CBD5E1;
+        padding: 8px 10px;
+        text-align: left;
+        font-size: 12px;
+    }}
+    th {{
+        background-color: #F1F5F9;
+        color: #1E293B;
+        font-weight: bold;
+    }}
+    .badge {{
+        display: inline-block;
+        padding: 3px 6px;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: bold;
+        text-transform: uppercase;
+    }}
+    pre {{
+        font-family: Consolas, "Courier New", monospace;
+        background: #F8FAFC;
+        border: 1px solid #E2E8F0;
+        padding: 10px;
+        border-radius: 4px;
+        font-size: 11px;
+        white-space: pre-wrap;
+        margin-bottom: 18px;
+        page-break-inside: avoid;
+    }}
+    .page-break {{
+        page-break-before: always;
+    }}
+    .reference-block {{
+        background: #F8FAFC;
+        border-left: 4px solid #41719C;
+        padding: 10px 14px;
+        margin-top: 10px;
+        margin-bottom: 18px;
+        font-size: 12px;
+        page-break-inside: avoid;
+    }}
+</style>
+</head>
+<body>
+    <div class="header">
+        <h1 class="title">Network Design & Implementation Document</h1>
+        <div class="metadata">
+            <strong>Project Workspace:</strong> {gns3_proj} | 
+            <strong>Date Compiled:</strong> {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         </div>
-        
-        <div class="section-title">1. Executive Systems Summary</div>
-        <p>This comprehensive network operational documentation report was generated automatically by the ANCS Copilot. It aggregates live physical interfaces, SQLite databases, dynamic network configurations, and security audits to produce a print-ready, executive-level compliance log.</p>
-        
-        <div class="section-title">2. Active Systems Inventory</div>
-        <table>
-            <thead>
-                <tr>
-                    <th>Device Name</th>
-                    <th>Platform Type</th>
-                    <th>Console / Port</th>
-                    <th>IP Address</th>
-                    <th>Operational Roles</th>
-                </tr>
-            </thead>
-            <tbody>
-                {device_rows}
-            </tbody>
-        </table>
-        
-        <div class="section-title">3. Physical Cabling Matrix</div>
-        <table>
-            <thead>
-                <tr>
-                    <th>Source Device</th>
-                    <th>Source Port</th>
-                    <th>Destination Device</th>
-                    <th>Destination Port</th>
-                </tr>
-            </thead>
-            <tbody>
-                {cabling_rows}
-            </tbody>
-        </table>
-        
-        <div class="section-title">4. Compliance & Network Security Audit</div>
-        {audit_block}
-        
-        <div class="section-title">5. Device Configuration Profiles</div>
-        {config_blocks}
-        
-        <div style="margin-top: 40px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 16px; page-break-inside: avoid;">
-            End of Systems Documentation Report | Generated natively by ANCS Copilot (Vertex AI / Gemini).
-        </div>
-    </body>
-    </html>
-    """
+    </div>
     
-    # 6. Resolve target path in user's Downloads directory
+    <!-- PART 1 -->
+    <div class="part-title">🟢 Part 1: IP Addressing & Logical Design</div>
+    
+    <div class="section-title">1. Executive Summary</div>
+    <p>{exec_summary_text}</p>
+    
+    <div class="section-title">2. Device Inventory & Platform Specifications</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Device Name</th>
+                <th>Type</th>
+                <th>OS Version</th>
+                <th>IP Address</th>
+                <th>Console Port</th>
+                <th>Operational Role</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec2_rows}
+        </tbody>
+    </table>
+    
+    <div class="section-title">3. Logical Subnet Allocation</div>
+    <table>
+        <thead>
+            <tr>
+                <th>IPv4 Subnet Block</th>
+                <th>Assigned Node</th>
+                <th>Interface</th>
+                <th>Operational Role</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec3_rows}
+        </tbody>
+    </table>
+    
+    <div class="section-title">4. VLAN Subnet Design (Detailed)</div>
+    <table>
+        <thead>
+            <tr>
+                <th>VLAN ID</th>
+                <th>VLAN Name</th>
+                <th>IP Subnet Block</th>
+                <th>Gateway (VIP)</th>
+                <th>IPv6 Subnet (Planned)</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec4_rows}
+        </tbody>
+    </table>
+    
+    <!-- PART 2 -->
+    <div class="page-break"></div>
+    <div class="part-title">🟡 Part 2: Physical Topology & Redundancy</div>
+    
+    <div class="section-title">5. Physical Connection Matrix</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Source Device</th>
+                <th>Source Port</th>
+                <th>Destination Device</th>
+                <th>Destination Port</th>
+                <th>Link Connection Type</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec5_rows}
+        </tbody>
+    </table>
+    
+    <div class="section-title">6. Out-of-Band (OOB) Management</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Device Name</th>
+                <th>OOB Management Port</th>
+                <th>Connection Protocol</th>
+                <th>Security Access Control</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec6_rows}
+        </tbody>
+    </table>
+    <div class="reference-block">
+        <strong>Reference OOB & VTY Security Baseline Configuration:</strong>
+        <pre>! Standard Secure VTY Line Template
+username admin privilege 15 secret StrongSecret123!
+ip domain-name localnet.com
+crypto key generate rsa general-keys modulus 2048
+line con 0
+  login local
+  logging synchronous
+exit
+line vty 0 4
+  login local
+  transport input ssh
+  exec-timeout 10 0
+exit</pre>
+    </div>
+    
+    <!-- PART 3 -->
+    <div class="page-break"></div>
+    <div class="part-title">🔵 Part 3: Routing Design & WAN Protocols</div>
+    
+    <div class="section-title">7. WAN IP Addressing & Links</div>
+    <table>
+        <thead>
+            <tr>
+                <th>WAN Link Name</th>
+                <th>Source Site Node</th>
+                <th>Destination Site / Port</th>
+                <th>IPv4 Subnet Block</th>
+                <th>WAN Protocol</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec7_rows}
+        </tbody>
+    </table>
+    
+    <div class="section-title">8. Routing Configuration & AS Map</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Device Name</th>
+                <th>Routing Protocol</th>
+                <th>Process / AS ID</th>
+                <th>Advertised Networks</th>
+                <th>Neighbors Details</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec8_rows}
+        </tbody>
+    </table>
+    
+    <div class="reference-block">
+        <strong>OSPF Backbone Reference Design Template:</strong>
+        <pre>! Standard Area 0 Routing Template
+router ospf 1
+  router-id 1.1.1.1
+  network 10.0.0.0 0.255.255.255 area 0
+  network 172.16.0.0 0.0.255.255 area 0
+  passive-interface default
+  no passive-interface FastEthernet0/0
+exit</pre>
+    </div>
+    
+    <!-- PART 4 -->
+    <div class="page-break"></div>
+    <div class="part-title">🟠 Part 4: L2 Switching & Redundancy Protocols</div>
+    
+    <div class="section-title">9. Link Aggregation & EtherChannels</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Device Name</th>
+                <th>Port Channel ID</th>
+                <th>Physical Interfaces</th>
+                <th>Mode / Protocol</th>
+                <th>Bundle Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec9_rows}
+        </tbody>
+    </table>
+    <div class="reference-block">
+        <strong>LACP Link Aggregation Reference Configuration:</strong>
+        <pre>! Core-to-Distribution EtherChannel Setup
+interface range GigabitEthernet0/1 - 2
+  channel-group 1 mode active
+exit
+interface Port-channel 1
+  switchport trunk encapsulation dot1q
+  switchport mode trunk
+exit</pre>
+    </div>
+    
+    <div class="section-title">10. Spanning-Tree & Gateway Redundancy</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Device Name</th>
+                <th>Protocol / Feature</th>
+                <th>Instance / VLAN</th>
+                <th>Virtual IP / Priority</th>
+                <th>Redundancy Details</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec10_rows}
+        </tbody>
+    </table>
+    <div class="reference-block">
+        <strong>Core Switch STP Root & HSRP VIP Load-Balancing Template:</strong>
+        <pre>! Core-1: STP Root Primary for Odd VLANs, Root Secondary for Even
+spanning-tree vlan 10,30,50 priority 4096
+spanning-tree vlan 20,40,60 priority 8192
+interface Vlan10
+  standby 10 ip 10.10.10.1
+  standby 10 priority 110
+  standby 10 preempt
+exit
+
+! Core-2: STP Root Primary for Even VLANs, Root Secondary for Odd
+spanning-tree vlan 20,40,60 priority 4096
+spanning-tree vlan 10,30,50 priority 8192
+interface Vlan10
+  standby 10 ip 10.10.10.1
+  standby 10 priority 90
+exit</pre>
+    </div>
+    
+    <!-- PART 5 -->
+    <div class="page-break"></div>
+    <div class="part-title">🔴 Part 5: Security, Services & QoS</div>
+    
+    <div class="section-title">11. Security Access Control (Firewall & ACLs)</div>
+    <table>
+        <thead>
+            <tr>
+                <th>ACL Name / Zone</th>
+                <th>Assigned Device</th>
+                <th>Direction</th>
+                <th>Match Details / Rules</th>
+                <th>Security Intent</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec11_rows}
+        </tbody>
+    </table>
+    <div class="reference-block">
+        <strong>Edge Security access-list Baseline Template:</strong>
+        <pre>! Secure SSH Access & VTY Restrictions
+ip access-list standard SSH_ADMINS
+  permit 10.10.10.0 0.0.0.255
+exit
+line vty 0 4
+  access-class SSH_ADMINS in
+exit</pre>
+    </div>
+    
+    <div class="section-title">12. Network Infrastructure Services</div>
+    <table>
+        <thead>
+            <tr>
+                <th>Service Name / Pool</th>
+                <th>Network IP Range</th>
+                <th>Default Router VIP</th>
+                <th>Server Host Node</th>
+                <th>Service Details</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec12_rows}
+        </tbody>
+    </table>
+    <div class="reference-block">
+        <strong>Cisco IOS DHCP Server Reference Template:</strong>
+        <pre>! Local DHCP IP Allocation Setup
+ip dhcp excluded-address 10.10.10.1 10.10.10.49
+ip dhcp pool VLAN10_POOL
+  network 10.10.10.0 255.255.255.0
+  default-router 10.10.10.1
+  dns-server 8.8.8.8
+  lease 7 0
+exit</pre>
+    </div>
+    
+    <div class="section-title">13. QoS Strategy & Recommendations</div>
+    <table>
+        <thead>
+            <tr>
+                <th>QoS Class Name</th>
+                <th>Traffic Type</th>
+                <th>Match Criteria</th>
+                <th>Purpose</th>
+                <th>QoS Action</th>
+            </tr>
+        </thead>
+        <tbody>
+            {sec13_rows}
+        </tbody>
+    </table>
+    <div class="reference-block">
+        <strong>Voice & Data WAN Port Queuing Reference Template:</strong>
+        <pre>! VoIP DSCP Marking and Priority Queuing
+class-map match-all VOICE_TRAFFIC
+  match protocol rtp
+exit
+policy-map WAN_QOS_STRATEGY
+  class VOICE_TRAFFIC
+    priority percent 33
+  class class-default
+    fair-queue
+exit</pre>
+    </div>
+    
+    <div class="page-break"></div>
+    <div class="part-title">🔒 System Compliance & Device Configuration Logs</div>
+    
+    <div class="section-title">Compliance & Security Audit Log</div>
+    {audit_block}
+    
+    <div class="section-title">Device Configuration Snapshots</div>
+    {config_blocks}
+    
+    <div style="margin-top: 40px; text-align: center; font-size: 11px; color: #94a3b8; border-top: 1px solid #e2e8f0; padding-top: 16px; page-break-inside: avoid;">
+        End of Network Design & Implementation Document | Generated natively by ANCS Copilot (Vertex AI / Gemini).
+    </div>
+</body>
+</html>"""
+    
+    # 7. Resolve target path in user's Downloads directory
     downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
     target_path = os.path.join(downloads_dir, filename)
     
-    # 7. Route back to QWebEnginePage print engine on main GUI thread
+    # 8. Route back to QWebEnginePage print engine on main GUI thread
     if w and hasattr(w, "generate_pdf_signal"):
         w.generate_pdf_signal.emit(html_content, target_path)
         return f"Success: PDF Network Documentation compiled and saved to {target_path}!"
