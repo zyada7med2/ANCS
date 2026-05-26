@@ -287,3 +287,48 @@ We have successfully resolved the database inconsistency bug where old, stale "g
 * **Python Compilation Check:** `app.py` compiled cleanly with zero errors.
 * **Test Suite Verification:** Ran the improvements test suite; 72/72 tests passed successfully.
 * **Safety Verification:** Standalone execution safety of `test_pdf_report.py` passed successfully.
+
+---
+
+## Dynamic GNS3 Topology Editing & Real-time UI/DB Synchronization
+
+We have successfully implemented and verified the Dynamic GNS3 Topology Editing feature, allowing the ANCS AI Copilot agent to add/delete devices, connect/disconnect links, control device power states, and automatically synchronize the local SQLite database and active Qt graphical user interface thread-safely in real-time.
+
+### Key Architectural Enhancements
+
+1. **GNS3 REST Connector Extensions (`gns3.py`):**
+   - Added generic `_post()` and `_delete()` helper methods handling connection errors, HTTP timeouts, and raising clean descriptive exceptions.
+   - Built GNS3 API wrapper functions: `get_templates()`, `create_node()`, `delete_node()`, `create_link()`, `delete_link_between_nodes()`, `start_node()`, and `stop_node()`.
+
+2. **Thread-Safe UI Notification Pathway:**
+   - Implemented a custom `Signal` named `refresh_gns3_signal` on the `CopilotWorker` background thread.
+   - Bound the agent context callback `ctx.refresh_ui_fn = self.refresh_gns3_signal.emit`.
+   - Wired the signal to the `ANCSAgentDialog._on_refresh_gns3` slot using `Qt.ConnectionType.QueuedConnection` to safely execute GUI-updating logic (`self.app.refresh_gns3_connection()`) on PySide6's main GUI thread.
+
+3. **Gemini Network Topology Tools (`ai_agent.py`):**
+   - **`add_gns3_node`**: Spawns a node, dynamically cloning the template ID of any existing node in the project with the same role (router, core switch, or switch). Performs global template matching if no matching node exists. Updates SQLite and signals the UI.
+   - **`delete_gns3_node`**: Deletes a node by resolving its name or ID, removes all local records (configs, credentials, devices) from the database under `db_lock`, and signals the UI.
+   - **`connect_gns3_nodes`**: Connects two GNS3 nodes by dynamically mapping standard port names (e.g. `FastEthernet0/0`) to their internal GNS3 `adapter_number` and `port_number`. Includes a hot-plug check that temporarily stops running nodes if cabled connection creation is rejected by GNS3, cables them, and restores their power states.
+   - **`delete_gns3_link`**: Identifies and deletes the link between two nodes.
+   - **`control_gns3_node_power`**: Powers on, powers off, or restarts a node by name or ID, and syncs status in SQLite.
+
+---
+
+### Verification & Testing Results
+
+1. **Automated Unit Testing:**
+   Created and ran 4 isolated unit test scripts:
+   - [test_gns3.py](file:///c:/Users/Zyad/Downloads/ANCS/scratch/test_gns3.py): Validated 3/3 mock connector endpoints (**PASSED**).
+   - [test_copilot_signals.py](file:///c:/Users/Zyad/Downloads/ANCS/scratch/test_copilot_signals.py): Validated 1/1 signal context bindings (**PASSED**).
+   - [test_dialog_signals.py](file:///c:/Users/Zyad/Downloads/ANCS/scratch/test_dialog_signals.py): Validated 1/1 agent slot execution delegator (**PASSED**).
+   - [test_agent_tools.py](file:///c:/Users/Zyad/Downloads/ANCS/scratch/test_agent_tools.py): Validated 4/4 agent tools under mocked environments (**PASSED**).
+
+2. **End-to-End Live Integration Testing:**
+   Executed `scratch/test_live_integration.py` against the running GNS3 server and the active project `"test"`:
+   - **Step 1:** Successfully created a test node `TEST_R4` using template cloning.
+   - **Step 2:** Queried node ports and dynamically resolved local interface names.
+   - **Step 3:** Successfully created a link between `TEST_R4` and `R2`.
+   - **Step 4:** Successfully verified power control (node started and stopped cleanly).
+   - **Step 5:** Successfully deleted the link between `TEST_R4` and `R2`.
+   - **Step 6:** Cleanly deleted the test node `TEST_R4` from GNS3.
+   *(Result: **ALL STEPS COMPLETED SUCCESSFULLY**)*
