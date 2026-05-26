@@ -334,6 +334,7 @@ class ANCSAgentDialog(QDialog):
             w.finished_signal.connect(self._on_finished, Qt.ConnectionType.QueuedConnection)
             w.ready_signal.connect(self._on_ready, Qt.ConnectionType.QueuedConnection)
             w.generate_pdf_signal.connect(self._on_generate_pdf, Qt.ConnectionType.QueuedConnection)
+            w.refresh_gns3_signal.connect(self._on_refresh_gns3, Qt.ConnectionType.QueuedConnection)
         except Exception:
             pass
 
@@ -347,6 +348,7 @@ class ANCSAgentDialog(QDialog):
             w.finished_signal.disconnect(self._on_finished)
             w.ready_signal.disconnect(self._on_ready)
             w.generate_pdf_signal.disconnect(self._on_generate_pdf)
+            w.refresh_gns3_signal.disconnect(self._on_refresh_gns3)
         except Exception:
             pass
 
@@ -461,6 +463,10 @@ class ANCSAgentDialog(QDialog):
     # ──────────────────────────────────────────────────────────────────
     # SIGNAL HANDLERS (CopilotWorker → Bridge → JS)
     # ──────────────────────────────────────────────────────────────────
+    def _on_refresh_gns3(self):
+        """Triggered from background thread to refresh GNS3 connection in main thread."""
+        self.app.refresh_gns3_connection()
+
     def _on_terminal_log(self, html_text):
         """Stream execution logs to JS and parse structured tool events."""
         # Stream all raw log outputs to JS bridge Console Stream
