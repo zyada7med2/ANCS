@@ -215,12 +215,128 @@ def list_gns3_nodes(project_id: str = "") -> str:
                 "status": n.get("status"),
                 "console_host": n.get("console_host", "localhost"),
                 "console_port": n.get("console"),
+                "x": n.get("x", 0),
+                "y": n.get("y", 0),
                 "ports": [p.get("short_name") or p.get("name") for p in n.get("ports", [])],
             })
         ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> list_gns3_nodes → {len(result)} nodes</span>\n")
         return json.dumps(result, indent=2)
     except Exception as e:
         return f"Error: {e}"
+
+
+def add_gns3_node(name: str, device_role: str, x: int = 0, y: int = 0, template_id_or_name: str = "") -> str:
+    """
+    Add a new node to the active GNS3 project. Spawns device of role 'router', 'core', or 'access'/'switch'.
+    Automatically clones template from existing same-role node if found. Fallback: matches via global templates or config mapping.
+    """
+    pid = ctx.gns3_project_id
+    if not pid:
+        return "Error: No active GNS3 project connected."
+    try:
+        gns3 = ctx.get_gns3_connector()
+        template_id = ""
+        
+        # If template name/id is given, use it
+        if template_id_or_name:
+            templates = gns3.get_templates()
+            for t in templates:
+                if template_id_or_name.lower() in t.get("name", "").lower() or template_id_or_name == t.get("template_id"):
+                    template_id = t.get("template_id")
+                    break
+        
+        # Try cloning template from existing same-role node
+        if not template_id:
+            nodes = gns3.get_nodes(pid)
+            target_type = "router" if device_role == "router" else "core switch" if device_role == "core" else "switch"
+            
+            # Keywords for role detection to match gui/app.py logic
+            l3_keywords = ['l3 switch', 'layer3', 'layer 3', 'esw', 'c3640', 'c3560', 'c3750', 'multilayer']
+            rtr_keywords = ['router', 'ios', 'csr', 'isr', 'iosv', 'firepower', 'asa', 'xrv', 'nxos', 'c2691', 'c2600', 'c7200', 'c3725', 'c3745', 'c3660', 'c3845', 'c1900', 'c2900']
+            
+            for node in nodes:
+                raw_type = node.get('node_type', '')
+                n_name = node.get('name', '')
+                platform = node.get('platform', '')
+                console_type = node.get('console_type', '')
+                image_name = (node.get('properties') or {}).get('image', '')
+                full_desc = " ".join([raw_type, platform, console_type, image_name, n_name]).lower()
+                
+                ntype = 'switch'
+                if any(k in full_desc for k in l3_keywords):
+                    ntype = 'core switch'
+                elif any(k in full_desc for k in rtr_keywords):
+                    ntype = 'router'
+                    
+                if ntype == target_type and node.get("template_id"):
+                    template_id = node.get("template_id")
+                    break
+                    
+        # Check config mappings
+        if not template_id:
+            import os
+            import json
+            from network_manager.config import _BASE_DIR
+            mapping_file = os.path.join(_BASE_DIR, "gns3_template_mappings.json")
+            if os.path.exists(mapping_file):
+                try:
+                    with open(mapping_file, "r") as f:
+                         mappings = json.load(f)
+                         val = mappings.get(device_role)
+                         if val:
+                             templates = gns3.get_templates()
+                             for t in templates:
+                                 if val.lower() in t.get("name", "").lower() or val == t.get("template_id"):
+                                     template_id = t.get("template_id")
+                                     break
+                except Exception:
+                     pass
+                     
+        # Fetch all templates and try standard naming match
+        if not template_id:
+            templates = gns3.get_templates()
+            candidates = []
+            for t in templates:
+                name_lower = t.get("name", "").lower()
+                if device_role == "router" and any(k in name_lower for k in ("iosv", "c3725", "c7200", "router")):
+                    candidates.append(t)
+                elif device_role == "core" and any(k in name_lower for k in ("l3", "layer3", "layer 3", "ioul3")):
+                    candidates.append(t)
+                elif device_role in ("switch", "access") and any(k in name_lower for k in ("iosvl2", "switch", "ioul2")):
+                    candidates.append(t)
+            if candidates:
+                template_id = candidates[0].get("template_id")
+                
+        if not template_id:
+            templates = gns3.get_templates()
+            t_names = [t.get("name") for t in templates if t.get("name")]
+            return f"Error: No template mapped or found for role '{device_role}'. Available templates: {t_names}. Add template_id_or_name or create a mapping in gns3_template_mappings.json."
+
+        # Spawning node
+        node_res = gns3.create_node(pid, name, template_id, x, y)
+        
+        # Sync database
+        from network_manager.config import conn, db_lock
+        import time
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        with db_lock:
+            cur = conn.cursor()
+            cur.execute(
+                "INSERT OR REPLACE INTO devices (name, type, ip, port, connection_type, added_from_gns3, project_id, node_id, created_at) "
+                "VALUES (?, ?, ?, ?, 'gns3-console', 1, ?, ?, ?)",
+                (name, "core switch" if device_role == "core" else "router" if device_role == "router" else "switch", 
+                 node_res.get("console_host", "localhost"), str(node_res.get("console", "")), pid, node_res.get("node_id"), ts)
+            )
+            conn.commit()
+            cur.close()
+        
+        # Trigger UI sync
+        if ctx.refresh_ui_fn:
+            ctx.refresh_ui_fn()
+            
+        return f"Success: Created node '{name}' from template ID '{template_id}' at coordinate ({x}, {y})."
+    except Exception as e:
+        return f"Error adding node: {e}"
 
 
 def get_node_ports(project_id: str, node_id: str) -> str:
@@ -2768,6 +2884,7 @@ ALL_TOOLS = [
     # GNS3
     list_gns3_projects,
     list_gns3_nodes,
+    add_gns3_node,
     get_node_ports,
     get_topology_links,
     get_network_overview,
@@ -2889,6 +3006,7 @@ _MAJOR_TOOL_STATUS = {
     "get_network_overview": "Analyzing network topology...",
     "list_all_devices": "Fetching device list...",
     "get_topology_links": "Mapping topology links...",
+    "add_gns3_node": "Spawning new GNS3 device...",
     "audit_network": "Running security audit...",
     "trace_connectivity": "Tracing connectivity path...",
     "validate_configs": "Validating configurations...",
