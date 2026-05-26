@@ -125,3 +125,42 @@ class GNS3Connector:
           'node_id', 'adapter_number', 'port_number', 'label' (optional).
         """
         return self._get(f"/v2/projects/{project_id}/links")
+
+    def get_templates(self):
+        return self._get("/v2/templates")
+
+    def create_node(self, project_id: str, name: str, template_id: str, x: int = 0, y: int = 0):
+        payload = {"name": name, "x": x, "y": y}
+        return self._post(f"/v2/projects/{project_id}/templates/{template_id}", payload)
+
+    def delete_node(self, project_id: str, node_id: str):
+        return self._delete(f"/v2/projects/{project_id}/nodes/{node_id}")
+
+    def create_link(self, project_id: str, node_a_id: str, adapter_a: int, port_a: int, node_b_id: str, adapter_b: int, port_b: int):
+        payload = {
+            "nodes": [
+                {"node_id": node_a_id, "adapter_number": adapter_a, "port_number": port_a},
+                {"node_id": node_b_id, "adapter_number": adapter_b, "port_number": port_b}
+            ]
+        }
+        return self._post(f"/v2/projects/{project_id}/links", payload)
+
+    def delete_link_between_nodes(self, project_id: str, node_a_id: str, node_b_id: str):
+        links = self.get_links(project_id)
+        for link in links:
+            endpoints = link.get("nodes", [])
+            if len(endpoints) >= 2:
+                id_a = endpoints[0].get("node_id")
+                id_b = endpoints[1].get("node_id")
+                if (id_a == node_a_id and id_b == node_b_id) or (id_a == node_b_id and id_b == node_a_id):
+                    link_id = link.get("link_id")
+                    if link_id:
+                        return self._delete(f"/v2/projects/{project_id}/links/{link_id}")
+        raise RuntimeError(f"No link found between node {node_a_id} and node {node_b_id}")
+
+    def start_node(self, project_id: str, node_id: str):
+        return self._post(f"/v2/projects/{project_id}/nodes/{node_id}/start", {})
+
+    def stop_node(self, project_id: str, node_id: str):
+        return self._post(f"/v2/projects/{project_id}/nodes/{node_id}/stop", {})
+
