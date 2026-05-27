@@ -247,7 +247,30 @@ try:
     )
     """)
 
+    # Dedicated tables for Copilot Agent Chat History
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS chat_conversations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT UNIQUE NOT NULL,
+        title TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL,
+        sender TEXT CHECK(sender IN ('user', 'agent', 'system')) NOT NULL,
+        text TEXT NOT NULL,
+        thoughts TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(conversation_id) REFERENCES chat_conversations(conversation_id) ON DELETE CASCADE
+    )
+    """)
+
     # Indexes for performance on common lookups / filters
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_id ON chat_messages(conversation_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs(created_at)")
