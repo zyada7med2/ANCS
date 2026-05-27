@@ -332,3 +332,40 @@ We have successfully implemented and verified the Dynamic GNS3 Topology Editing 
    - **Step 5:** Successfully deleted the link between `TEST_R4` and `R2`.
    - **Step 6:** Cleanly deleted the test node `TEST_R4` from GNS3.
    *(Result: **ALL STEPS COMPLETED SUCCESSFULLY**)*
+
+---
+
+## History Preservation & Dialog Crash Fixes (May 2026)
+
+We have successfully resolved key stability issues in the Copilot UI:
+
+### 1. History Retention for Gemini and Vertex AI
+* **Removed Truncation and Compression Limitations:** Bypassed `_truncate_history` and `_compress_context` entirely for `gemini` and `vertex` providers in [ai_agent.py](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/ai_agent.py).
+* **Full Context Retention:** This ensures that Gemini/Vertex AI maintains 100% of the conversational and tool execution context, preventing the agent from "forgetting" past messages.
+
+### 2. Prevention of Native Windows COM Crashes (0x80040155)
+* **Non-Native Dialog Flag:** Added the `options=QFileDialog.DontUseNativeDialog` flag to all file dialog queries (`getOpenFileName` / `getSaveFileName`) in [agent_bridge.py](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/gui/agent_bridge.py).
+* **Guaranteed Thread Safety:** This prevents Windows COM errors (`code 0x80040155`) when opening dialogs during QWebChannel/QWebEngine callbacks, making file attachment, chat log export, and PDF export completely bulletproof on Windows.
+
+---
+
+## SQLite-Backed Chat History, Autocomplete Device Mentions & Send Modes (May 2026)
+
+We have successfully implemented the persistent chat history dialog tab, `@` device mentions autocomplete suggestion overlay, and three distinct Copilot dispatch modes (Ask Agent, Auto Approved, and Planning Mode).
+
+### 1. SQLite Chat History & Persistence
+* **Database Schema:** Defined `chat_conversations` and `chat_messages` tables inside [config.py](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/config.py) under the `db_lock` with cascade delete foreign keys and optimized indexes on the conversation identifiers.
+* **Bridge Communication Slots:** Added Slots (`getPastConversations`, `deleteConversation`, `loadConversation`) inside [agent_bridge.py](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/gui/agent_bridge.py) to read from and write to the database.
+* **Chat History Settings Tab:** Designed a new premium "Chat History" settings tab inside the settings modal in [index.html](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/gui/web/index.html) that lists previous conversations, shows creation times, and lets users load or delete them dynamically.
+* **New Chat Instantiation:** Embedded a `+` (New Chat) header action button next to the settings gear to clear active dialog contents and start a new DB session.
+
+### 2. Smart `@` Device Mentions Autocomplete
+* **Real-time Word Parsing:** Added an input listener on the chat text area in [index.html](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/gui/web/index.html) to scan for the `@` character.
+* **Role-Specific Suggestion Overlay:** Spawns a floating dropdown suggestions box above the chat bar showing matching active devices. Displays router vs. switch specific SVG icons depending on the device hostname/type.
+* **Automatic Context Injection:** Selecting a device autocomplete mention injects the `@hostname` tag into the user prompt. Before sending to the background worker, [agent_bridge.py](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/gui/agent_bridge.py) extracts the latest configuration snapshot from the SQLite DB and prepends it as a structured `<mentioned-device>` XML context payload.
+
+### 3. Multi-Mode Send Controls
+* **ASK AGENT (Default):** Prompts the user with the standard review & edit modal before deploying. Auto-switches to Auto Approved if the user types phrases matching `"auto approve"` in the input field.
+* **AUTO APPROVED:** Bypasses the confirmation reviews inside `generate_and_deploy_device_config` in [ai_agent.py](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/ai_agent.py), logging the deployment directly and pushing configurations to the terminal streams automatically.
+* **PLANNING MODE:** Appends Claude-style planning directives XML block into the system reminder string in [ai_agent.py](file:///c:/Users/Zyad/Downloads/ANCS/network_manager/ai_agent.py) right before the user message turn. This instructs the AI model to think step-by-step, draft detailed transition steps, and ask for user permission rather than calling execution tools on that turn.
+

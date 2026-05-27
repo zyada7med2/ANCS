@@ -40,6 +40,14 @@ class _AgentContext:
     logger = None
     refresh_ui_fn = None  # thread-safe callable() to refresh GNS3 connection in UI
 
+    # ── Agent safety rails (Components 3, 5, 7, 8) ────────────────────────
+    rejected_devices: set = None       # devices explicitly rejected by user this session (Component 3)
+    tool_call_count: int = 0           # global session tool call counter (Component 5)
+    consecutive_failures: int = 0      # consecutive tool failures — abort at 5 (Component 8)
+    input_tokens: int = 0              # cumulative input tokens this session (Component 7)
+    output_tokens: int = 0             # cumulative output tokens this session (Component 7)
+    estimated_cost_usd: float = 0.0    # rough cost estimate this session (Component 7)
+
     @staticmethod
     def log(msg: str):
         if ctx.log_fn:
@@ -576,7 +584,7 @@ def move_gns3_node(node_id_or_name: str, x: int, y: int) -> str:
 def add_gns3_annotation(
     annotation_type: str,
     text: str = "",
-    target_devices: list = None,
+    target_devices: list[str] = None,
     x: int = 0,
     y: int = 0,
     width: int = 200,
@@ -1273,7 +1281,19 @@ def generate_and_deploy_device_config(
     Generates config via ConfigEngine, saves to DB, then deploys to the device atomically.
     """
     ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> generate_and_deploy_device_config(hostname={hostname})</span>\n")
-    
+
+    # ── Component 3: HITL Rejection Blocker ────────────────────────────
+    # Python-level hard block — the model can ignore text warnings, but
+    # it cannot bypass this check.  If the user rejected deployment to
+    # this device earlier in the session, we refuse at the code level.
+    if ctx.rejected_devices and hostname in ctx.rejected_devices:
+        ctx.log(f"<span style='color:#f85149'>[Copilot] BLOCKED: '{hostname}' was previously rejected by user this session</span>\n")
+        return (
+            f"BLOCKED: User previously rejected deployment to '{hostname}' this session. "
+            f"Do NOT retry. The user must explicitly ask to deploy to this device again. "
+            f"Acknowledge the rejection and ask what else you can help with."
+        )
+
     # 1. Generate the config
     config_result = generate_device_config(
         hostname=hostname, device_role=device_role, vlans=vlans, 
@@ -1307,30 +1327,39 @@ def generate_and_deploy_device_config(
         return "Config generated but saved content is empty — cannot deploy."
 
     # 3. HITL — Show config to user for review before deploying
-    ctx.log(f"<span style='color:#d29922'>[Copilot] Requesting user approval for deployment to {hostname}...</span>\n")
-    try:
-        from network_manager.gui.deploy_review_dialog import request_deploy_approval
-        commands = [line for line in config_text.split("\n") if line.strip()]
-        approved, final_commands = request_deploy_approval(hostname, device_role, commands)
+    if getattr(ctx, 'auto_approve', False):
+        ctx.log(f"<span style='color:#3fb950'>[Copilot] Auto-approve mode active. Skipping deploy confirmation dialog.</span>\n")
+        approved = True
+        final_commands = [line for line in config_text.split("\n") if line.strip()]
+    else:
+        ctx.log(f"<span style='color:#d29922'>[Copilot] Requesting user approval for deployment to {hostname}...</span>\n")
+        try:
+            from network_manager.gui.deploy_review_dialog import request_deploy_approval
+            commands = [line for line in config_text.split("\n") if line.strip()]
+            approved, final_commands = request_deploy_approval(hostname, device_role, commands)
 
-        if not approved:
-            ctx.log(f"<span style='color:#f85149'>[Copilot] ✖ Deployment REJECTED by user for {hostname}</span>\n")
-            return (f"GENERATION: {config_result}\n\n"
-                    f"DEPLOYMENT: ❌ REJECTED by user. Config was generated and saved to DB "
-                    f"but NOT deployed. User can deploy later with deploy_to_device().\n\n"
-                    f"IMPORTANT: Do NOT call this tool again. The user explicitly rejected "
-                    f"this deployment. Acknowledge the rejection and move on.")
+            if not approved:
+                # ── Component 3: Record rejection in ctx ──────────────────
+                if ctx.rejected_devices is None:
+                    ctx.rejected_devices = set()
+                ctx.rejected_devices.add(hostname)
+                ctx.log(f"<span style='color:#f85149'>[Copilot] ✖ Deployment REJECTED by user for {hostname} (added to blocked set)</span>\n")
+                return (f"GENERATION: {config_result}\n\n"
+                        f"DEPLOYMENT: ❌ REJECTED by user. Config was generated and saved to DB "
+                        f"but NOT deployed. User can deploy later with deploy_to_device().\n\n"
+                        f"IMPORTANT: Do NOT call this tool again. The user explicitly rejected "
+                        f"this deployment. Acknowledge the rejection and move on.")
 
-        # User may have edited the commands
-        config_text = "\n".join(final_commands)
-        ctx.log(f"<span style='color:#3fb950'>[Copilot] ✔ Deployment APPROVED by user for {hostname}</span>\n")
-    except Exception as e:
-        # If the dialog fails (e.g., no GUI thread), fall back to auto-deploy
-        import traceback
-        tb = traceback.format_exc()
-        ctx.log(f"<span style='color:#f85149'>[Copilot] HITL dialog FAILED: {e}</span>\n")
-        ctx.log(f"<span style='color:#8b949e'>[Copilot] Traceback: {tb[:500]}</span>\n")
-        ctx.log(f"<span style='color:#d29922'>[Copilot] Falling back to auto-deploy...</span>\n")
+            # User may have edited the commands
+            config_text = "\n".join(final_commands)
+            ctx.log(f"<span style='color:#3fb950'>[Copilot] ✔ Deployment APPROVED by user for {hostname}</span>\n")
+        except Exception as e:
+            # If the dialog fails (e.g., no GUI thread), fall back to auto-deploy
+            import traceback
+            tb = traceback.format_exc()
+            ctx.log(f"<span style='color:#f85149'>[Copilot] HITL dialog FAILED: {e}</span>\n")
+            ctx.log(f"<span style='color:#8b949e'>[Copilot] Traceback: {tb[:500]}</span>\n")
+            ctx.log(f"<span style='color:#d29922'>[Copilot] Falling back to auto-deploy...</span>\n")
 
     # 4. Deploy it
     ctx.log(f"<span style='color:#8b949e'>[Copilot] Deploying approved config to {hostname}...</span>\n")
@@ -1877,6 +1906,22 @@ def deploy_to_device(device_name: str, config_text: str) -> str:
     info = _resolve_device_connection(device_name)
     if not info:
         return f"Error: no host/credentials for '{device_name}'."
+
+    # ── Component 9: Pre-deploy config snapshot ───────────────────────
+    # Capture show running-config before pushing changes, as a rollback
+    # reference point.  Non-fatal — if it fails, we still deploy.
+    try:
+        pre_snapshot = run_cli_on_device(device_name, "show running-config")
+        if pre_snapshot and not pre_snapshot.lower().startswith("error"):
+            if getattr(ctx, "audit_fn", None):
+                ctx.audit_fn(
+                    device_name, "Pre-Deploy Snapshot",
+                    f"Config snapshot taken before Copilot deployment ({len(pre_snapshot)} chars)",
+                    pre_snapshot,
+                )
+            ctx.log(f"<span style='color:#8b949e'>[Copilot] Pre-deploy snapshot saved for {device_name} ({len(pre_snapshot)} chars)</span>\n")
+    except Exception:
+        pass  # Non-fatal — proceed with deploy
 
     # ── Close pooled session before deploy ─────────────────────────────
     # GNS3 console ports are single-client: the pool's open Telnet
@@ -3508,11 +3553,34 @@ OPENAI_TOOLS = _build_openai_tools()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# SYSTEM PROMPT
+# SYSTEM PROMPT — Dynamic builder with Constraint Sandwich pattern
 # ═══════════════════════════════════════════════════════════════════════════════
 
-SYSTEM_PROMPT = """# IDENTITY
+def compile_system_prompt() -> str:
+    """Build the system prompt in layers with critical rules at TOP and BOTTOM.
+
+    The Constraint Sandwich pattern fights the 'lost in the middle' problem in
+    transformer attention — the model strongly remembers what it reads first and
+    last, and attention degrades for middle content.
+
+    Structure:
+      1. <core-identity>    — WHO you are + the 5 most-violated rules (HIGH attention)
+      2. <tools-and-reference> — tool catalog, parameter checklists (tolerates lower attention)
+      3. <critical-constraints> — the 5 rules REPEATED + deployment safety (HIGH attention from recency)
+    """
+
+    # ── Section 1: Core Identity + Critical Rules (TOP — highest attention) ──
+
+    core_identity = """<core-identity>
+# IDENTITY
 You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded inside ANCS (Auto Network Configuration System). You explore, analyze, configure, deploy, and troubleshoot network devices.
+
+# CRITICAL RULES (read these FIRST — they override everything below)
+1. **NEVER write IOS commands in your response.** Call `generate_and_deploy_device_config(...)` or `generate_device_config(...)`. The ConfigEngine handles all syntax.
+2. **Respect HITL deployment rejections.** When a deployment returns "REJECTED by user", do NOT re-call the tool or retry. Acknowledge the rejection and move on.
+3. **NEVER guess interface names.** Always call `get_topology_links(project_id)` first to verify physical connections.
+4. **Switches NEVER get routing protocols.** `routing_protocol='none'` for ALL core and access switches. Only routers get routing protocols.
+5. **Call `get_network_overview()` FIRST.** You start with NO knowledge of the network. Always discover before acting.
 
 # ENVIRONMENT
 - Devices run inside **GNS3** (emulator), NOT physical hardware
@@ -3523,7 +3591,11 @@ You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded 
 - **Router** (`device_role='router'`): Routes between networks. Runs dynamic protocols (RIP/OSPF/EIGRP). Does router-on-a-stick (subinterfaces). Connects to WAN. Runs DHCP for its VLANs.
 - **Core switch** (`device_role='core'`): L3 switch. Routes between VLANs via SVIs. Does NOT run dynamic routing — uses static default route to upstream router. May run DHCP if it's the gateway.
 - **Access switch** (`device_role='access'`): Pure Layer 2. Assigns ports to VLANs, trunks up. No routing, no DHCP, no SVIs. Ever.
+</core-identity>"""
 
+    # ── Section 2: Tools & Reference (MIDDLE — can tolerate lower attention) ──
+
+    tools_and_reference = """<tools-and-reference>
 # YOUR TOOLS
 
 **Network Discovery:**
@@ -3554,10 +3626,8 @@ You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded 
 - `get_agent_guidelines(topic)` — **call this** when you need design principles, routing protocol guidance, IOS syntax, or deployment order rules
 - `calculate_subnet(ip, prefix)`
 
-# CONFIG GENERATION (ABSOLUTE RULE)
+# CONFIG GENERATION
 Config generation runs 100% locally via the ConfigEngine. Your job is ONLY to supply correct parameters.
-
-**NEVER write IOS commands in your response.** Call `generate_and_deploy_device_config(...)` with correct parameters and report the result.
 
 ## Parameter Checklist
 **Router**: hostname, device_role='router', router_interface (REQUIRED), vlans, routing_entries, routing_protocol (call `get_agent_guidelines('routing_protocol')` if unsure), dhcp_pools, wan_interface, wan_ip
@@ -3588,7 +3658,7 @@ Guessing interfaces causes silent config failures.
 9. **Think network-wide**: A change to one device almost always requires changes to others.
 10. **Deployment report**: After configuring multiple devices, summarize with a per-device status table.
 
-## TROUBLESHOOTING DISCIPLINE (CRITICAL)
+## TROUBLESHOOTING DISCIPLINE
 11. **Layer 1 first, ALWAYS.** Run `show ip interface brief` BEFORE debugging routing protocols. If Status is not "up/up", STOP — the issue is physical/admin, not routing.
 12. **Read the CLI prompt.** Before sending any command, check the last prompt (`R1#`, `R1(config)#`, `R1(config-router)#`). If you're in the wrong mode, send `end` first. NEVER retry a command with a syntax tweak without checking the prompt mode.
 13. **Check BOTH ends.** When troubleshooting a link, ALWAYS check the interface and config on BOTH devices, not just the failing one.
@@ -3605,7 +3675,47 @@ Primary users are beginners. Reduce fear and confusion. Be a tutor, not a grader
 - **Answer-first**: Understandable summary before optional detail.
 - **Friendly, patient, concise.**
 - Do **not** open with "what would you like to do?" — respond to what they asked.
-"""
+</tools-and-reference>"""
+
+    # ── Section 3: Critical Constraints REPEATED (BOTTOM — high recency attention) ──
+
+    critical_constraints = """<critical-constraints>
+# ═══════════════════════════════════════════════════════════════════════════════
+# MANDATORY CONSTRAINTS — ACTIVE FOR EVERY TURN (repeated for enforcement)
+# ═══════════════════════════════════════════════════════════════════════════════
+# These rules are repeated here because they are the most frequently violated.
+# The model's attention is highest at the START and END of the system prompt.
+
+1. **NEVER write raw IOS commands in your chat response.** Always use `generate_and_deploy_device_config()` or `generate_device_config()`. The ConfigEngine produces correct syntax — you do not.
+2. **NEVER retry after HITL rejection.** If a deployment was "REJECTED by user", that decision is final for this session. Acknowledge it and move on. Do NOT call the deploy tool again for that device.
+3. **NEVER guess interface names.** Call `get_topology_links()` to discover real cabling before generating any config. Wrong interfaces = silent deployment failures.
+4. **Switches get routing_protocol='none'. ALWAYS.** Core switches route via SVIs locally — they never need OSPF/EIGRP/RIP. Access switches are pure L2.
+5. **Discover before acting.** Call `get_network_overview()` as your FIRST action when the user asks about devices, topology, or configuration. You start every conversation with ZERO knowledge.
+</critical-constraints>"""
+
+    # ── Vendor addendum (Component 6) ─────────────────────────────────────
+
+    vendor_addendum = ""
+    try:
+        vendor_addendum = (
+            "\n\n## Cisco IOS Session Notes\n"
+            "- Use `do show` in config mode for show commands without exiting\n"
+            "- VLANs on older IOS require `vlan database` mode, not `vlan X` in config mode\n"
+            "- Always set `switchport trunk encapsulation dot1q` before `switchport mode trunk` on L3 switches\n"
+            "- Use `show vlan-switch` (not `show vlan brief`) on EtherSwitch router modules\n"
+        )
+    except Exception:
+        pass
+
+    return "\n\n".join(filter(None, [
+        core_identity,
+        tools_and_reference,
+        vendor_addendum,
+        critical_constraints,
+    ]))
+
+
+SYSTEM_PROMPT = compile_system_prompt()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -3749,7 +3859,8 @@ class CopilotWorker(QThread):
                  audit_fn=None,
                  provider: str = "openrouter",
                  model_name: str = "openai/gpt-4o-mini",
-                 initial_messages: list | None = None):
+                 initial_messages: list | None = None,
+                 mode: str = "chat"):
         super().__init__()
         self.api_key = api_key
         self.gns3_url = gns3_url
@@ -3759,6 +3870,7 @@ class CopilotWorker(QThread):
         self.project_snapshot = project_snapshot or "{}"
         self.provider = provider
         self.model_name = model_name
+        self.mode = mode
         self._loop = None
         self._chat = None
         self._client = None
@@ -3777,6 +3889,7 @@ class CopilotWorker(QThread):
         ctx.gns3_project_id = gns3_project_id or ""
         ctx.primary_device_name = ""  # no single focus
         ctx.allow_raw_deploy = allow_raw_deploy
+        ctx.auto_approve = (self.mode == "auto_approve")
         if ctx.sessions is None:
             ctx.sessions = {}
         ctx.log_fn = lambda msg: self.terminal_log_signal.emit(msg)
@@ -3785,6 +3898,160 @@ class CopilotWorker(QThread):
         ctx.logger = self._logger
         ctx.generate_pdf_signal = self.generate_pdf_signal
         ctx.refresh_ui_fn = self.refresh_gns3_signal.emit
+
+        # Reset safety counters for this session (Components 3, 5, 7, 8)
+        ctx.rejected_devices = set()
+        ctx.tool_call_count = 0
+        ctx.consecutive_failures = 0
+        ctx.input_tokens = 0
+        ctx.output_tokens = 0
+        ctx.estimated_cost_usd = 0.0
+
+    def _get_gemini_history(self) -> list:
+        """Convert OpenAI-formatted self._messages into Gemini types.Content objects."""
+        gemini_history = []
+        for msg in self._messages:
+            role = msg.get("role")
+            content = msg.get("content")
+            if not content:
+                continue
+
+            # Map role
+            if role == "user":
+                gemini_role = "user"
+            elif role == "assistant":
+                gemini_role = "model"
+            else:
+                # Skip system prompts and tool call/response messages to keep history clean
+                continue
+
+            # Handle content parts
+            if isinstance(content, list):
+                # Extract text parts
+                text_parts = []
+                for part in content:
+                    if isinstance(part, dict):
+                        if part.get("type") == "text":
+                            text_parts.append(part.get("text", ""))
+                    elif isinstance(part, str):
+                        text_parts.append(part)
+                text = "\n".join(text_parts)
+            else:
+                text = str(content)
+
+            if text.strip():
+                gemini_history.append(
+                    types.Content(
+                        role=gemini_role,
+                        parts=[types.Part.from_text(text=text)]
+                    )
+                )
+        return gemini_history
+
+    # ── Component 2: System Reminder Builder ──────────────────────────────
+
+    def _build_system_reminder(self) -> str:
+        """Build a short XML reminder block injected before each user turn.
+
+        Exploits transformer recency bias: the most recent tokens in the
+        context window get the strongest attention.  By injecting critical
+        rules right before the user's message, we keep them in the
+        high-attention zone even in long conversations.
+        """
+        rejected_list = ", ".join(sorted(ctx.rejected_devices)) if ctx.rejected_devices else "(none)"
+        rejected_count = len(ctx.rejected_devices) if ctx.rejected_devices else 0
+        reminder_str = (
+            "<system-reminder>\n"
+            "CRITICAL RULES — ACTIVE FOR THIS TURN:\n"
+            "1. NEVER write IOS commands in your response. Call generate_and_deploy_device_config() or generate_device_config().\n"
+            "2. If a deployment was REJECTED by user, do NOT retry. Acknowledge and move on.\n"
+            "3. NEVER guess interface names. Call get_topology_links() to verify physical connections first.\n"
+            "4. Switches NEVER get routing protocols. routing_protocol='none' for core and access switches.\n"
+            f"5. You have {rejected_count} rejected device(s) this session: {rejected_list}. Do NOT deploy to them again.\n"
+            f"6. Session tool calls so far: {ctx.tool_call_count}/200.\n"
+        )
+        if getattr(self, 'mode', 'chat') == "planning":
+            reminder_str += (
+                "\n<planning-mode-directives>\n"
+                "YOU MUST FOLLOW THESE PLANNING INSTRUCTIONS:\n"
+                "1. Since you are in PLANNING MODE, you are forbidden from invoking any configuration or deployment tools on this turn.\n"
+                "2. You must think step-by-step and write out a detailed, structured implementation plan in your response.\n"
+                "3. Your plan must list:\n"
+                "   - Involved devices\n"
+                "   - Commands to be executed\n"
+                "   - Order of operations\n"
+                "   - Risks and verification checks\n"
+                "4. End your response by asking the user to review the plan and confirm execution.\n"
+                "</planning-mode-directives>\n"
+            )
+        reminder_str += "</system-reminder>"
+        return reminder_str
+
+    # ── Component 4: Output Validator ─────────────────────────────────────
+
+    def _validate_response(self, text: str) -> str:
+        """Post-response validator — catches policy violations before sending to user.
+
+        Scans the model's response text for common violations:
+        - Raw IOS config blocks (3+ consecutive config-mode lines)
+        - Leaked credentials/passwords
+        """
+        import re
+        warnings = []
+
+        # Pattern 1: Raw IOS config blocks (3+ consecutive config-mode lines)
+        ios_patterns = [
+            r'(?m)^\s*(interface |router |ip route |access-list |switchport |vlan \d|hostname )',
+        ]
+        ios_hits = 0
+        for pat in ios_patterns:
+            ios_hits += len(re.findall(pat, text))
+        if ios_hits >= 3:
+            warnings.append(
+                "\n\n> ⚠️ **Note:** I included raw IOS commands above, but the correct workflow is to use "
+                "`generate_and_deploy_device_config()`. Let me know if you'd like me to deploy properly."
+            )
+            self.terminal_log_signal.emit(
+                f"<span style='color:#d29922'>[Copilot] Output validator: {ios_hits} raw IOS lines detected in response</span>\n"
+            )
+
+        # Pattern 2: Leaked credentials — mask them
+        if re.search(r'password\s+\S{4,}', text, re.IGNORECASE):
+            text = re.sub(r'(password\s+)\S+', r'\1***', text, flags=re.IGNORECASE)
+            self.terminal_log_signal.emit(
+                "<span style='color:#d29922'>[Copilot] Output validator: masked leaked password in response</span>\n"
+            )
+
+        if warnings:
+            text += "\n".join(warnings)
+        return text
+
+    # ── Component 7: Token/Cost Tracker ───────────────────────────────────
+
+    def _track_usage(self, response):
+        """Extract token counts from API response and update cumulative tracking."""
+        try:
+            if self.provider in ("gemini", "vertex"):
+                if hasattr(response, 'usage_metadata') and response.usage_metadata:
+                    um = response.usage_metadata
+                    ctx.input_tokens += getattr(um, 'prompt_token_count', 0) or 0
+                    ctx.output_tokens += getattr(um, 'candidates_token_count', 0) or 0
+            else:
+                if hasattr(response, 'usage') and response.usage:
+                    ctx.input_tokens += response.usage.prompt_tokens or 0
+                    ctx.output_tokens += response.usage.completion_tokens or 0
+
+            # Rough cost estimate (Gemini Flash pricing as baseline)
+            ctx.estimated_cost_usd = (
+                (ctx.input_tokens / 1_000_000) * 0.075 +
+                (ctx.output_tokens / 1_000_000) * 0.30
+            )
+            self.terminal_log_signal.emit(
+                f"<span style='color:#8b949e'>[Copilot] Tokens: {ctx.input_tokens:,} in / {ctx.output_tokens:,} out "
+                f"| Est. cost: ${ctx.estimated_cost_usd:.4f} | Tools: {ctx.tool_call_count}/200</span>\n"
+            )
+        except Exception:
+            pass  # Non-fatal
 
     def queue_message(self, text: str, attachment_path: str = None):
         """Called from the GUI thread to queue a user message."""
@@ -4070,7 +4337,7 @@ class CopilotWorker(QThread):
             if turn == MAX_TURNS - 2:
                 function_responses.append(
                     types.Part.from_text(
-                        "SYSTEM: Maximum tool calls approaching. You MUST provide a final answer on your next response. Do not call more tools."
+                        text="SYSTEM: Maximum tool calls approaching. You MUST provide a final answer on your next response. Do not call more tools."
                     )
                 )
 
@@ -4219,6 +4486,30 @@ class CopilotWorker(QThread):
             fn_args = {}
             ctx.log(f"<span style='color:#d29922'>[Copilot] Warning: bad JSON args for {fn_name}</span>\n")
 
+        # ── Component 5: Global tool call counter ───────────────────────
+        # Hard session-wide safety limit. A runaway agent could hit
+        # MAX_TURNS tools per turn × unlimited turns = unbounded.
+        if ctx.tool_call_count >= 200:
+            ctx.log(f"<span style='color:#f85149'>[Copilot] SAFETY LIMIT: 200 tool calls reached this session</span>\n")
+            return (
+                "SAFETY LIMIT: 200 tool calls reached this session. "
+                "This is abnormal. Summarize what you've done so far and stop. "
+                "The user should start a new Copilot session if more work is needed."
+            )
+        ctx.tool_call_count += 1
+
+        # ── Component 8: Consecutive failure abort ────────────────────
+        # If 5+ different tool calls in a row all failed, something is
+        # fundamentally broken (e.g., all devices unreachable).
+        if ctx.consecutive_failures >= 5:
+            ctx.log(f"<span style='color:#f85149'>[Copilot] ABORT: {ctx.consecutive_failures} consecutive tool failures</span>\n")
+            return (
+                f"ABORT: {ctx.consecutive_failures} consecutive tool calls have failed. "
+                f"Something is fundamentally wrong (e.g., devices unreachable, credentials invalid). "
+                f"STOP calling tools. Report the pattern of failures to the user and suggest they "
+                f"check device connectivity and credentials."
+            )
+
         if turn_tool_calls is not None:
             call_key = (fn_name, json.dumps(fn_args, sort_keys=True))
             error_count = turn_tool_calls.get(call_key, 0)
@@ -4269,10 +4560,18 @@ class CopilotWorker(QThread):
                 result_lower.startswith("unknown tool:") or
                 "no connection info" in result_lower or
                 "no host/credentials" in result_lower or
-                result_lower.startswith("exception:")
+                result_lower.startswith("exception:") or
+                result_lower.startswith("blocked:") or
+                result_lower.startswith("safety limit:") or
+                result_lower.startswith("abort:")
             )
             if is_err:
                 turn_tool_calls[call_key] = error_count + 1
+                # Component 8: track consecutive failures across different calls
+                ctx.consecutive_failures += 1
+            else:
+                # Reset consecutive counter on any success
+                ctx.consecutive_failures = 0
 
         return str(result)
 
@@ -4318,6 +4617,8 @@ class CopilotWorker(QThread):
         Never separates an assistant message with tool_calls from its subsequent
         tool response messages — doing so causes an API 400 error.
         """
+        if self.provider in ("gemini", "vertex"):
+            return
         if len(self._messages) <= max_messages:
             return
         keep_from = len(self._messages) - (max_messages - 1)
@@ -4350,6 +4651,8 @@ class CopilotWorker(QThread):
         This preserves the agent's awareness of what was already tried while
         freeing up tokens for new reasoning.
         """
+        if self.provider in ("gemini", "vertex"):
+            return
         if len(self._messages) < 12:
             return  # Not enough history to compress
 
@@ -4452,7 +4755,8 @@ class CopilotWorker(QThread):
                                     include_thoughts=True,
                                     thinking_level="medium",
                                 ),
-                            )
+                            ),
+                            history=self._get_gemini_history()
                         )
                         self.terminal_log_signal.emit(f"<span style='color: #3fb950'>[Copilot] Model loaded: {mn} ✓</span>\n")
                         break
@@ -4548,6 +4852,11 @@ class CopilotWorker(QThread):
                     self._logger.log_user_message(user_msg + (f" [Attached: {os.path.basename(attachment_path)}]" if attachment_path else ""))
                     try:
                         if self.provider in ("gemini", "vertex"):
+                            # Update local message history for persistence across worker reconnections
+                            self._messages.append({
+                                "role": "user",
+                                "content": user_msg + (f" [Attached: {os.path.basename(attachment_path)}]" if attachment_path else "")
+                            })
                             contents = []
                             if attachment_path:
                                 try:
@@ -4565,8 +4874,13 @@ class CopilotWorker(QThread):
                                     self.terminal_log_signal.emit(
                                         f"<span style='color: #d73a49'>[Copilot] Failed to load attachment: {e}</span>\n"
                                     )
-                            contents.append(user_msg)
-                            response = self._send_with_retry(contents if len(contents) > 1 else user_msg)
+                            # Component 2: Prepend system reminder to user message (Gemini)
+                            # Gemini doesn't support mid-conversation system messages,
+                            # so we prepend the reminder to the user's text.
+                            reminder = self._build_system_reminder()
+                            augmented_msg = f"{reminder}\n\n{user_msg}"
+                            contents.append(augmented_msg)
+                            response = self._send_with_retry(contents if len(contents) > 1 else augmented_msg)
                         else:
                             content_list = []
                             if attachment_path:
@@ -4596,6 +4910,12 @@ class CopilotWorker(QThread):
                             if not content_list:
                                 content_list = user_msg + (f" [Attached PDF/File: {os.path.basename(attachment_path)}]" if attachment_path else "")
 
+                            # Component 2: Inject system reminder for OpenRouter path
+                            # OpenRouter supports mid-conversation system messages, so
+                            # we inject a dedicated system message right before the user turn.
+                            reminder_msg = {"role": "system", "content": self._build_system_reminder()}
+                            self._messages.append(reminder_msg)
+
                             self._messages.append({"role": "user", "content": content_list})
                             self._compress_context()  # Compress old tool results first
                             self._truncate_history()   # Then trim if still too long
@@ -4609,6 +4929,18 @@ class CopilotWorker(QThread):
                                 kwargs["extra_headers"] = {"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"}
                             response = self._client.chat.completions.create(**kwargs)
                         reply = self._process_response(response)
+
+                        # Component 7: Track token usage and cost
+                        self._track_usage(response)
+
+                        # Component 4: Validate response for policy violations
+                        reply = self._validate_response(reply)
+
+                        if self.provider in ("gemini", "vertex"):
+                            self._messages.append({
+                                "role": "assistant",
+                                "content": reply
+                            })
                         self._logger.log_ai_response(reply)
                         self.chat_response_signal.emit(reply)
                     except openai.APITimeoutError:

@@ -1,7 +1,6 @@
 | Task ID | Component | Step | Status |
 |---|---|---|---|
-| TASK-16 | REST API | Task 1: Add Drawings API to GNS3Connector | Completed |
-| TASK-17 | Agent Tool | Task 2: Implement add_gns3_annotation tool | Completed |
-| TASK-18 | Agent Tool | Task 3: Implement clear_gns3_annotations tool | Completed |
-| TASK-19 | Registration | Task 4: Register tools in Copilot | Completed |
-| TASK-20 | Verification | Task 5: End-to-end live GNS3 testing of annotations | Completed |
+| TASK-35 | Implementation | Initialize DB tables in config.py | Completed |
+| TASK-36 | Implementation | Expose bridge slots in agent_bridge.py | Completed |
+| TASK-37 | Implementation | Update CopilotWorker and Dialog in ai_agent.py & agent_dialog.py | Completed |
+| TASK-38 | Implementation | Implement settings tab, mentions dropdown, and modes dropdown in index.html | Completed |

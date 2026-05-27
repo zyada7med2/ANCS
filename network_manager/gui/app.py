@@ -721,6 +721,7 @@ class App(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.txt_logs = None
         self._use_custom_title_bar = (sys.platform == "win32")
         self._title_drag_offset: Optional[QPoint] = None
         self._title_drag_widgets: tuple[QWidget, ...] = tuple()

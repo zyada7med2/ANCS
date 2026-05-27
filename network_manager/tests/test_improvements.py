@@ -281,9 +281,15 @@ print("\n" + "="*60)
 print("TEST 9: System Prompt Rules")
 print("="*60)
 
-prompt_start = source.index('SYSTEM_PROMPT = """')
-prompt_end = source.index('"""', prompt_start + 20)
-system_prompt = source[prompt_start:prompt_end]
+prompt_start = source.find('def compile_system_prompt()')
+if prompt_start == -1:
+    # Fallback: try old format
+    prompt_start = source.find('SYSTEM_PROMPT = \"\"\"')
+    prompt_end = source.index('\"\"\"', prompt_start + 20)
+    system_prompt = source[prompt_start:prompt_end]
+else:
+    # New format: import the compiled prompt directly
+    from network_manager.ai_agent import SYSTEM_PROMPT as system_prompt
 
 test("Rule: Layer 1 first", "Layer 1 first" in system_prompt)
 test("Rule: Read the CLI prompt", "Read the CLI prompt" in system_prompt)
