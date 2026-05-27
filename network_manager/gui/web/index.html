@@ -1755,10 +1755,7 @@
             align-content: start;
         }
 
-        /* Responsive transition: when preview is open, left column cards stack vertically */
-        .history-tab-layout.preview-active .history-card-grid {
-            grid-template-columns: 1fr !important;
-        }
+
 
         .history-card {
             position: relative;
@@ -1841,23 +1838,29 @@
             color: #EF4444;
         }
 
-        /* Slide-in Preview Drawer */
+        /* Slide-in Preview Drawer (Full Overlay Mode) */
         .history-preview-pane {
+            position: absolute;
+            top: 0;
+            right: 0;
+            height: 100%;
             width: 0px;
             opacity: 0;
             display: flex;
             flex-direction: column;
             border: 1px solid var(--border);
-            background: rgba(8, 12, 20, 0.95);
-            backdrop-filter: blur(12px);
+            background: rgba(6, 9, 15, 0.98);
+            backdrop-filter: blur(16px);
             border-radius: 8px;
-            transition: width 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s;
-            min-width: 0;
+            transition: width 0.3s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.25s;
+            z-index: 100;
             overflow: hidden;
+            box-shadow: -4px 0 24px rgba(0, 0, 0, 0.6);
+            box-sizing: border-box;
         }
 
         .history-preview-pane.active {
-            width: 280px;
+            width: 100%;
             opacity: 1;
         }
 
