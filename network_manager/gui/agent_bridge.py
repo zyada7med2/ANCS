@@ -430,9 +430,19 @@ Saved Configuration:
         except Exception as e:
             print(f"Error renaming conversation: {e}")
 
-    @Slot(str)
+    @Slot(str, result=bool)
     def deleteConversation(self, conversation_id):
         try:
+            from PySide6.QtWidgets import QMessageBox
+            ret = QMessageBox.question(
+                self._dialog, 
+                "Delete Session", 
+                "Are you sure you want to delete this chat session?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return False
+
             from network_manager.config import conn, db_lock
             with db_lock:
                 cur = conn.cursor()
@@ -442,15 +452,28 @@ Saved Configuration:
             if getattr(self._dialog, '_current_conversation_id', None) == conversation_id:
                 self._dialog._current_conversation_id = None
                 self.clearChat()
+            return True
         except Exception as e:
             print(f"Error deleting conversation: {e}")
+            return False
 
-    @Slot(str)
+    @Slot(str, result=bool)
     def deleteSelectedConversations(self, ids_json):
         try:
             ids = json.loads(ids_json)
             if not ids:
-                return
+                return False
+                
+            from PySide6.QtWidgets import QMessageBox
+            ret = QMessageBox.question(
+                self._dialog, 
+                "Delete Selected Sessions", 
+                f"Are you sure you want to delete the {len(ids)} selected chat session(s)?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return False
+
             from network_manager.config import conn, db_lock
             with db_lock:
                 cur = conn.cursor()
@@ -462,12 +485,24 @@ Saved Configuration:
             if curr_id in ids:
                 self._dialog._current_conversation_id = None
                 self.clearChat()
+            return True
         except Exception as e:
             print(f"Error deleting selected conversations: {e}")
+            return False
 
-    @Slot()
+    @Slot(result=bool)
     def deleteAllConversations(self):
         try:
+            from PySide6.QtWidgets import QMessageBox
+            ret = QMessageBox.question(
+                self._dialog, 
+                "Delete All Sessions", 
+                "Are you sure you want to delete ALL chat conversations? This cannot be undone.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                return False
+
             from network_manager.config import conn, db_lock
             with db_lock:
                 cur = conn.cursor()
@@ -476,8 +511,10 @@ Saved Configuration:
                 cur.close()
             self._dialog._current_conversation_id = None
             self.clearChat()
+            return True
         except Exception as e:
             print(f"Error deleting all conversations: {e}")
+            return False
 
     @Slot(str)
     def loadConversation(self, conversation_id):

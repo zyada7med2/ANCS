@@ -4810,36 +4810,36 @@
                         
                         if (selectedIds.length === 0) return;
 
-                        if (confirm(`Are you sure you want to delete the ${selectedIds.length} selected conversation(s)?`)) {
-                            window.bridge.deleteSelectedConversations(JSON.stringify(selectedIds));
-                            
-                            // Exit selection mode dynamically after successful deletion
-                            const tab = document.getElementById('settings-tab-history');
-                            if (tab && tab.classList.contains('selection-active')) {
-                                toggleSelectionMode();
-                            } else {
-                                const masterCheckbox = document.getElementById('history-select-all');
-                                if (masterCheckbox) masterCheckbox.checked = false;
-                            }
+                        window.bridge.deleteSelectedConversations(JSON.stringify(selectedIds), function(success) {
+                            if (success) {
+                                // Exit selection mode dynamically after successful deletion
+                                const tab = document.getElementById('settings-tab-history');
+                                if (tab && tab.classList.contains('selection-active')) {
+                                    toggleSelectionMode();
+                                } else {
+                                    const masterCheckbox = document.getElementById('history-select-all');
+                                    if (masterCheckbox) masterCheckbox.checked = false;
+                                }
 
-                            window.loadHistorySettings();
-                        }
+                                window.loadHistorySettings();
+                            }
+                        });
                     };
 
                     window.deleteAllHistory = function() {
                         if (!window.bridge || !window.bridge.deleteAllConversations) return;
 
-                        if (confirm("Are you sure you want to delete ALL chat conversations? This cannot be undone.")) {
-                            window.bridge.deleteAllConversations();
-                            
-                            // Exit selection mode dynamically after successful deletion
-                            const tab = document.getElementById('settings-tab-history');
-                            if (tab && tab.classList.contains('selection-active')) {
-                                toggleSelectionMode();
+                        window.bridge.deleteAllConversations(function(success) {
+                            if (success) {
+                                // Exit selection mode dynamically after successful deletion
+                                const tab = document.getElementById('settings-tab-history');
+                                if (tab && tab.classList.contains('selection-active')) {
+                                    toggleSelectionMode();
+                                }
+                                
+                                window.loadHistorySettings();
                             }
-                            
-                            window.loadHistorySettings();
-                        }
+                        });
                     };
 
                     // Helper to escape HTML tags inside history listing
@@ -4857,9 +4857,12 @@
                     };
 
                     window.deletePastConversation = function(id) {
-                        if (window.bridge && window.bridge.deleteConversation && confirm("Are you sure you want to delete this conversation?")) {
-                            window.bridge.deleteConversation(id);
-                            window.loadHistorySettings();
+                        if (window.bridge && window.bridge.deleteConversation) {
+                            window.bridge.deleteConversation(id, function(success) {
+                                if (success) {
+                                    window.loadHistorySettings();
+                                }
+                            });
                         }
                     };
 
