@@ -240,7 +240,7 @@ Saved Configuration:
         path, _ = QFileDialog.getSaveFileName(
             self._dialog, "Export Logs", "ancs_agent_logs.txt",
             "Text Files (*.txt);;All Files (*)",
-            options=QFileDialog.DontUseNativeDialog
+            options=QFileDialog.Option.DontUseNativeDialog
         )
         if not path:
             return
@@ -297,7 +297,7 @@ Saved Configuration:
         file_path, _ = QFileDialog.getOpenFileName(
             self._dialog, "Attach File to Copilot", "",
             "Supported Files (*.pdf *.png *.jpg *.jpeg *.webp);;PDF Files (*.pdf);;Images (*.png *.jpg *.jpeg *.webp);;All Files (*)",
-            options=QFileDialog.DontUseNativeDialog
+            options=QFileDialog.Option.DontUseNativeDialog
         )
         if not file_path:
             return
@@ -329,7 +329,7 @@ Saved Configuration:
         path, _ = QFileDialog.getSaveFileName(
             self._dialog, "Export Chat PDF", "ancs_chat_export.pdf",
             "PDF Files (*.pdf);;All Files (*)",
-            options=QFileDialog.DontUseNativeDialog
+            options=QFileDialog.Option.DontUseNativeDialog
         )
         if not path:
             return
