@@ -21,6 +21,8 @@
 | TASK-53 | Implementation | Overhaul HTML Markup structure of Tab 6 | Completed |
 | TASK-54 | Implementation | Complete JS Logic for Cards, Search, Rename & Preview | Completed |
 | TASK-55 | Implementation | Adapt Bulk & Single Actions Bindings | Completed |
+| TASK-56 | Verification | Remove inline HTML style to isolate settings tabs | Completed |
+| TASK-57 | Verification | Add preview-active JS toggling to prevent grid squishing | Completed |
 
 
 

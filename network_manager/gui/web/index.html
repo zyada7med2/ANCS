@@ -1736,20 +1736,27 @@
         .history-tab-layout {
             display: flex;
             gap: 16px;
-            height: 400px;
+            flex: 1;
+            min-height: 0;
             position: relative;
             overflow: hidden;
             width: 100%;
+            margin-bottom: 10px;
         }
 
         .history-card-grid {
             display: grid;
             grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
             gap: 12px;
-            max-height: 330px;
             overflow-y: auto;
             padding-right: 4px;
             flex: 1;
+            align-content: start;
+        }
+
+        /* Responsive transition: when preview is open, left column cards stack vertically */
+        .history-tab-layout.preview-active .history-card-grid {
+            grid-template-columns: 1fr;
         }
 
         .history-card {
@@ -1763,8 +1770,9 @@
             gap: 8px;
             transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
             cursor: pointer;
-            min-height: 110px;
+            min-height: 105px;
             box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+            box-sizing: border-box;
         }
 
         .history-card:hover {
@@ -1777,6 +1785,7 @@
         .history-card.selected-preview {
             border-color: var(--cyan);
             background: rgba(6, 182, 212, 0.04);
+            box-shadow: 0 0 10px rgba(6, 182, 212, 0.1);
         }
 
         .history-card-title {
@@ -1838,7 +1847,7 @@
             display: flex;
             flex-direction: column;
             border: 1px solid var(--border);
-            background: rgba(8, 12, 20, 0.85);
+            background: rgba(8, 12, 20, 0.95);
             backdrop-filter: blur(12px);
             border-radius: 8px;
             transition: width 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s;
@@ -1847,32 +1856,36 @@
         }
 
         .history-preview-pane.active {
-            width: 320px;
+            width: 280px;
             opacity: 1;
         }
 
         /* Preview chat thread bubbles */
         .preview-bubble {
-            margin-bottom: 8px;
-            padding: 8px 12px;
-            border-radius: 8px;
+            margin-bottom: 10px;
+            padding: 10px 12px;
+            border-radius: 12px;
             font-size: 11.5px;
             line-height: 1.5;
             max-width: 85%;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+            box-sizing: border-box;
         }
 
         .preview-bubble.user {
-            background: rgba(139, 92, 246, 0.1);
-            border: 1px solid rgba(139, 92, 246, 0.2);
-            color: #e9d5ff;
+            background: rgba(139, 92, 246, 0.12);
+            border: 1px solid rgba(139, 92, 246, 0.25);
+            color: #f3e8ff;
             align-self: flex-end;
+            border-bottom-right-radius: 2px;
         }
 
         .preview-bubble.ai {
             background: rgba(255, 255, 255, 0.03);
-            border: 1px solid rgba(255, 255, 255, 0.05);
+            border: 1px solid rgba(255, 255, 255, 0.06);
             color: var(--text-pri);
             align-self: flex-start;
+            border-bottom-left-radius: 2px;
         }
 
         .preview-bubble.system {
@@ -1883,6 +1896,7 @@
             max-width: 95%;
             font-style: italic;
             text-align: center;
+            border-radius: 6px;
         }
 
         /* Manual Add Nested Dialog */
@@ -2554,7 +2568,7 @@
                 </div>
 
                 <!-- TAB 6: CHAT HISTORY -->
-                <div class="settings-tab-content" id="settings-tab-history" style="display: flex; flex-direction: column; height: 100%;">
+                <div class="settings-tab-content" id="settings-tab-history">
                     <h3 class="settings-tab-title" style="margin-bottom: 12px;">Chat History</h3>
                     
                     <!-- Search & Filter bar -->
@@ -4571,6 +4585,11 @@
                         const container = document.getElementById('preview-messages-container');
                         
                         if (previewPane) previewPane.classList.add('active');
+                        
+                        // Dynamically add the preview-active class to trigger transition stacked styling
+                        const layout = document.querySelector('.history-tab-layout');
+                        if (layout) layout.classList.add('preview-active');
+                        
                         if (container) container.innerHTML = `<div style="color:var(--text-sec); font-size:11px; text-align:center; padding: 20px;">Loading messages...</div>`;
 
                         window.bridge.getConversationMessages(id, function(res) {
@@ -4614,6 +4633,10 @@
                         if (previewPane) previewPane.classList.remove('active');
                         currentPreviewId = null;
                         document.querySelectorAll('.history-card').forEach(c => c.classList.remove('selected-preview'));
+                        
+                        // Dynamically remove the preview-active class to restore standard card columns
+                        const layout = document.querySelector('.history-tab-layout');
+                        if (layout) layout.classList.remove('preview-active');
                     };
 
                     window.loadPreviewedConversation = function() {
