@@ -1752,10 +1752,19 @@
             flex: 1;
             min-width: 0; /* Allow the grid container to shrink inside the flex layout */
             align-content: start;
+        }        /* Selection Mode visibility toggles */
+        #settings-tab-history.selection-active #history-bulk-toolbar {
+            display: flex !important;
         }
 
+        #settings-tab-history.selection-active .history-row-checkbox {
+            display: inline-block !important;
+        }
 
-
+        /* Default state: hide checkboxes on cards by default */
+        .history-row-checkbox {
+            display: none !important;
+        }
         .history-card {
             position: relative;
             background: rgba(255, 255, 255, 0.02);
@@ -2572,7 +2581,10 @@
 
                 <!-- TAB 6: CHAT HISTORY -->
                 <div class="settings-tab-content" id="settings-tab-history">
-                    <h3 class="settings-tab-title" style="margin-bottom: 12px;">Chat History</h3>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.03); padding-bottom: 8px; flex-shrink: 0;">
+                        <h3 class="settings-tab-title" style="margin: 0; border-bottom: none; padding-bottom: 0;">Chat History</h3>
+                        <button id="btn-toggle-selection-mode" class="settings-btn secondary" style="padding: 4px 10px; font-size: 11px; width: auto; font-weight: 600;" onclick="toggleSelectionMode()">Select</button>
+                    </div>
                     
                     <!-- Search & Filter bar -->
                     <div class="search-container" style="position: relative; margin-bottom: 12px; width: 100%;">
@@ -2583,7 +2595,7 @@
                     </div>
 
                     <!-- Bulk Actions Toolbar -->
-                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px; gap: 10px; background: rgba(255,255,255,0.02); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); box-sizing: border-box;">
+                    <div id="history-bulk-toolbar" style="display:none; justify-content:space-between; align-items:center; margin-bottom: 12px; gap: 10px; background: rgba(255,255,255,0.02); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); box-sizing: border-box; flex-shrink: 0;">
                         <div style="display:flex; align-items:center; gap:8px;">
                             <input type="checkbox" id="history-select-all" onclick="toggleSelectAllHistory(this)" style="cursor:pointer; transform: scale(1.1); margin: 0; vertical-align: middle; accent-color: var(--cyan);">
                             <span style="font-size:12px; color:var(--text-sec); font-weight: 500;" id="history-selected-count">0 items selected</span>
@@ -4489,6 +4501,12 @@
                         const masterCheckbox = document.getElementById('history-select-all');
                         if (masterCheckbox) masterCheckbox.checked = false;
                         closeHistoryPreview();
+                        
+                        // Force exit selection mode for a clean start when opening tab
+                        const tab = document.getElementById('settings-tab-history');
+                        if (tab && tab.classList.contains('selection-active')) {
+                            toggleSelectionMode();
+                        }
 
                         window.bridge.getPastConversations(function(res) {
                             const conversations = JSON.parse(res);
@@ -4752,6 +4770,39 @@
                         }
                     };
 
+                    window.toggleSelectionMode = function() {
+                        const tab = document.getElementById('settings-tab-history');
+                        if (!tab) return;
+                        
+                        const isActive = tab.classList.contains('selection-active');
+                        const toggleBtn = document.getElementById('btn-toggle-selection-mode');
+                        
+                        if (isActive) {
+                            // Deactivate Selection Mode
+                            tab.classList.remove('selection-active');
+                            if (toggleBtn) {
+                                toggleBtn.innerText = 'Select';
+                                toggleBtn.classList.remove('active');
+                            }
+                            
+                            // Reset all checkboxes & count
+                            const checkboxes = document.querySelectorAll('.history-row-checkbox');
+                            checkboxes.forEach(cb => cb.checked = false);
+                            
+                            const masterCheckbox = document.getElementById('history-select-all');
+                            if (masterCheckbox) masterCheckbox.checked = false;
+                            
+                            window.updateHistoryBulkBtnState();
+                        } else {
+                            // Activate Selection Mode
+                            tab.classList.add('selection-active');
+                            if (toggleBtn) {
+                                toggleBtn.innerText = 'Cancel';
+                                toggleBtn.classList.add('active');
+                            }
+                        }
+                    };
+
                     window.deleteSelectedHistory = function() {
                         if (!window.bridge || !window.bridge.deleteSelectedConversations) return;
                         const checkboxes = document.querySelectorAll('.history-row-checkbox');
@@ -4762,9 +4813,14 @@
                         if (confirm(`Are you sure you want to delete the ${selectedIds.length} selected conversation(s)?`)) {
                             window.bridge.deleteSelectedConversations(JSON.stringify(selectedIds));
                             
-                            // Reset select-all state
-                            const masterCheckbox = document.getElementById('history-select-all');
-                            if (masterCheckbox) masterCheckbox.checked = false;
+                            // Exit selection mode dynamically after successful deletion
+                            const tab = document.getElementById('settings-tab-history');
+                            if (tab && tab.classList.contains('selection-active')) {
+                                toggleSelectionMode();
+                            } else {
+                                const masterCheckbox = document.getElementById('history-select-all');
+                                if (masterCheckbox) masterCheckbox.checked = false;
+                            }
 
                             window.loadHistorySettings();
                         }
@@ -4775,6 +4831,13 @@
 
                         if (confirm("Are you sure you want to delete ALL chat conversations? This cannot be undone.")) {
                             window.bridge.deleteAllConversations();
+                            
+                            // Exit selection mode dynamically after successful deletion
+                            const tab = document.getElementById('settings-tab-history');
+                            if (tab && tab.classList.contains('selection-active')) {
+                                toggleSelectionMode();
+                            }
+                            
                             window.loadHistorySettings();
                         }
                     };
