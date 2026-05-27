@@ -155,6 +155,8 @@ class ANCSAgentDialog(QDialog):
         self._waiting_for_reply = False
         self._log_line_keys: set[str] = set()
         self._current_thoughts = []
+        self._current_conversation_id = None
+        self._current_mode = "chat"
 
         # Ensure chat data storage exists on parent app
         if not hasattr(self.app, "_copilot_chat_data"):
@@ -428,6 +430,7 @@ class ANCSAgentDialog(QDialog):
             provider=provider,
             model_name=model_name,
             initial_messages=self.app._copilot_history,
+            mode=getattr(self, '_current_mode', 'chat')
         )
         self._connect_worker_signals()
         self.app._copilot_worker.start()
@@ -571,6 +574,19 @@ class ANCSAgentDialog(QDialog):
         ts = datetime.now().strftime("%I:%M %p")
         self._bridge.addChatMessage.emit("agent", html, ts)
         self._bridge.setThinking.emit(False, "")
+
+        # Store for database persistence
+        if getattr(self, '_current_conversation_id', None):
+            try:
+                from network_manager.config import conn, db_lock
+                with db_lock:
+                    cur = conn.cursor()
+                    cur.execute("INSERT INTO chat_messages (conversation_id, sender, text, thoughts) VALUES (?, ?, ?, ?)",
+                                (self._current_conversation_id, "agent", text, json.dumps(list(self._current_thoughts))))
+                    conn.commit()
+                    cur.close()
+            except Exception as e:
+                print(f"Error saving AI response: {e}")
 
         # Store for persistence
         self.app._copilot_chat_data.append({
