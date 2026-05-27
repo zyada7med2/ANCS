@@ -148,6 +148,7 @@ class ANCSAgentDialog(QDialog):
         self.setMinimumSize(900, 600)
         self.resize(1100, 780)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+        self.setAcceptDrops(True)
         self._drag_pos = None
         self._is_maximized = False
         self._closing_for_app = False
@@ -171,6 +172,7 @@ class ANCSAgentDialog(QDialog):
 
         # ── Build the QWebEngineView ─────────────────────────────────
         self._web = QWebEngineView()
+        self._web.setAcceptDrops(False)
         page = ANCSWebEnginePage(self._web)
         self._web.setPage(page)
         page.setWebChannel(self._channel)
@@ -224,6 +226,27 @@ class ANCSAgentDialog(QDialog):
         self._restore_state()
         self._refresh_device_chips()
         self._replay_chat_history()
+
+    # ──────────────────────────────────────────────────────────────────
+    # DRAG & DROP SUPPORT
+    # ──────────────────────────────────────────────────────────────────
+    def dragEnterEvent(self, event):
+        """Accept drop proposal if it contains local file links."""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        """Handle dropped files by attaching the first valid file to the chat."""
+        import os
+        for url in event.mimeData().urls():
+            file_path = url.toLocalFile()
+            if os.path.isfile(file_path):
+                self._active_attachment = file_path
+                filename = os.path.basename(file_path)
+                # Emit signal through bridge to draw pill in HTML input box
+                self._bridge.fileAttached.emit(filename, file_path)
+                event.acceptProposedAction()
+                break
 
     def _render_thought_html(self, thoughts):
         """Build HTML string for the collapsible thinking process card."""
@@ -430,7 +453,8 @@ class ANCSAgentDialog(QDialog):
             provider=provider,
             model_name=model_name,
             initial_messages=self.app._copilot_history,
-            mode=getattr(self, '_current_mode', 'chat')
+            mode=getattr(self, '_current_mode', 'chat'),
+            app=self.app
         )
         self._connect_worker_signals()
         self.app._copilot_worker.start()

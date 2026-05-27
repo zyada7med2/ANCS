@@ -785,6 +785,7 @@ class App(QMainWindow):
         self._last_gns3_url = self._load_gns3_url()
         self._send_in_progress = False
         self.right_sidebar_visible = True
+        self._project_sync_triggered = False
         self._main_thread_call.connect(self._execute_main_thread_call)
 
         # Purge leftover database devices, configs, and credentials on startup
@@ -4391,7 +4392,9 @@ class App(QMainWindow):
             self.refresh_device_list()
             self.log(f"Auto-imported {imported} GNS3 node(s) from '{proj_name}'")
             # Automatically open the Project Setup when new devices are discovered
-            self.run_project_sync()
+            if not getattr(self, "_project_sync_triggered", False):
+                self._project_sync_triggered = True
+                self.run_project_sync()
         self._set_gns3_status("\u2713 Connected", connected=True, project_name=proj_name or "Unknown project")
 
     def gns3_list_projects(self):

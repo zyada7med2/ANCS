@@ -3860,7 +3860,8 @@ class CopilotWorker(QThread):
                  provider: str = "openrouter",
                  model_name: str = "openai/gpt-4o-mini",
                  initial_messages: list | None = None,
-                 mode: str = "chat"):
+                 mode: str = "chat",
+                 app=None):
         super().__init__()
         self.api_key = api_key
         self.gns3_url = gns3_url
@@ -3871,6 +3872,7 @@ class CopilotWorker(QThread):
         self.provider = provider
         self.model_name = model_name
         self.mode = mode
+        self.app = app
         self._loop = None
         self._chat = None
         self._client = None
@@ -4101,6 +4103,11 @@ class CopilotWorker(QThread):
         """
         import asyncio
 
+        # Check if the pool was already established once before in this app session
+        pool_already_established = False
+        if hasattr(self, "app") and self.app is not None:
+            pool_already_established = getattr(self.app, "_session_pool_established", False)
+
         device_idx = 0
         for ep in self.workspace_resolved:
             name = ep.get("device_name") or ""
@@ -4133,7 +4140,7 @@ class CopilotWorker(QThread):
                     del ctx.sessions[name]
 
             # ── Stagger: let GNS3 breathe between connections ──────────
-            if device_idx > 0:
+            if device_idx > 0 and not pool_already_established:
                 stagger = 1.5
                 self.terminal_log_signal.emit(
                     f"<span style='color:#8b949e'>[Copilot] Waiting {stagger}s before next device...</span>\n"
@@ -4146,7 +4153,7 @@ class CopilotWorker(QThread):
                     f"<span style='color:#8b949e'>[Copilot] Pool session: {name} ({host}:{port})...</span>\n"
                 )
                 reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(host, port), timeout=10
+                    asyncio.open_connection(host, port), timeout=5 if pool_already_established else 10
                 )
             except Exception as e:
                 self.terminal_log_signal.emit(
@@ -4180,6 +4187,25 @@ class CopilotWorker(QThread):
 
             def _wake_log(msg: str):
                 self.terminal_log_signal.emit(f"<span style='color: #8b949e'>{msg}</span>\n")
+
+            # Fast reconnect path if the pool was already awake once
+            if pool_already_established:
+                try:
+                    writer.write("terminal length 0\r\n")
+                    await asyncio.sleep(0.1)
+                    try:
+                        await asyncio.wait_for(reader.read(4096), timeout=0.2)
+                    except asyncio.TimeoutError:
+                        pass
+                    ctx.sessions[name] = (reader, writer)
+                    self.terminal_log_signal.emit(
+                        f"<span style='color: #3fb950'>[Copilot] Pool ✓ {name} (session verified)</span>\n"
+                    )
+                except Exception as e:
+                    self.terminal_log_signal.emit(
+                        f"<span style='color:#d73a49'>[Copilot] Pool reconnect {name} failed: {e}</span>\n"
+                    )
+                continue
 
             initial = ""
             try:
@@ -4709,6 +4735,8 @@ class CopilotWorker(QThread):
             self.terminal_log_signal.emit(
                 f"<span style='color: #3fb950'>[Copilot] Session pool ready: {pool_count} device(s) connected</span>\n"
             )
+            if pool_count > 0 and hasattr(self, "app") and self.app is not None:
+                self.app._session_pool_established = True
 
             # 3. Init AI Client
             if self.provider in ("gemini", "vertex"):
