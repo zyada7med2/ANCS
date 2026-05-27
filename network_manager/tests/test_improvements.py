@@ -362,6 +362,21 @@ test("Exponential backoff", "2 ** (_retry + 1)" in source)
 
 
 # ==============================================================
+# TEST 13: Chat History Bridge Slots
+# ==============================================================
+print("\n" + "="*60)
+print("TEST 13: Chat History Bridge Slots")
+print("="*60)
+
+with open(os.path.join(PROJECT_ROOT, "network_manager/gui/agent_bridge.py"), encoding="utf-8") as f:
+    bridge_src = f.read()
+
+test("getConversationMessages defined", "def getConversationMessages(" in bridge_src)
+test("renameConversation defined", "def renameConversation(" in bridge_src)
+test("Enriched getPastConversations search", "message_count" in bridge_src and "enriched_list" in bridge_src)
+
+
+# ==============================================================
 # RESULTS
 # ==============================================================
 print("\n" + "="*60)

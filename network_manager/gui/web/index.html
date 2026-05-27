@@ -1732,6 +1732,159 @@
             border-bottom: none;
         }
 
+        /* Upgraded Chat History Card Grid & Preview Layout */
+        .history-tab-layout {
+            display: flex;
+            gap: 16px;
+            height: 400px;
+            position: relative;
+            overflow: hidden;
+            width: 100%;
+        }
+
+        .history-card-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+            gap: 12px;
+            max-height: 330px;
+            overflow-y: auto;
+            padding-right: 4px;
+            flex: 1;
+        }
+
+        .history-card {
+            position: relative;
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            transition: all 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+            cursor: pointer;
+            min-height: 110px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+
+        .history-card:hover {
+            background: rgba(255, 255, 255, 0.05);
+            border-color: var(--cyan);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(6, 182, 212, 0.12);
+        }
+
+        .history-card.selected-preview {
+            border-color: var(--cyan);
+            background: rgba(6, 182, 212, 0.04);
+        }
+
+        .history-card-title {
+            font-weight: 600;
+            font-size: 13px;
+            color: var(--text-pri);
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            overflow: hidden;
+            line-height: 1.4;
+            transition: color 0.2s;
+        }
+
+        .history-card-title:hover {
+            color: var(--cyan);
+        }
+
+        .device-pill {
+            font-size: 9px;
+            font-weight: 600;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: rgba(6, 182, 212, 0.08);
+            border: 1px solid rgba(6, 182, 212, 0.2);
+            color: var(--cyan);
+            display: inline-flex;
+            align-items: center;
+            gap: 2px;
+        }
+
+        .history-icon-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-sec);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s;
+        }
+
+        .history-icon-btn:hover {
+            background: rgba(255,255,255,0.06);
+            color: var(--text-pri);
+        }
+
+        .history-icon-btn.delete:hover {
+            background: rgba(239, 68, 68, 0.12);
+            color: #EF4444;
+        }
+
+        /* Slide-in Preview Drawer */
+        .history-preview-pane {
+            width: 0px;
+            opacity: 0;
+            display: flex;
+            flex-direction: column;
+            border: 1px solid var(--border);
+            background: rgba(8, 12, 20, 0.85);
+            backdrop-filter: blur(12px);
+            border-radius: 8px;
+            transition: width 0.35s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.3s;
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        .history-preview-pane.active {
+            width: 320px;
+            opacity: 1;
+        }
+
+        /* Preview chat thread bubbles */
+        .preview-bubble {
+            margin-bottom: 8px;
+            padding: 8px 12px;
+            border-radius: 8px;
+            font-size: 11.5px;
+            line-height: 1.5;
+            max-width: 85%;
+        }
+
+        .preview-bubble.user {
+            background: rgba(139, 92, 246, 0.1);
+            border: 1px solid rgba(139, 92, 246, 0.2);
+            color: #e9d5ff;
+            align-self: flex-end;
+        }
+
+        .preview-bubble.ai {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.05);
+            color: var(--text-pri);
+            align-self: flex-start;
+        }
+
+        .preview-bubble.system {
+            background: rgba(239, 68, 68, 0.04);
+            border: 1px solid rgba(239, 68, 68, 0.1);
+            color: #fca5a5;
+            align-self: center;
+            max-width: 95%;
+            font-style: italic;
+            text-align: center;
+        }
+
         /* Manual Add Nested Dialog */
         .add-device-dialog {
             width: 420px;
@@ -2401,23 +2554,58 @@
                 </div>
 
                 <!-- TAB 6: CHAT HISTORY -->
-                <div class="settings-tab-content" id="settings-tab-history">
-                    <h3 class="settings-tab-title">Chat History</h3>
-                    <div class="device-table-card" style="max-height: 400px; flex: 1; overflow-y: auto; margin-bottom: 20px;">
-                        <table class="device-table">
-                            <thead>
-                                <tr>
-                                    <th>Conversation</th>
-                                    <th>Created At</th>
-                                    <th style="width: 150px; text-align: center;">Actions</th>
-                                </tr>
-                            </thead>
-                            <tbody id="settings-history-tbody">
-                                <!-- Populated dynamically -->
-                            </tbody>
-                        </table>
+                <div class="settings-tab-content" id="settings-tab-history" style="display: flex; flex-direction: column; height: 100%;">
+                    <h3 class="settings-tab-title" style="margin-bottom: 12px;">Chat History</h3>
+                    
+                    <!-- Search & Filter bar -->
+                    <div class="search-container" style="position: relative; margin-bottom: 12px; width: 100%;">
+                        <span style="position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-sec); display: flex; align-items: center;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"></circle><line x1="21" y1="21" x2="16.65" y2="16.65"></line></svg>
+                        </span>
+                        <input type="text" id="history-search" placeholder="Search conversations by title or @device mentions..." oninput="filterHistory()" style="width: 100%; box-sizing: border-box; padding: 8px 12px 8px 32px; background: rgba(0,0,0,0.25); border: 1px solid var(--border); border-radius: 6px; color: var(--text-pri); font-size: 12.5px; outline: none; transition: border-color 0.2s;">
                     </div>
-                    <div class="settings-actions">
+
+                    <!-- Bulk Actions Toolbar -->
+                    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 12px; gap: 10px; background: rgba(255,255,255,0.02); padding: 6px 12px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.05); box-sizing: border-box;">
+                        <div style="display:flex; align-items:center; gap:8px;">
+                            <input type="checkbox" id="history-select-all" onclick="toggleSelectAllHistory(this)" style="cursor:pointer; transform: scale(1.1); margin: 0; vertical-align: middle; accent-color: var(--cyan);">
+                            <span style="font-size:12px; color:var(--text-sec); font-weight: 500;" id="history-selected-count">0 items selected</span>
+                        </div>
+                        <div style="display:flex; gap: 8px;">
+                            <button id="btn-delete-selected" class="settings-btn secondary" style="padding: 4px 10px; font-size:11px; color:#EF4444; border-color:rgba(239, 68, 68, 0.2); display: inline-block; width: auto; opacity: 0.5; cursor: not-allowed; font-weight: bold;" onclick="deleteSelectedHistory()" disabled>Delete Selected</button>
+                            <button id="btn-delete-all" class="settings-btn secondary" style="padding: 4px 10px; font-size:11px; color:#EF4444; border-color:rgba(239, 68, 68, 0.4); display: inline-block; width: auto; font-weight: bold;" onclick="deleteAllHistory()">Delete All</button>
+                        </div>
+                    </div>
+
+                    <!-- Two-Column Workspace Layout -->
+                    <div class="history-tab-layout">
+                        <!-- Left Pane: Grid of Cards -->
+                        <div id="history-card-grid-container" class="history-card-grid">
+                            <!-- Populated dynamically with history cards -->
+                        </div>
+
+                        <!-- Right Pane: Slide-in dynamic preview drawer -->
+                        <div id="history-preview-pane" class="history-preview-pane">
+                            <div style="padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.25); flex-shrink: 0;">
+                                <span style="font-size: 10px; font-weight: bold; text-transform: uppercase; color: var(--cyan); letter-spacing: 0.5px;">Quick Preview</span>
+                                <button class="history-icon-btn" onclick="closeHistoryPreview()" style="padding: 2px 4px; font-size: 11px; color: var(--text-sec);">✕ Close</button>
+                            </div>
+                            <!-- Preview Details -->
+                            <div style="padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.03); background: rgba(255,255,255,0.01); flex-shrink: 0;">
+                                <h4 id="preview-session-title" style="margin: 0 0 4px 0; font-size: 12.5px; font-weight: 600; color: var(--text-pri); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Chat Session</h4>
+                                <span id="preview-session-date" style="font-size: 9.5px; color: var(--text-sec);">Created At</span>
+                            </div>
+                            <!-- Preview Messages List -->
+                            <div id="preview-messages-container" style="flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; background: rgba(0,0,0,0.15); min-height: 0;">
+                                <!-- Bubbles populated dynamically -->
+                            </div>
+                            <div style="padding: 8px 12px; border-top: 1px solid var(--border); background: rgba(0,0,0,0.25); display: flex; justify-content: flex-end; flex-shrink: 0;">
+                                <button id="btn-load-previewed" class="settings-btn primary" style="padding: 4px 10px; font-size: 11px; width: auto;" onclick="loadPreviewedConversation()">Load Full Chat</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="settings-actions" style="margin-top: auto; padding-top: 15px;">
                         <button class="settings-btn secondary" onclick="toggleSettingsModal()">Close</button>
                     </div>
                 </div>
@@ -4272,32 +4460,290 @@
                         }
                     };
 
+                    let currentPreviewId = null;
+
                     window.loadHistorySettings = function() {
                         if (!window.bridge || !window.bridge.getPastConversations) return;
-                        const tbody = document.getElementById('settings-history-tbody');
-                        if (!tbody) return;
+                        const container = document.getElementById('history-card-grid-container');
+                        if (!container) return;
+
+                        // Reset select-all checkbox & close preview
+                        const masterCheckbox = document.getElementById('history-select-all');
+                        if (masterCheckbox) masterCheckbox.checked = false;
+                        closeHistoryPreview();
 
                         window.bridge.getPastConversations(function(res) {
                             const conversations = JSON.parse(res);
                             if (conversations.length === 0) {
-                                tbody.innerHTML = `<tr><td colspan="3" style="text-align:center; color:var(--text-sec); padding: 15px;">No saved chat history.</td></tr>`;
+                                container.innerHTML = `<div style="grid-column: 1/-1; text-align:center; color:var(--text-sec); padding: 35px 20px; font-size: 13px; background: rgba(255,255,255,0.01); border: 1px dashed var(--border); border-radius: 8px; box-sizing: border-box;">No saved chat history found. Start chatting to save sessions!</div>`;
+                                window.updateHistoryBulkBtnState();
                                 return;
                             }
                             let html = '';
                             conversations.forEach(c => {
+                                const devicePills = c.devices && c.devices.length > 0 
+                                    ? `<div style="display:flex; flex-wrap:wrap; gap:4px; margin-top:2px;">` + c.devices.map(dev => `<span class="device-pill">@${_escapeHtml(dev)}</span>`).join('') + `</div>`
+                                    : '';
+                                
                                 html += `
-                                    <tr>
-                                        <td style="padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05);"><strong>${_escapeHtml(c.title)}</strong></td>
-                                        <td style="color:var(--text-sec); padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05);">${c.created_at}</td>
-                                        <td style="text-align:center; padding: 10px; border-bottom: 1px solid rgba(255,255,255,0.05);">
-                                            <button class="settings-btn primary" style="padding: 4px 10px; font-size:11px; margin-right: 6px; display: inline-block; width: auto;" onclick="loadPastConversation('${c.id}')">Load</button>
-                                            <button class="settings-btn secondary" style="padding: 4px 10px; font-size:11px; color:#EF4444; border-color:rgba(239, 68, 68, 0.2); display: inline-block; width: auto;" onclick="deletePastConversation('${c.id}')">Delete</button>
-                                        </td>
-                                    </tr>
+                                    <div class="history-card" id="history-card-${c.id}" data-id="${c.id}" data-title="${_escapeHtml(c.title)}" data-devices="${_escapeHtml((c.devices || []).join(','))}" onclick="previewPastConversation('${c.id}')">
+                                        <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 2px;">
+                                            <input type="checkbox" class="history-row-checkbox" data-id="${c.id}" onclick="event.stopPropagation(); updateHistoryBulkBtnState();" style="cursor:pointer; transform: scale(1.1); margin: 0; vertical-align: middle; accent-color: var(--cyan);">
+                                            
+                                            <div style="display:flex; gap:2px; margin-top: -4px; margin-right: -4px;">
+                                                <button class="history-icon-btn" onclick="event.stopPropagation(); startRenameHistory('${c.id}')" title="Rename Session">
+                                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 1 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg>
+                                                </button>
+                                                <button class="history-icon-btn" onclick="event.stopPropagation(); previewPastConversation('${c.id}')" title="Quick Preview">
+                                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path><circle cx="12" cy="12" r="3"></circle></svg>
+                                                </button>
+                                                <button class="history-icon-btn delete" onclick="event.stopPropagation(); deletePastConversation('${c.id}')" title="Delete Session">
+                                                    <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path><line x1="10" y1="11" x2="10" y2="17"></line><line x1="14" y1="11" x2="14" y2="17"></line></svg>
+                                                </button>
+                                            </div>
+                                        </div>
+
+                                        <div id="title-wrapper-${c.id}" style="margin: 2px 0;">
+                                            <span class="history-card-title">${_escapeHtml(c.title)}</span>
+                                        </div>
+
+                                        ${devicePills}
+
+                                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:10px; color:var(--text-sec); margin-top:auto; border-top: 1px solid rgba(255,255,255,0.03); padding-top: 6px;">
+                                            <span style="display:flex; align-items:center; gap:4px;">
+                                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                                                ${c.message_count || 0} messages
+                                            </span>
+                                            <span>
+                                                ${c.created_at ? c.created_at.split(' ')[0] : 'N/A'}
+                                            </span>
+                                        </div>
+                                    </div>
                                 `;
                             });
-                            tbody.innerHTML = html;
+                            container.innerHTML = html;
+                            window.updateHistoryBulkBtnState();
+                            
+                            // Clear search input on reload
+                            const searchInput = document.getElementById('history-search');
+                            if (searchInput) searchInput.value = '';
                         });
+                    };
+
+                    window.filterHistory = function() {
+                        const query = document.getElementById('history-search').value.toLowerCase().trim();
+                        const cards = document.querySelectorAll('.history-card');
+                        
+                        cards.forEach(card => {
+                            const title = card.getAttribute('data-title').toLowerCase();
+                            const devices = card.getAttribute('data-devices').toLowerCase();
+                            
+                            if (title.includes(query) || devices.includes(query) || query === '') {
+                                card.style.display = 'flex';
+                            } else {
+                                card.style.display = 'none';
+                            }
+                        });
+                    };
+
+                    window.previewPastConversation = function(id) {
+                        if (!window.bridge || !window.bridge.getConversationMessages) return;
+
+                        // Toggle active style on cards
+                        document.querySelectorAll('.history-card').forEach(c => {
+                            if (c.getAttribute('data-id') === id) {
+                                c.classList.add('selected-preview');
+                            } else {
+                                c.classList.remove('selected-preview');
+                            }
+                        });
+
+                        currentPreviewId = id;
+
+                        const card = document.getElementById(`history-card-${id}`);
+                        const title = card ? card.getAttribute('data-title') : 'Chat Session';
+                        
+                        // Set Title & Date
+                        document.getElementById('preview-session-title').innerText = title;
+                        document.getElementById('preview-session-title').title = title;
+                        
+                        const previewPane = document.getElementById('history-preview-pane');
+                        const container = document.getElementById('preview-messages-container');
+                        
+                        if (previewPane) previewPane.classList.add('active');
+                        if (container) container.innerHTML = `<div style="color:var(--text-sec); font-size:11px; text-align:center; padding: 20px;">Loading messages...</div>`;
+
+                        window.bridge.getConversationMessages(id, function(res) {
+                            const messages = JSON.parse(res);
+                            if (messages.length === 0) {
+                                container.innerHTML = `<div style="color:var(--text-sec); font-size:11px; text-align:center; padding: 20px;">No messages in this conversation.</div>`;
+                                return;
+                            }
+                            
+                            let html = '';
+                            messages.forEach(m => {
+                                const senderName = m.sender === 'user' ? 'You' : m.sender === 'agent' ? 'Copilot' : 'System';
+                                const bubbleClass = m.sender === 'user' ? 'user' : m.sender === 'agent' ? 'ai' : 'system';
+                                
+                                // Parse thoughts if any
+                                let thoughtsHtml = '';
+                                if (m.thoughts && m.thoughts.length > 0) {
+                                    thoughtsHtml = `
+                                        <details style="margin-top: 4px; font-size: 10px; color: var(--cyan); background: rgba(6,182,212,0.03); border: 1px solid rgba(6,182,212,0.1); border-radius: 4px; padding: 4px 6px;">
+                                            <summary style="cursor:pointer; font-weight:600;">Show reasoning (${m.thoughts.length} steps)</summary>
+                                            <div style="margin-top: 4px; white-space: pre-wrap; font-family: monospace; max-height: 80px; overflow-y:auto; line-height:1.4;">${_escapeHtml(m.thoughts.join('\n'))}</div>
+                                        </details>
+                                    `;
+                                }
+
+                                html += `
+                                    <div class="preview-bubble ${bubbleClass}">
+                                        <strong style="font-size: 10px; opacity: 0.8; display: block; margin-bottom: 2px;">${senderName}</strong>
+                                        <div style="white-space: pre-wrap;">${_escapeHtml(m.text)}</div>
+                                        ${thoughtsHtml}
+                                    </div>
+                                `;
+                            });
+                            container.innerHTML = html;
+                            container.scrollTop = container.scrollHeight;
+                        });
+                    };
+
+                    window.closeHistoryPreview = function() {
+                        const previewPane = document.getElementById('history-preview-pane');
+                        if (previewPane) previewPane.classList.remove('active');
+                        currentPreviewId = null;
+                        document.querySelectorAll('.history-card').forEach(c => c.classList.remove('selected-preview'));
+                    };
+
+                    window.loadPreviewedConversation = function() {
+                        if (currentPreviewId) {
+                            window.loadPastConversation(currentPreviewId);
+                        }
+                    };
+
+                    window.startRenameHistory = function(id) {
+                        const card = document.getElementById(`history-card-${id}`);
+                        if (!card) return;
+                        
+                        const title = card.getAttribute('data-title');
+                        const wrapper = document.getElementById(`title-wrapper-${id}`);
+                        if (!wrapper) return;
+
+                        // Replace card title HTML inline
+                        wrapper.innerHTML = `
+                            <div style="display: flex; gap: 4px; width: 100%; margin: 2px 0;" onclick="event.stopPropagation()">
+                                <input type="text" id="rename-input-${id}" value="${_escapeHtml(title)}" style="flex:1; font-size:12px; padding: 3px 6px; background: rgba(0,0,0,0.5); border: 1px solid var(--border); border-radius: 4px; color: white; outline: none; font-weight: normal;" onkeydown="if(event.key==='Enter') saveRenameHistory('${id}'); if(event.key==='Escape') cancelRenameHistory('${id}', '${_escapeHtml(title)}');">
+                                <button onclick="event.stopPropagation(); saveRenameHistory('${id}')" style="background: var(--cyan); border: none; border-radius: 4px; color: black; padding: 2px 6px; cursor: pointer; font-size: 10.5px; font-weight:bold;">Save</button>
+                                <button onclick="event.stopPropagation(); cancelRenameHistory('${id}', '${_escapeHtml(title)}')" style="background: rgba(255,255,255,0.1); border: none; border-radius: 4px; color: white; padding: 2px 6px; cursor: pointer; font-size: 10.5px;">✕</button>
+                            </div>
+                        `;
+                        const input = document.getElementById(`rename-input-${id}`);
+                        if (input) {
+                            input.focus();
+                            input.select();
+                        }
+                    };
+
+                    window.saveRenameHistory = function(id) {
+                        const input = document.getElementById(`rename-input-${id}`);
+                        if (!input || !window.bridge || !window.bridge.renameConversation) return;
+
+                        const newTitle = input.value.trim();
+                        if (!newTitle) return;
+
+                        window.bridge.renameConversation(id, newTitle);
+                        
+                        // Update attribute and reload card inline
+                        const card = document.getElementById(`history-card-${id}`);
+                        if (card) {
+                            card.setAttribute('data-title', newTitle);
+                        }
+                        
+                        const wrapper = document.getElementById(`title-wrapper-${id}`);
+                        if (wrapper) {
+                            wrapper.innerHTML = `<span class="history-card-title">${_escapeHtml(newTitle)}</span>`;
+                        }
+
+                        // Sync preview panel title
+                        if (currentPreviewId === id) {
+                            const previewTitle = document.getElementById('preview-session-title');
+                            if (previewTitle) {
+                                previewTitle.innerText = newTitle;
+                                previewTitle.title = newTitle;
+                            }
+                        }
+                    };
+
+                    window.cancelRenameHistory = function(id, originalTitle) {
+                        const wrapper = document.getElementById(`title-wrapper-${id}`);
+                        if (wrapper) {
+                            wrapper.innerHTML = `<span class="history-card-title">${_escapeHtml(originalTitle)}</span>`;
+                        }
+                    };
+
+                    window.toggleSelectAllHistory = function(masterCheckbox) {
+                        const checkboxes = document.querySelectorAll('.history-row-checkbox');
+                        checkboxes.forEach(cb => {
+                            cb.checked = masterCheckbox.checked;
+                        });
+                        window.updateHistoryBulkBtnState();
+                    };
+
+                    window.updateHistoryBulkBtnState = function() {
+                        const checkboxes = document.querySelectorAll('.history-row-checkbox');
+                        const checkedCount = Array.from(checkboxes).filter(cb => cb.checked).length;
+                        const btnDeleteSelected = document.getElementById('btn-delete-selected');
+                        const countSpan = document.getElementById('history-selected-count');
+
+                        if (countSpan) {
+                            countSpan.innerText = `${checkedCount} items selected`;
+                        }
+
+                        if (btnDeleteSelected) {
+                            if (checkedCount > 0) {
+                                btnDeleteSelected.style.opacity = '1';
+                                btnDeleteSelected.style.cursor = 'pointer';
+                                btnDeleteSelected.disabled = false;
+                            } else {
+                                btnDeleteSelected.style.opacity = '0.5';
+                                btnDeleteSelected.style.cursor = 'not-allowed';
+                                btnDeleteSelected.disabled = true;
+                            }
+                        }
+
+                        // Sync master checkbox
+                        const masterCheckbox = document.getElementById('history-select-all');
+                        if (masterCheckbox && checkboxes.length > 0) {
+                            masterCheckbox.checked = (checkedCount === checkboxes.length);
+                        }
+                    };
+
+                    window.deleteSelectedHistory = function() {
+                        if (!window.bridge || !window.bridge.deleteSelectedConversations) return;
+                        const checkboxes = document.querySelectorAll('.history-row-checkbox');
+                        const selectedIds = Array.from(checkboxes).filter(cb => cb.checked).map(cb => cb.getAttribute('data-id'));
+                        
+                        if (selectedIds.length === 0) return;
+
+                        if (confirm(`Are you sure you want to delete the ${selectedIds.length} selected conversation(s)?`)) {
+                            window.bridge.deleteSelectedConversations(JSON.stringify(selectedIds));
+                            
+                            // Reset select-all state
+                            const masterCheckbox = document.getElementById('history-select-all');
+                            if (masterCheckbox) masterCheckbox.checked = false;
+
+                            window.loadHistorySettings();
+                        }
+                    };
+
+                    window.deleteAllHistory = function() {
+                        if (!window.bridge || !window.bridge.deleteAllConversations) return;
+
+                        if (confirm("Are you sure you want to delete ALL chat conversations? This cannot be undone.")) {
+                            window.bridge.deleteAllConversations();
+                            window.loadHistorySettings();
+                        }
                     };
 
                     // Helper to escape HTML tags inside history listing

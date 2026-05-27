@@ -351,14 +351,84 @@ Saved Configuration:
     def getPastConversations(self):
         try:
             from network_manager.config import conn, db_lock
+            import re
             with db_lock:
                 cur = conn.cursor()
                 cur.execute("SELECT conversation_id, title, created_at FROM chat_conversations ORDER BY created_at DESC")
+                conversations = cur.fetchall()
+                
+                enriched_list = []
+                for conv_id, title, created_at in conversations:
+                    # Message count
+                    cur.execute("SELECT COUNT(*) FROM chat_messages WHERE conversation_id = ?", (conv_id,))
+                    msg_count = cur.fetchone()[0]
+                    
+                    # Gather unique device mentions
+                    cur.execute("SELECT text FROM chat_messages WHERE conversation_id = ?", (conv_id,))
+                    messages = cur.fetchall()
+                    unique_mentions = set()
+                    for (text,) in messages:
+                        if text:
+                            mentions = re.findall(r'@(\w+)', text)
+                            for m in mentions:
+                                unique_mentions.add(m)
+                    
+                    enriched_list.append({
+                        "id": conv_id,
+                        "title": title,
+                        "created_at": created_at,
+                        "message_count": msg_count,
+                        "devices": sorted(list(unique_mentions))
+                    })
+                cur.close()
+            return json.dumps(enriched_list)
+        except Exception as e:
+            print(f"Error in getPastConversations: {e}")
+            return json.dumps([])
+
+    @Slot(str, result=str)
+    def getConversationMessages(self, conversation_id):
+        try:
+            from network_manager.config import conn, db_lock
+            with db_lock:
+                cur = conn.cursor()
+                cur.execute("SELECT sender, text, thoughts, created_at FROM chat_messages WHERE conversation_id = ? ORDER BY id ASC", (conversation_id,))
                 rows = cur.fetchall()
                 cur.close()
-            return json.dumps([{"id": r[0], "title": r[1], "created_at": r[2]} for r in rows])
+            
+            messages_list = []
+            for sender, text, thoughts_json, created_at in rows:
+                thoughts = []
+                if thoughts_json:
+                    try:
+                        thoughts = json.loads(thoughts_json)
+                    except Exception:
+                        pass
+                messages_list.append({
+                    "sender": sender,
+                    "text": text,
+                    "thoughts": thoughts,
+                    "created_at": created_at
+                })
+            return json.dumps(messages_list)
         except Exception as e:
+            print(f"Error getting conversation messages: {e}")
             return json.dumps([])
+
+    @Slot(str, str)
+    def renameConversation(self, conversation_id, new_title):
+        try:
+            from network_manager.config import conn, db_lock
+            new_title = new_title.strip()
+            if not new_title:
+                return
+            with db_lock:
+                cur = conn.cursor()
+                cur.execute("UPDATE chat_conversations SET title = ? WHERE conversation_id = ?", (new_title, conversation_id))
+                conn.commit()
+                cur.close()
+        except Exception as e:
+            print(f"Error renaming conversation: {e}")
 
     @Slot(str)
     def deleteConversation(self, conversation_id):
@@ -374,6 +444,40 @@ Saved Configuration:
                 self.clearChat()
         except Exception as e:
             print(f"Error deleting conversation: {e}")
+
+    @Slot(str)
+    def deleteSelectedConversations(self, ids_json):
+        try:
+            ids = json.loads(ids_json)
+            if not ids:
+                return
+            from network_manager.config import conn, db_lock
+            with db_lock:
+                cur = conn.cursor()
+                placeholders = ",".join("?" for _ in ids)
+                cur.execute(f"DELETE FROM chat_conversations WHERE conversation_id IN ({placeholders})", tuple(ids))
+                conn.commit()
+                cur.close()
+            curr_id = getattr(self._dialog, '_current_conversation_id', None)
+            if curr_id in ids:
+                self._dialog._current_conversation_id = None
+                self.clearChat()
+        except Exception as e:
+            print(f"Error deleting selected conversations: {e}")
+
+    @Slot()
+    def deleteAllConversations(self):
+        try:
+            from network_manager.config import conn, db_lock
+            with db_lock:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM chat_conversations")
+                conn.commit()
+                cur.close()
+            self._dialog._current_conversation_id = None
+            self.clearChat()
+        except Exception as e:
+            print(f"Error deleting all conversations: {e}")
 
     @Slot(str)
     def loadConversation(self, conversation_id):
