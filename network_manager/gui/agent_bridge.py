@@ -43,12 +43,49 @@ class AgentBridge(QObject):
     @Slot(str, str)
     def sendMessage(self, text, mode):
         """User pressed Send in the HTML UI."""
+        # Handle special command modes from JS
+        if mode == "replay_history":
+            self._dialog._replay_chat_history()
+            return
+        elif mode == "new_session":
+            self._dialog._current_conversation_id = None
+            self.clearChat()
+            return
+
         text = text.strip()
         if not text:
             return
 
         # Set user sent flag
         self._dialog._user_has_sent = True
+        self._dialog._current_mode = mode
+
+        # Resolve Current Conversation ID
+        conv_id = getattr(self._dialog, '_current_conversation_id', None)
+        from network_manager.config import conn, db_lock
+        if not conv_id:
+            conv_id = f"chat_{int(time.time())}"
+            self._dialog._current_conversation_id = conv_id
+            title = text[:40] + ("..." if len(text) > 40 else "")
+            try:
+                with db_lock:
+                    cur = conn.cursor()
+                    cur.execute("INSERT INTO chat_conversations (conversation_id, title) VALUES (?, ?)", (conv_id, title))
+                    conn.commit()
+                    cur.close()
+            except Exception as e:
+                print(f"Error creating conversation: {e}")
+
+        # Save User Message to DB
+        try:
+            with db_lock:
+                cur = conn.cursor()
+                cur.execute("INSERT INTO chat_messages (conversation_id, sender, text, thoughts) VALUES (?, ?, ?, ?)",
+                            (conv_id, "user", text, json.dumps([])))
+                conn.commit()
+                cur.close()
+        except Exception as e:
+            print(f"Error saving user message: {e}")
 
         # Store in chat data for persistence
         if not hasattr(self.app, '_copilot_chat_data'):
@@ -63,15 +100,27 @@ class AgentBridge(QObject):
             self._dialog._active_attachment = None
             self.clearAttachment.emit()
 
+        # `@` Mentions Resolution & Context Prepending
+        augmented_text = text
+        mentions = re.findall(r'@(\w+)', text)
+        if mentions:
+            context_blocks = []
+            for dev_name in mentions:
+                dev_info = self._get_device_info_for_mention(dev_name)
+                if dev_info:
+                    context_blocks.append(dev_info)
+            if context_blocks:
+                augmented_text = "\n\n".join(context_blocks) + "\n\nUser Message:\n" + text
+
         # Queue message to the CopilotWorker
         worker = getattr(self.app, '_copilot_worker', None)
         if worker and worker.isRunning():
-            worker.queue_message(text, attachment_path)
+            worker.queue_message(augmented_text, attachment_path)
         else:
             # Not connected — try auto-connect first
             self._dialog._launch_agent()
             # Wait a moment then queue
-            QTimer.singleShot(1500, lambda: self._delayed_send(text, attachment_path))
+            QTimer.singleShot(1500, lambda: self._delayed_send(augmented_text, attachment_path))
 
     def _delayed_send(self, text, attachment_path=None):
         worker = getattr(self.app, '_copilot_worker', None)
@@ -84,6 +133,42 @@ class AgentBridge(QObject):
                 ""
             )
             self.setThinking.emit(False, "")
+
+    def _get_device_info_for_mention(self, dev_name):
+        if not hasattr(self.app, 'devices'):
+            return None
+        matched_dev = None
+        for name, model, meta in self.app.devices:
+            if name.lower() == dev_name.lower():
+                matched_dev = (name, model, meta)
+                break
+        if not matched_dev:
+            return None
+        name, model, meta = matched_dev
+        config_content = "No saved configuration found in database."
+        try:
+            from network_manager.config import conn, db_lock
+            with db_lock:
+                cur = conn.cursor()
+                cur.execute(
+                    "SELECT content FROM configs WHERE device_id = (SELECT id FROM devices WHERE name = ?)",
+                    (name,)
+                )
+                row = cur.fetchone()
+                if row:
+                    config_content = row[0]
+                cur.close()
+        except Exception:
+            pass
+        platform = getattr(model, "platform", "Cisco IOS") if model else "Cisco IOS"
+        return f"""<mentioned-device name="{name}">
+Platform: {platform}
+Connection: {meta.get("console_host", "N/A")}:{meta.get("console_port", "N/A")}
+Saved Configuration:
+```
+{config_content}
+```
+</mentioned-device>"""
 
     @Slot(str)
     def saveSettings(self, json_settings):
@@ -148,10 +233,14 @@ class AgentBridge(QObject):
     @Slot()
     def exportLogs(self):
         """User pressed Export logs."""
+        QTimer.singleShot(0, self._do_export_logs)
+
+    def _do_export_logs(self):
         from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getSaveFileName(
             self._dialog, "Export Logs", "ancs_agent_logs.txt",
-            "Text Files (*.txt);;All Files (*)"
+            "Text Files (*.txt);;All Files (*)",
+            options=QFileDialog.DontUseNativeDialog
         )
         if not path:
             return
@@ -201,10 +290,14 @@ class AgentBridge(QObject):
     @Slot()
     def selectFile(self):
         """Launch native file picker to attach a PDF or Image."""
+        QTimer.singleShot(0, self._do_select_file)
+
+    def _do_select_file(self):
         from PySide6.QtWidgets import QFileDialog
         file_path, _ = QFileDialog.getOpenFileName(
             self._dialog, "Attach File to Copilot", "",
-            "Supported Files (*.pdf *.png *.jpg *.jpeg *.webp);;PDF Files (*.pdf);;Images (*.png *.jpg *.jpeg *.webp);;All Files (*)"
+            "Supported Files (*.pdf *.png *.jpg *.jpeg *.webp);;PDF Files (*.pdf);;Images (*.png *.jpg *.jpeg *.webp);;All Files (*)",
+            options=QFileDialog.DontUseNativeDialog
         )
         if not file_path:
             return
@@ -229,10 +322,14 @@ class AgentBridge(QObject):
     @Slot()
     def exportPDF(self):
         """Generates a premium PDF of the chat history using native print-to-PDF."""
+        QTimer.singleShot(0, self._do_export_pdf)
+
+    def _do_export_pdf(self):
         from PySide6.QtWidgets import QFileDialog
         path, _ = QFileDialog.getSaveFileName(
             self._dialog, "Export Chat PDF", "ancs_chat_export.pdf",
-            "PDF Files (*.pdf);;All Files (*)"
+            "PDF Files (*.pdf);;All Files (*)",
+            options=QFileDialog.DontUseNativeDialog
         )
         if not path:
             return
@@ -249,4 +346,93 @@ class AgentBridge(QObject):
         web_view = getattr(self._dialog, '_web', None)
         if web_view:
             web_view.page().printToPdf(handle_pdf_result)
+
+    @Slot(result=str)
+    def getPastConversations(self):
+        try:
+            from network_manager.config import conn, db_lock
+            with db_lock:
+                cur = conn.cursor()
+                cur.execute("SELECT conversation_id, title, created_at FROM chat_conversations ORDER BY created_at DESC")
+                rows = cur.fetchall()
+                cur.close()
+            return json.dumps([{"id": r[0], "title": r[1], "created_at": r[2]} for r in rows])
+        except Exception as e:
+            return json.dumps([])
+
+    @Slot(str)
+    def deleteConversation(self, conversation_id):
+        try:
+            from network_manager.config import conn, db_lock
+            with db_lock:
+                cur = conn.cursor()
+                cur.execute("DELETE FROM chat_conversations WHERE conversation_id = ?", (conversation_id,))
+                conn.commit()
+                cur.close()
+            if getattr(self._dialog, '_current_conversation_id', None) == conversation_id:
+                self._dialog._current_conversation_id = None
+                self.clearChat()
+        except Exception as e:
+            print(f"Error deleting conversation: {e}")
+
+    @Slot(str)
+    def loadConversation(self, conversation_id):
+        try:
+            from network_manager.config import conn, db_lock
+            from network_manager.ai_agent import SYSTEM_PROMPT
+            with db_lock:
+                cur = conn.cursor()
+                cur.execute("SELECT sender, text, thoughts FROM chat_messages WHERE conversation_id = ? ORDER BY id ASC", (conversation_id,))
+                rows = cur.fetchall()
+                cur.close()
+
+            chat_data = []
+            history = []
+            history.append({"role": "system", "content": SYSTEM_PROMPT})
+
+            for sender, text, thoughts_json in rows:
+                thoughts = []
+                if thoughts_json:
+                    try:
+                        thoughts = json.loads(thoughts_json)
+                    except Exception:
+                        pass
+                chat_data.append({
+                    "type": "user" if sender == "user" else "ai" if sender == "agent" else "system",
+                    "text": text,
+                    "thoughts": thoughts
+                })
+                if sender == "user":
+                    history.append({"role": "user", "content": text})
+                elif sender == "agent":
+                    history.append({"role": "assistant", "content": text})
+
+            self._dialog._current_conversation_id = conversation_id
+            self.app._copilot_chat_data = chat_data
+            self.app._copilot_history = history
+
+            # Restart the worker
+            self._dialog._stop_worker()
+            self._dialog._launch_agent()
+
+            # Tell QWebEngine to render replayed logs
+            self._dialog._web.page().runJavaScript("clearAndReplayChat();")
+        except Exception as e:
+            print(f"Error loading conversation: {e}")
+
+    @Slot(result=str)
+    def getDevicesList(self):
+        if not hasattr(self.app, 'devices'):
+            return json.dumps([])
+        
+        dev_list = []
+        for name, model, meta in self.app.devices:
+            # Determine type
+            lower_name = name.lower()
+            if "switch" in lower_name or "esw" in lower_name or "sw" in lower_name:
+                dev_type = "switch"
+            else:
+                dev_type = "router"
+            dev_list.append({"name": name, "type": dev_type})
+        return json.dumps(dev_list)
 
