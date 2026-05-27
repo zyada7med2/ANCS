@@ -2603,14 +2603,15 @@
 
                         <!-- Right Pane: Slide-in dynamic preview drawer -->
                         <div id="history-preview-pane" class="history-preview-pane">
-                            <div style="padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.25); flex-shrink: 0;">
-                                <span style="font-size: 10px; font-weight: bold; text-transform: uppercase; color: var(--cyan); letter-spacing: 0.5px;">Quick Preview</span>
+                            <div style="padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: rgba(0,0,0,0.25); flex-shrink: 0; gap: 12px;">
+                                <div style="display:flex; flex-direction:column; gap:1px; max-width: 75%;">
+                                    <div style="display:flex; align-items:center; gap:6px;">
+                                        <span style="font-size: 9px; font-weight: bold; text-transform: uppercase; color: var(--cyan); letter-spacing: 0.5px;">Quick Preview</span>
+                                        <span id="preview-session-date" style="font-size: 9px; color: var(--text-muted);">Created At</span>
+                                    </div>
+                                    <span id="preview-session-title" style="font-size: 13.5px; font-weight: 600; color: var(--text-pri); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px;">Chat Session</span>
+                                </div>
                                 <button class="history-icon-btn" onclick="closeHistoryPreview()" style="padding: 2px 4px; font-size: 11px; color: var(--text-sec);">✕ Close</button>
-                            </div>
-                            <!-- Preview Details -->
-                            <div style="padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.03); background: rgba(255,255,255,0.01); flex-shrink: 0;">
-                                <h4 id="preview-session-title" style="margin: 0 0 4px 0; font-size: 12.5px; font-weight: 600; color: var(--text-pri); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">Chat Session</h4>
-                                <span id="preview-session-date" style="font-size: 9.5px; color: var(--text-sec);">Created At</span>
                             </div>
                             <!-- Preview Messages List -->
                             <div id="preview-messages-container" style="flex: 1; overflow-y: auto; padding: 12px; display: flex; flex-direction: column; background: rgba(0,0,0,0.15); min-height: 0;">
@@ -4503,7 +4504,7 @@
                                     : '';
                                 
                                 html += `
-                                    <div class="history-card" id="history-card-${c.id}" data-id="${c.id}" data-title="${_escapeHtml(c.title)}" data-devices="${_escapeHtml((c.devices || []).join(','))}" onclick="previewPastConversation('${c.id}')">
+                                    <div class="history-card" id="history-card-${c.id}" data-id="${c.id}" data-title="${_escapeHtml(c.title)}" data-date="${c.created_at || 'N/A'}" data-devices="${_escapeHtml((c.devices || []).join(','))}" onclick="previewPastConversation('${c.id}')">
                                         <div style="display:flex; justify-content:space-between; align-items:flex-start; margin-bottom: 2px;">
                                             <input type="checkbox" class="history-row-checkbox" data-id="${c.id}" onclick="event.stopPropagation(); updateHistoryBulkBtnState();" style="cursor:pointer; transform: scale(1.1); margin: 0; vertical-align: middle; accent-color: var(--cyan);">
                                             
@@ -4579,10 +4580,16 @@
 
                         const card = document.getElementById(`history-card-${id}`);
                         const title = card ? card.getAttribute('data-title') : 'Chat Session';
+                        const date = card ? card.getAttribute('data-date') : 'N/A';
                         
-                        // Set Title & Date
+                        // Set Title & Date in the unified header
                         document.getElementById('preview-session-title').innerText = title;
                         document.getElementById('preview-session-title').title = title;
+                        
+                        const dateEl = document.getElementById('preview-session-date');
+                        if (dateEl) {
+                            dateEl.innerText = date;
+                        }
                         
                         const previewPane = document.getElementById('history-preview-pane');
                         const container = document.getElementById('preview-messages-container');
