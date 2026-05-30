@@ -4200,7 +4200,7 @@ class App(QMainWindow):
                 return
             nodes = self.gns3.get_nodes(project_id)
             _SKIP_TYPES = {"vpcs", "cloud", "nat", "ethernet_switch", "ethernet_hub", "frame_relay_switch", "atm_switch"}
-            l3_keywords = ['l3 switch', 'layer3', 'layer 3', 'esw', 'c3640', 'c3560', 'c3750', 'multilayer']
+            l3_keywords = ['l3 switch', 'layer3', 'layer 3', 'esw', 'c3640', 'c3560', 'c3750', 'multilayer', 'etherswitch', 'l3', 'ioul3']
             rtr_keywords = ['router', 'ios', 'csr', 'isr', 'iosv', 'firepower', 'asa', 'xrv', 'nxos',
                             'c2691', 'c2600', 'c7200', 'c3725', 'c3745', 'c3660', 'c3845', 'c1900', 'c2900',
                             'adventerprisek9', 'advipservices']

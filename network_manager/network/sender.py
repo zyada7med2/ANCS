@@ -314,21 +314,32 @@ class Sender:
         GNS3 IOS consoles often show 'Press RETURN to get started' before login.
         Send CR/LF until a login line or IOS prompt appears (or attempts exhausted).
         `read_available(timeout_sec)` must be an async callable returning str/bytes.
-
-        When many devices connect simultaneously (6+), GNS3's console multiplexer
-        can be slow to respond. We send up to 5 blind Enters with generous timeouts
-        to handle this case.
         """
         buf = initial or ""
-        logged = False
-        MAX_BLIND_ATTEMPTS = 5   # was 2 — too few for saturated GNS3
-        BLIND_BUF_THRESHOLD = 200  # was 80 — GNS3 sometimes sends partial banners
-        for attempt in range(10):
+        
+        # 1. Drain active boot-up stream. Wait for output silence before sending commands.
+        last_len = len(buf)
+        settle_attempts = 0
+        while settle_attempts < 15:
+            await asyncio.sleep(0.5)
+            new_data = await read_available(1.0)
+            if new_data:
+                buf += new_data
+                last_len = len(buf)
+                settle_attempts = 0  # reset because we are actively receiving bytes
+            else:
+                settle_attempts += 1
+                if len(buf) == last_len:
+                    break  # settled (no new characters for 0.5s)
+                    
+        # 2. Interactive wake-up loop
+        for attempt in range(12):
             low = buf.lower()
             if "username:" in low or "login:" in low:
                 break
             if "password:" in low and "username:" not in low and "login:" not in low:
                 break
+                
             tail = buf.rstrip()
             if (
                 tail
@@ -337,24 +348,23 @@ class Sender:
                 and "return to get started" not in low
             ):
                 break
-            if "press return" in low or "return to get started" in low or "hit return" in low:
-                if not logged:
-                    log_fn("[telnet] GNS3: sending Enter to pass IOS startup screen (Press RETURN)")
-                    logged = True
+                
+            # If console says "press return", or if it does not end in a prompt (# or >), send wake-up Enter
+            if (
+                "press return" in low
+                or "return to get started" in low
+                or "hit return" in low
+                or not tail
+                or tail[-1] not in ("#", ">")
+            ):
+                log_fn(f"[telnet] GNS3: sending Enter keypress to wake/bypass console (attempt {attempt+1}/12)")
                 writer.write("\r\n")
-                await asyncio.sleep(0.6)
-                buf += await read_available(2.0)
+                await asyncio.sleep(0.8)
+                buf += await read_available(1.5)
                 continue
-            # Blind Enter: GNS3 console may show nothing at all on first connect
-            if attempt < MAX_BLIND_ATTEMPTS and len(buf.strip()) < BLIND_BUF_THRESHOLD and "username:" not in low and "login:" not in low:
-                if not logged:
-                    log_fn(f"[telnet] GNS3: sending wake-up Enter ({attempt+1}/{MAX_BLIND_ATTEMPTS})")
-                    logged = True
-                writer.write("\r\n")
-                await asyncio.sleep(0.7)
-                buf += await read_available(2.0)
-                continue
+                
             break
+            
         return buf
 
     @staticmethod
@@ -392,7 +402,7 @@ class Sender:
             writer.write(line + "\r\n")
             if extra_wait:
                 await asyncio.sleep(extra_wait)
-            await wait_for_prompt()
+            return await wait_for_prompt()
 
         try:
             await asyncio.sleep(0.4)
@@ -464,8 +474,10 @@ class Sender:
                 for line in block_content.splitlines():
                     stripped = line.strip()
                     if stripped:
-                        await send_and_wait(stripped)
+                        resp = await send_and_wait(stripped)
                         log_fn(f"[telnet] sent: {stripped}")
+                        if resp and resp.strip():
+                            log_fn(f"[telnet] response: {resp.strip()}")
 
                         # If this was "write memory", send an extra Enter to confirm
                         if stripped.lower() == "write memory":
@@ -805,7 +817,7 @@ class Sender:
             def _send_and_wait(line, timeout_sec=8.0):
                 """Send a command line then wait for device prompt."""
                 chan.send(line + "\n")
-                _wait_for_prompt_ssh(timeout_sec)
+                return _wait_for_prompt_ssh(timeout_sec)
 
             _send_and_wait(session_config.paging_disable)
             if session_config.privilege_command:
@@ -837,8 +849,10 @@ class Sender:
                 for line in block_content.splitlines():
                     stripped = line.strip()
                     if stripped:
-                        _send_and_wait(stripped)
+                        resp = _send_and_wait(stripped)
                         log_fn(f"[ssh] sent: {stripped}")
+                        if resp and resp.strip():
+                            log_fn(f"[ssh] response: {resp.strip()}")
 
                 if idx < len(blocks):
                     log_fn(f"[ssh] waiting {block_delay}s before next block...")

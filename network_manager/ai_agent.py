@@ -233,9 +233,252 @@ def list_gns3_nodes(project_id: str = "") -> str:
         return f"Error: {e}"
 
 
+def list_gns3_templates() -> str:
+    """
+    List all available GNS3 templates. Returns a JSON array of templates with name, template_id, template_type, and category (e.g. 'router', 'switch', 'core switch', or 'other').
+    Call this tool before creating new nodes to see what templates are actually installed on the system.
+    """
+    try:
+        gns3 = ctx.get_gns3_connector()
+        templates = gns3.get_templates()
+        
+        l3_keywords = ['l3 switch', 'layer3', 'layer 3', 'esw', 'c3640', 'c3560', 'c3750', 'multilayer', 'ioul3', 'etherswitch', 'l3']
+        rtr_keywords = ['router', 'ios', 'csr', 'isr', 'iosv', 'firepower', 'asa', 'xrv', 'nxos', 'c2691', 'c2600', 'c7200', 'c3725', 'c3745', 'c3660', 'c3845', 'c1900', 'c2900']
+        sw_keywords = ['switch', 'iosvl2', 'ioul2']
+        
+        result = []
+        for t in templates:
+            name = t.get("name", "")
+            name_lower = name.lower()
+            t_type = t.get("template_type", "")
+            
+            category = "other"
+            if any(k in name_lower for k in l3_keywords):
+                category = "core switch"
+            elif any(k in name_lower for k in rtr_keywords):
+                category = "router"
+            elif any(k in name_lower for k in sw_keywords):
+                category = "switch"
+                
+            result.append({
+                "name": name,
+                "template_id": t.get("template_id"),
+                "template_type": t_type,
+                "category": category
+            })
+            
+        ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> list_gns3_templates → {len(result)} templates</span>\n")
+        return json.dumps(result, indent=2)
+    except Exception as e:
+        return f"Error: {e}"
+
+
+def provision_topology(topology_json: str) -> str:
+    """Create an entire GNS3 topology in one atomic step.
+    
+    Accepts a JSON object with 'nodes' and 'links' arrays.
+    Creates all nodes, wires links, boots them, and syncs the database.
+    
+    This is MUCH faster than calling add_gns3_node/connect_gns3_nodes/control_gns3_node_power 
+    individually. Use this tool when creating 2+ nodes at once.
+    
+    Args:
+        topology_json: JSON string with structure:
+            {
+                "nodes": [
+                    {"name": "R1", "role": "router", "template": "c7200", "x": -300, "y": -200},
+                    {"name": "CS1", "role": "core", "template": "EtherSwitchr l3", "x": 0, "y": 0}
+                ],
+                "links": [
+                    {"node_a": "R1", "port_a": "f0/0", "node_b": "CS1", "port_b": "f1/0"}
+                ]
+            }
+    """
+    pid = ctx.gns3_project_id
+    if not pid:
+        return "Error: No active GNS3 project connected."
+    
+    try:
+        data = json.loads(topology_json)
+        nodes_data = data.get("nodes", [])
+        links_data = data.get("links", [])
+    except Exception as e:
+        return f"Error parsing topology_json: {e}"
+        
+    if not nodes_data:
+        return "Error: No nodes specified in topology_json."
+        
+    try:
+        gns3 = ctx.get_gns3_connector()
+        templates = gns3.get_templates()
+        
+        # Load current template mappings from config/json
+        import os
+        from network_manager.config import _BASE_DIR
+        mapping_file = os.path.join(_BASE_DIR, "gns3_template_mappings.json")
+        mappings = {"router": "", "core": "", "switch": ""}
+        if os.path.exists(mapping_file):
+            try:
+                with open(mapping_file, "r", encoding="utf-8") as f:
+                    mappings.update(json.load(f))
+            except Exception:
+                pass
+
+        # Check which templates we need to resolve
+        roles_to_resolve = set()
+        for node in nodes_data:
+            role = node.get("role", "router")
+            template_opt = node.get("template", "")
+            
+            # If template name or ID is explicitly given in the graph, we resolve it.
+            # Otherwise we need it mapped.
+            if not template_opt and not mappings.get(role):
+                roles_to_resolve.add(role)
+                
+        # Prompt user for templates if any roles are unresolved
+        if roles_to_resolve:
+            ctx.log("<span style='color:#a371f7'><b>[Tool]</b> Unmapped roles detected. Prompting user to select GNS3 templates...</span>\n")
+            from network_manager.gui.template_selector_dialog import request_template_selection
+            selected_mappings = request_template_selection(list(roles_to_resolve), templates, mappings)
+            if not selected_mappings:
+                return "Error: GNS3 template selection was cancelled by the user. Topology creation aborted."
+            mappings.update(selected_mappings)
+
+        # Resolve template ID for each node
+        node_templates = {}
+        for node in nodes_data:
+            node_name = node.get("name")
+            role = node.get("role", "router")
+            template_opt = node.get("template", "") or mappings.get(role)
+            
+            template_id = ""
+            if template_opt:
+                for t in templates:
+                    if template_opt.lower() in t.get("name", "").lower() or template_opt == t.get("template_id"):
+                        template_id = t.get("template_id")
+                        break
+            
+            # Fallback to keyword heuristics if still not resolved
+            if not template_id:
+                candidates = []
+                for t in templates:
+                    name_lower = t.get("name", "").lower()
+                    if role == "router" and any(k in name_lower for k in ("iosv", "c3725", "c7200", "router")):
+                        candidates.append(t)
+                    elif role == "core" and any(k in name_lower for k in ("l3", "layer3", "layer 3", "ioul3", "multilayer", "esw")):
+                        candidates.append(t)
+                    elif role in ("switch", "access") and any(k in name_lower for k in ("iosvl2", "switch", "ioul2", "l2", "esw", "layer 2", "layer2")):
+                        if any(k in name_lower for k in ("l3", "layer3", "layer 3")) and not any(k in name_lower for k in ("l2", "layer 2", "layer2")):
+                            continue
+                        candidates.append(t)
+                if candidates:
+                    template_id = candidates[0].get("template_id")
+                    
+            if not template_id:
+                return f"Error: Could not resolve template for node '{node_name}' (role: '{role}'). Please configure mappings."
+            node_templates[node_name] = template_id
+
+        # 1. Create all nodes (they are created stopped)
+        created_nodes = {}
+        node_details = []
+        for node in nodes_data:
+            node_name = node.get("name")
+            role = node.get("role", "router")
+            x = node.get("x", 0)
+            y = node.get("y", 0)
+            template_id = node_templates[node_name]
+            
+            ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> Creating node '{node_name}' ({role})...</span>\n")
+            node_res = gns3.create_node(pid, node_name, template_id, x, y)
+            actual_name = node_res.get("name", node_name)
+            node_id = node_res.get("node_id")
+            created_nodes[node_name] = node_id
+            node_details.append((node_name, actual_name, role, node_res))
+            
+            if not hasattr(ctx, "newly_created_devices"):
+                ctx.newly_created_devices = set()
+            ctx.newly_created_devices.add(actual_name)
+
+        # 2. Connect links (while nodes are stopped, avoiding hot-plug restarts!)
+        for link in links_data:
+            node_a_name = link.get("node_a")
+            port_a = link.get("port_a")
+            node_b_name = link.get("node_b")
+            port_b = link.get("port_b")
+            
+            id_a = created_nodes.get(node_a_name)
+            id_b = created_nodes.get(node_b_name)
+            
+            if not id_a or not id_b:
+                return f"Error: Cannot connect link. Node '{node_a_name}' or '{node_b_name}' was not created."
+                
+            ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> Connecting link: {node_a_name} ({port_a}) <-> {node_b_name} ({port_b})...</span>\n")
+            
+            # Helper to resolve port names to numbers
+            def resolve_port(node_id, device_name, target_port):
+                ports = gns3.get_node_ports(pid, node_id)
+                for p in ports:
+                    name_l = p.get("name", "").lower()
+                    short_l = p.get("short_name", "").lower()
+                    target_l = target_port.lower()
+                    if target_l in (name_l, short_l) or target_l.replace(" ", "") in (name_l.replace(" ", ""), short_l.replace(" ", "")):
+                        return p.get("adapter_number"), p.get("port_number")
+                avail = [f"{p.get('name')} ({p.get('short_name')})" for p in ports]
+                raise RuntimeError(f"Port '{target_port}' not found on {device_name}. Available ports: {avail}")
+                
+            try:
+                adapter_a, port_num_a = resolve_port(id_a, node_a_name, port_a)
+                adapter_b, port_num_b = resolve_port(id_b, node_b_name, port_b)
+                gns3.create_link(pid, id_a, adapter_a, port_num_a, id_b, adapter_b, port_num_b)
+            except Exception as link_err:
+                return f"Error connecting link between {node_a_name} and {node_b_name}: {link_err}"
+
+        # 3. Start all nodes
+        for requested_name, actual_name, role, res in node_details:
+            node_id = res.get("node_id")
+            ctx.log(f"<span style='color:#a371f7'><b>[Tool]</b> Starting node '{actual_name}'...</span>\n")
+            gns3.start_node(pid, node_id)
+
+        # 4. Sync SQLite database in a single commit block
+        from network_manager.config import conn, db_lock
+        import time
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        with db_lock:
+            cur = conn.cursor()
+            for requested_name, actual_name, role, res in node_details:
+                db_role = "core switch" if role == "core" else "router" if role == "router" else "switch"
+                cur.execute(
+                    "INSERT OR REPLACE INTO devices (name, type, ip, port, connection_type, added_from_gns3, project_id, node_id, created_at) "
+                    "VALUES (?, ?, ?, ?, 'gns3-console', 1, ?, ?, ?)",
+                    (actual_name, db_role, res.get("console_host", "localhost"), str(res.get("console", "")), pid, res.get("node_id"), ts)
+                )
+            conn.commit()
+            cur.close()
+
+        # 5. Trigger UI sync
+        if ctx.refresh_ui_fn:
+            ctx.refresh_ui_fn()
+            
+        summary_lines = [f"Successfully provisioned topology with {len(nodes_data)} nodes and {len(links_data)} links:"]
+        for requested_name, actual_name, role, _ in node_details:
+            if actual_name != requested_name:
+                summary_lines.append(f" - Created & started node '{actual_name}' (requested: '{requested_name}', role: '{role}')")
+            else:
+                summary_lines.append(f" - Created & started node '{actual_name}' ({role})")
+        for link in links_data:
+            summary_lines.append(f" - Connected {link['node_a']} ({link['port_a']}) to {link['node_b']} ({link['port_b']})")
+
+            
+        return "\n".join(summary_lines)
+    except Exception as e:
+        return f"Error provisioning topology: {e}"
+
+
 def add_gns3_node(name: str, device_role: str, x: int = 0, y: int = 0, template_id_or_name: str = "") -> str:
     """
     Add a new node to the active GNS3 project. Spawns device of role 'router', 'core', or 'access'/'switch'.
+    IMPORTANT: You MUST call list_gns3_templates() FIRST to discover the installed images and templates.
+    Then, pass the exact template name or ID in template_id_or_name to ensure correct device creation instead of generic names.
     Automatically clones template from existing same-role node if found. Fallback: matches via global templates or config mapping.
     """
     pid = ctx.gns3_project_id
@@ -259,7 +502,7 @@ def add_gns3_node(name: str, device_role: str, x: int = 0, y: int = 0, template_
             target_type = "router" if device_role == "router" else "core switch" if device_role == "core" else "switch"
             
             # Keywords for role detection to match gui/app.py logic
-            l3_keywords = ['l3 switch', 'layer3', 'layer 3', 'esw', 'c3640', 'c3560', 'c3750', 'multilayer']
+            l3_keywords = ['l3 switch', 'layer3', 'layer 3', 'esw', 'c3640', 'c3560', 'c3750', 'multilayer', 'etherswitch', 'l3']
             rtr_keywords = ['router', 'ios', 'csr', 'isr', 'iosv', 'firepower', 'asa', 'xrv', 'nxos', 'c2691', 'c2600', 'c7200', 'c3725', 'c3745', 'c3660', 'c3845', 'c1900', 'c2900']
             
             for node in nodes:
@@ -308,9 +551,12 @@ def add_gns3_node(name: str, device_role: str, x: int = 0, y: int = 0, template_
                 name_lower = t.get("name", "").lower()
                 if device_role == "router" and any(k in name_lower for k in ("iosv", "c3725", "c7200", "router")):
                     candidates.append(t)
-                elif device_role == "core" and any(k in name_lower for k in ("l3", "layer3", "layer 3", "ioul3")):
+                elif device_role == "core" and any(k in name_lower for k in ("l3", "layer3", "layer 3", "ioul3", "multilayer", "esw")):
                     candidates.append(t)
-                elif device_role in ("switch", "access") and any(k in name_lower for k in ("iosvl2", "switch", "ioul2")):
+                elif device_role in ("switch", "access") and any(k in name_lower for k in ("iosvl2", "switch", "ioul2", "l2", "esw", "layer 2", "layer2")):
+                    # Exclude L3 templates for access switches unless they also explicitly mention L2
+                    if any(k in name_lower for k in ("l3", "layer3", "layer 3")) and not any(k in name_lower for k in ("l2", "layer 2", "layer2")):
+                        continue
                     candidates.append(t)
             if candidates:
                 template_id = candidates[0].get("template_id")
@@ -322,6 +568,12 @@ def add_gns3_node(name: str, device_role: str, x: int = 0, y: int = 0, template_
 
         # Spawning node
         node_res = gns3.create_node(pid, name, template_id, x, y)
+        actual_name = node_res.get("name", name)
+        
+        # Track newly created devices to skip slow pre-deploy snapshots
+        if not hasattr(ctx, "newly_created_devices"):
+            ctx.newly_created_devices = set()
+        ctx.newly_created_devices.add(actual_name)
         
         # Sync database
         from network_manager.config import conn, db_lock
@@ -332,7 +584,7 @@ def add_gns3_node(name: str, device_role: str, x: int = 0, y: int = 0, template_
             cur.execute(
                 "INSERT OR REPLACE INTO devices (name, type, ip, port, connection_type, added_from_gns3, project_id, node_id, created_at) "
                 "VALUES (?, ?, ?, ?, 'gns3-console', 1, ?, ?, ?)",
-                (name, "core switch" if device_role == "core" else "router" if device_role == "router" else "switch", 
+                (actual_name, "core switch" if device_role == "core" else "router" if device_role == "router" else "switch", 
                  node_res.get("console_host", "localhost"), str(node_res.get("console", "")), pid, node_res.get("node_id"), ts)
             )
             conn.commit()
@@ -342,6 +594,8 @@ def add_gns3_node(name: str, device_role: str, x: int = 0, y: int = 0, template_
         if ctx.refresh_ui_fn:
             ctx.refresh_ui_fn()
             
+        if actual_name != name:
+            return f"Success: Created node '{actual_name}' (requested: '{name}') from template ID '{template_id}' at coordinate ({x}, {y})."
         return f"Success: Created node '{name}' from template ID '{template_id}' at coordinate ({x}, {y})."
     except Exception as e:
         return f"Error adding node: {e}"
@@ -1910,18 +2164,22 @@ def deploy_to_device(device_name: str, config_text: str) -> str:
     # ── Component 9: Pre-deploy config snapshot ───────────────────────
     # Capture show running-config before pushing changes, as a rollback
     # reference point.  Non-fatal — if it fails, we still deploy.
-    try:
-        pre_snapshot = run_cli_on_device(device_name, "show running-config")
-        if pre_snapshot and not pre_snapshot.lower().startswith("error"):
-            if getattr(ctx, "audit_fn", None):
-                ctx.audit_fn(
-                    device_name, "Pre-Deploy Snapshot",
-                    f"Config snapshot taken before Copilot deployment ({len(pre_snapshot)} chars)",
-                    pre_snapshot,
-                )
-            ctx.log(f"<span style='color:#8b949e'>[Copilot] Pre-deploy snapshot saved for {device_name} ({len(pre_snapshot)} chars)</span>\n")
-    except Exception:
-        pass  # Non-fatal — proceed with deploy
+    # Bypass snapshot if auto_approve is active OR if the device was newly created/blank
+    if getattr(ctx, "auto_approve", False) or device_name in getattr(ctx, "newly_created_devices", set()):
+        ctx.log(f"<span style='color:#8b949e'>[Copilot] Bypassing pre-deploy snapshot for '{device_name}' (auto-approve or newly created blank node)</span>\n")
+    else:
+        try:
+            pre_snapshot = run_cli_on_device(device_name, "show running-config")
+            if pre_snapshot and not pre_snapshot.lower().startswith("error"):
+                if getattr(ctx, "audit_fn", None):
+                    ctx.audit_fn(
+                        device_name, "Pre-Deploy Snapshot",
+                        f"Config snapshot taken before Copilot deployment ({len(pre_snapshot)} chars)",
+                        pre_snapshot,
+                    )
+                ctx.log(f"<span style='color:#8b949e'>[Copilot] Pre-deploy snapshot saved for {device_name} ({len(pre_snapshot)} chars)</span>\n")
+        except Exception:
+            pass  # Non-fatal — proceed with deploy
 
     # ── Close pooled session before deploy ─────────────────────────────
     # GNS3 console ports are single-client: the pool's open Telnet
@@ -1954,13 +2212,37 @@ def deploy_to_device(device_name: str, config_text: str) -> str:
                 info["username"], info["password"], info["enable_password"], config_text,
             )
         else:
+            is_new = device_name in getattr(ctx, "newly_created_devices", set())
+            b_delay = 1.5 if is_new else 3.0
             ok = Sender.send_telnet(
                 log_fn, info["host"], info["port"],
                 info["username"], info["password"], info["enable_password"], config_text,
+                block_delay=b_delay
             )
         tail = "\n".join(log_lines[-8:])
         if ok is False:
             return f"Deployment FAILED (sender returned error).\n{tail}"
+
+        # ── CLI Error Hard-Abort Check ───────────────────────────────
+        # Intercept critical Cisco CLI errors like:
+        # "% Invalid input", "% Unknown command", "% Incomplete command", "% Ambiguous command"
+        cli_errors = []
+        for log_line in log_lines:
+            if "%" in log_line:
+                lower_line = log_line.lower()
+                if "invalid input" in lower_line or "unknown command" in lower_line or \
+                   "incomplete command" in lower_line or "ambiguous command" in lower_line:
+                    cli_errors.append(log_line.strip())
+
+        if cli_errors:
+            err_summary = "\n".join(cli_errors[:10])
+            ctx.log(f"<span style='color:#f85149'><b>[Copilot]</b> ✗ Deployment failed on {device_name} due to CLI error(s)</span>\n")
+            return (
+                f"Deployment FAILED on device '{device_name}' due to CLI errors:\n{err_summary}\n\n"
+                f"IMPORTANT: The device rejected switching/VLAN commands. This usually indicates a software or "
+                f"platform mismatch (e.g. this device is running a pure Router image instead of a Switch image). "
+                f"Do not retry the same commands. Abort or change your deployment strategy."
+            )
 
         # ── Post-deploy verification ──────────────────────────────────
         # Extract expected hostname from config to verify it actually took effect
@@ -1971,7 +2253,8 @@ def deploy_to_device(device_name: str, config_text: str) -> str:
                 expected_hostname = stripped.split(None, 1)[1].strip()
                 break
 
-        if expected_hostname and info.get("protocol") != "ssh":
+        is_new = device_name in getattr(ctx, "newly_created_devices", set())
+        if expected_hostname and info.get("protocol") != "ssh" and not is_new:
             ctx.log(f"<span style='color:#8b949e'>[Copilot] Verifying deployment on {device_name}...</span>\n")
             try:
                 import time as _time
@@ -3310,7 +3593,9 @@ ALL_TOOLS = [
     # GNS3
     list_gns3_projects,
     list_gns3_nodes,
+    list_gns3_templates,
     add_gns3_node,
+    provision_topology,
     delete_gns3_node,
     connect_gns3_nodes,
     delete_gns3_link,
@@ -3581,6 +3866,8 @@ You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded 
 3. **NEVER guess interface names.** Always call `get_topology_links(project_id)` first to verify physical connections.
 4. **Switches NEVER get routing protocols.** `routing_protocol='none'` for ALL core and access switches. Only routers get routing protocols.
 5. **Call `get_network_overview()` FIRST.** You start with NO knowledge of the network. Always discover before acting.
+6. **ALWAYS call `list_gns3_templates()` before adding GNS3 nodes.** Discover installed templates first to use the correct router/switch images instead of naming them blindly or using the same template for both routers and switches.
+7. **ALWAYS use `provision_topology(...)` for multi-device creation.** When asked to build a network setup or spawn 2+ nodes, use `provision_topology` instead of calling `add_gns3_node` and `connect_gns3_nodes` individually.
 
 # ENVIRONMENT
 - Devices run inside **GNS3** (emulator), NOT physical hardware
@@ -3598,9 +3885,10 @@ You are **ANCS Copilot**, a fully autonomous AI Network Engineer Agent embedded 
     tools_and_reference = """<tools-and-reference>
 # YOUR TOOLS
 
-**Network Discovery:**
+**Network Discovery & Topology:**
 - `get_network_overview(project_id)` — **START HERE**. Returns all devices + topology links in one call.
-- `list_gns3_projects()`, `list_gns3_nodes(project_id)`, `get_node_ports(project_id, node_id)`, `get_topology_links(project_id)`
+- `provision_topology(topology_json)` — **PREFERRED for spawning 2+ nodes**. Spawns nodes, connects links, starts them, and syncs DB in a single atomic call.
+- `list_gns3_projects()`, `list_gns3_nodes(project_id)`, `list_gns3_templates()`, `get_node_ports(project_id, node_id)`, `get_topology_links(project_id)`
 
 **Device Terminal (live state):**
 - `run_cli_on_device(device_name, command)` — run any IOS command on any device by name
@@ -3667,6 +3955,7 @@ Guessing interfaces causes silent config failures.
 16. **`terminal length 0` first.** Always run `terminal length 0` as the first command in any new session to prevent `--More--` truncation.
 17. **`router_interface` = Router-on-a-Stick ONLY.** When calling `generate_device_config` for a router with routed ports (no subinterfaces), leave `router_interface` EMPTY. Setting it generates unwanted subinterfaces that conflict with direct IP assignments.
 18. **Respect HITL deployment rejections.** When `generate_and_deploy_device_config` returns "REJECTED by user", the user explicitly declined the deployment via the review dialog. Do NOT re-call the tool or retry. Acknowledge the rejection, tell the user the config is saved in the DB, and ask what they want to do instead.
+19. **GNS3 Node Creation Template Discovery.** Before calling `add_gns3_node()`, ALWAYS call `list_gns3_templates()` first to discover the available GNS3 templates/images. Match the device roles (routers, switches, core switches) with the correct installed templates. NEVER guess templates or create all nodes using a single router template.
 
 # AUDIENCE
 Primary users are beginners. Reduce fear and confusion. Be a tutor, not a grader.
@@ -3691,6 +3980,8 @@ Primary users are beginners. Reduce fear and confusion. Be a tutor, not a grader
 3. **NEVER guess interface names.** Call `get_topology_links()` to discover real cabling before generating any config. Wrong interfaces = silent deployment failures.
 4. **Switches get routing_protocol='none'. ALWAYS.** Core switches route via SVIs locally — they never need OSPF/EIGRP/RIP. Access switches are pure L2.
 5. **Discover before acting.** Call `get_network_overview()` as your FIRST action when the user asks about devices, topology, or configuration. You start every conversation with ZERO knowledge.
+6. **Discover GNS3 templates before adding nodes.** ALWAYS call `list_gns3_templates()` first before calling `add_gns3_node()` to ensure the correct router/switch templates are used instead of guessing.
+7. **ALWAYS use `provision_topology(...)` for multi-device creation.** When asked to build a network setup or spawn 2+ nodes, use `provision_topology` instead of calling `add_gns3_node` and `connect_gns3_nodes` individually.
 </critical-constraints>"""
 
     # ── Vendor addendum (Component 6) ─────────────────────────────────────
@@ -3861,7 +4152,8 @@ class CopilotWorker(QThread):
                  model_name: str = "openai/gpt-4o-mini",
                  initial_messages: list | None = None,
                  mode: str = "chat",
-                 app=None):
+                 app=None,
+                 ollama_url: str = "http://localhost:11434"):
         super().__init__()
         self.api_key = api_key
         self.gns3_url = gns3_url
@@ -3873,6 +4165,7 @@ class CopilotWorker(QThread):
         self.model_name = model_name
         self.mode = mode
         self.app = app
+        self.ollama_url = ollama_url
         self._loop = None
         self._chat = None
         self._client = None
@@ -4306,7 +4599,8 @@ class CopilotWorker(QThread):
                 break
 
             function_responses = []
-            for fc in function_calls:
+
+            def _run_gemini_tool(index, fc):
                 fn_name = fc.name
                 fn_args = dict(fc.args) if fc.args else {}
 
@@ -4331,6 +4625,9 @@ class CopilotWorker(QThread):
                     t0 = time.monotonic()
                     if fn_name in TOOL_MAP:
                         try:
+                            # Stagger deploy/setup calls slightly to avoid GNS3 console port contention
+                            if fn_name in ("deploy_to_device", "deploy_config_telnet", "deploy_config_ssh", "generate_and_deploy_device_config", "add_gns3_node") and len(function_calls) > 1:
+                                time.sleep(index * 0.5)
                             result = TOOL_MAP[fn_name](**fn_args)
                         except Exception as e:
                             result = f"Tool error: {e}"
@@ -4353,12 +4650,34 @@ class CopilotWorker(QThread):
                     if is_err:
                         turn_tool_calls[call_key] = error_count + 1
 
-                function_responses.append(
-                    types.Part.from_function_response(
-                        name=fn_name,
-                        response={"result": result},
-                    )
+                return types.Part.from_function_response(
+                    name=fn_name,
+                    response={"result": result},
                 )
+
+            if len(function_calls) == 1:
+                # Single tool call — run directly, no thread pool overhead
+                function_responses.append(_run_gemini_tool(0, function_calls[0]))
+            else:
+                # Multiple tool calls — run in parallel
+                ctx.log(f"<span style='color:#58A6FF'><b>[Copilot]</b> Executing {len(function_calls)} Gemini tool calls in parallel</span>\n")
+                futures = {}
+                with ThreadPoolExecutor(max_workers=min(len(function_calls), 8)) as pool:
+                    for i, fc in enumerate(function_calls):
+                        futures[pool.submit(_run_gemini_tool, i, fc)] = i
+
+                    results_list = [None] * len(function_calls)
+                    for future in as_completed(futures):
+                        idx = futures[future]
+                        try:
+                            results_list[idx] = future.result()
+                        except Exception as e:
+                            fn_name = function_calls[idx].name
+                            results_list[idx] = types.Part.from_function_response(
+                                name=fn_name,
+                                response={"result": f"Parallel tool execution crash: {e}"},
+                            )
+                function_responses.extend(results_list)
 
             if turn == MAX_TURNS - 2:
                 function_responses.append(

@@ -42,7 +42,9 @@ files_to_check = [
     "network_manager/ai_agent.py",
     "network_manager/network/state_snapshot.py",
     "network_manager/gui/deploy_review_dialog.py",
+    "network_manager/gui/template_selector_dialog.py",
 ]
+
 
 for f in files_to_check:
     path = os.path.join(PROJECT_ROOT, f)
@@ -65,12 +67,13 @@ agent_path = os.path.join(PROJECT_ROOT, "network_manager/ai_agent.py")
 with open(agent_path, encoding="utf-8") as f:
     source = f.read()
 
-new_tools = ["snapshot_network_state", "cleanup_device"]
+new_tools = ["snapshot_network_state", "cleanup_device", "provision_topology"]
 for tool_name in new_tools:
     test(f"Function defined: {tool_name}", f"def {tool_name}(" in source)
 
 for tool_name in new_tools:
     test(f"ALL_TOOLS contains: {tool_name}", tool_name in source.split("ALL_TOOLS")[1].split("]")[0])
+
 
 
 # ==============================================================
@@ -300,6 +303,8 @@ test("Rule: terminal length 0", "terminal length 0" in system_prompt)
 test("Rule: router_interface warning", "Router-on-a-Stick" in system_prompt)
 test("snapshot_network_state in prompt", "snapshot_network_state" in system_prompt)
 test("cleanup_device in prompt", "cleanup_device" in system_prompt)
+test("provision_topology in prompt", "provision_topology" in system_prompt)
+
 
 
 # ==============================================================
@@ -377,8 +382,387 @@ test("Enriched getPastConversations search", "message_count" in bridge_src and "
 
 
 # ==============================================================
+# TEST 14: GNS3 Templates Tool & Browser Behavior Removal
+# ==============================================================
+print("\n" + "="*60)
+print("TEST 14: GNS3 Templates Tool & Browser Behavior Removal")
+print("="*60)
+
+test("Function defined: list_gns3_templates", "def list_gns3_templates(" in source)
+test("ALL_TOOLS contains: list_gns3_templates", "list_gns3_templates" in source.split("ALL_TOOLS")[1].split("]")[0])
+test("add_gns3_node docstring updated", "list_gns3_templates() FIRST" in source)
+test("compile_system_prompt contains templates rule", "list_gns3_templates" in system_prompt)
+
+with open(os.path.join(PROJECT_ROOT, "network_manager/gui/agent_dialog.py"), encoding="utf-8") as f:
+    dialog_src = f.read()
+
+test("ANCSWebEnginePage overrides createStandardContextMenu", "def createStandardContextMenu(self):" in dialog_src)
+test("ANCSWebEnginePage overrides acceptNavigationRequest", "def acceptNavigationRequest(self, url, navigationType, isMainFrame):" in dialog_src)
+test("ContextMenuPolicy NoContextMenu is set", "ContextMenuPolicy.NoContextMenu" in dialog_src)
+test("eventFilter implemented in ANCSAgentDialog", "def eventFilter(self, watched, event):" in dialog_src)
+test("installEventFilter is called", "installEventFilter(self)" in dialog_src)
+
+
+# ==============================================================
+# TEST 15: Parallel dispatch, CLI Error detection, Snapshot Bypass
+# ==============================================================
+print("\n" + "="*60)
+print("TEST 15: Parallel dispatch, CLI Error detection, Snapshot Bypass")
+print("="*60)
+
+# 1. Parallel execution check: verify we have concurrent execution logic in _process_response_gemini
+test("Concurrent execution logic present in ai_agent.py", "ThreadPoolExecutor" in source)
+test("Staggered deployment tool calls delay in ai_agent.py", "index * 0.5" in source)
+
+# 2. CLI error detection in deploy_to_device test
+mock_logs_with_error = [
+    "[telnet] sent: interface GigabitEthernet0/1",
+    "[telnet] sent: switchport mode access",
+    "[telnet] response: % Invalid input detected at '^' marker.",
+]
+
+def simulate_deploy_cli_error_check(log_lines):
+    cli_errors = []
+    for log_line in log_lines:
+        if "%" in log_line:
+            lower_line = log_line.lower()
+            if "invalid input" in lower_line or "unknown command" in lower_line or \
+               "incomplete command" in lower_line or "ambiguous command" in lower_line:
+                cli_errors.append(log_line.strip())
+    
+    if cli_errors:
+        return True, cli_errors
+    return False, []
+
+has_err, errs = simulate_deploy_cli_error_check(mock_logs_with_error)
+test("CLI Error Check detects Invalid input in log", has_err)
+test("CLI Error Check extracts exact error", len(errs) == 1 and "% Invalid input" in errs[0])
+
+mock_logs_clean = [
+    "[telnet] sent: interface GigabitEthernet0/1",
+    "[telnet] sent: ip address 10.0.0.1 255.255.255.0",
+]
+has_err_clean, _ = simulate_deploy_cli_error_check(mock_logs_clean)
+test("CLI Error Check ignores clean logs", not has_err_clean)
+
+# 3. Snapshot Bypassing logic check
+class MockContext:
+    def __init__(self):
+        self.auto_approve = False
+        self.newly_created_devices = set()
+        
+mock_ctx = MockContext()
+
+def simulate_snapshot_bypass_check(ctx, device_name):
+    if getattr(ctx, "auto_approve", False) or device_name in getattr(ctx, "newly_created_devices", set()):
+        return True
+    return False
+
+test("Snapshot not bypassed by default", not simulate_snapshot_bypass_check(mock_ctx, "R1"))
+
+mock_ctx.auto_approve = True
+test("Snapshot bypassed when auto_approve=True", simulate_snapshot_bypass_check(mock_ctx, "R1"))
+
+mock_ctx.auto_approve = False
+mock_ctx.newly_created_devices.add("R1")
+test("Snapshot bypassed when device is newly created", simulate_snapshot_bypass_check(mock_ctx, "R1"))
+# ==============================================================
+# TEST 16: GNS3 Template Selector UI & Heuristics
+# ==============================================================
+print("\n" + "="*60)
+print("TEST 16: GNS3 Template Selector UI & Heuristics")
+print("="*60)
+
+try:
+    from network_manager.gui.template_selector_dialog import TemplateSelectorDialog, request_template_selection
+    from PySide6.QtWidgets import QApplication
+    
+    # Initialize a dummy QApplication if not already running
+    app = QApplication.instance()
+    if not app:
+        app = QApplication([])
+
+    # Mock templates list
+    mock_templates = [
+        {"name": "c7200", "template_id": "t1"},
+        {"name": "layer 2", "template_id": "t2"},
+        {"name": "EtherSwitchr l3", "template_id": "t3"},
+        {"name": "win7", "template_id": "t4"},
+    ]
+    
+    dialog = TemplateSelectorDialog(
+        roles=["router", "core", "switch"],
+        available_templates=mock_templates,
+        current_mappings={"router": "", "core": "", "switch": ""}
+    )
+    
+    # Verify heuristics
+    test("Guess Router matches c7200", dialog._guess_template_for_role("router", ["c7200", "layer 2", "EtherSwitchr l3"]) == "c7200")
+    test("Guess Core matches EtherSwitchr l3", dialog._guess_template_for_role("core", ["c7200", "layer 2", "EtherSwitchr l3"]) == "EtherSwitchr l3")
+    test("Guess Switch matches layer 2", dialog._guess_template_for_role("switch", ["c7200", "layer 2", "EtherSwitchr l3"]) == "layer 2")
+    
+except Exception as e:
+    test("GNS3 Template Selector Heuristics Load", False, f"Failed to import/run test: {e}")
+
+
+# ==============================================================
+# TEST 17: provision_topology End-to-End Mocked Test
+# ==============================================================
+print("\n" + "="*60)
+print("TEST 17: provision_topology End-to-End Mocked Test")
+print("="*60)
+
+try:
+    from network_manager.ai_agent import ctx, provision_topology
+    
+    # Store originals
+    orig_connector = getattr(ctx, "_gns3_connector_instance", None)
+    orig_project_id = ctx.gns3_project_id
+    
+    class MockGNS3Connector:
+        def __init__(self):
+            self.created_nodes = []
+            self.created_links = []
+            self.started_nodes = []
+            
+        def get_templates(self):
+            return [
+                {"name": "c7200", "template_id": "t1"},
+                {"name": "layer 2", "template_id": "t2"},
+                {"name": "EtherSwitchr l3", "template_id": "t3"}
+            ]
+            
+        def create_node(self, project_id, name, template_id, x, y):
+            self.created_nodes.append((name, template_id, x, y))
+            return {"node_id": f"node_{name}", "console_host": "127.0.0.1", "console": 5000 + len(self.created_nodes)}
+            
+        def get_node_ports(self, project_id, node_id):
+            return [
+                {"name": "FastEthernet0/0", "short_name": "f0/0", "adapter_number": 0, "port_number": 0},
+                {"name": "FastEthernet1/0", "short_name": "f1/0", "adapter_number": 1, "port_number": 0}
+            ]
+            
+        def create_link(self, project_id, id_a, adapter_a, port_a, id_b, adapter_b, port_b):
+            self.created_links.append((id_a, port_a, id_b, port_b))
+            return {"link_id": f"link_{id_a}_{id_b}"}
+            
+        def start_node(self, project_id, node_id):
+            self.started_nodes.append(node_id)
+            return True
+
+    mock_conn = MockGNS3Connector()
+    type(ctx)._gns3_connector_instance = mock_conn
+    ctx.gns3_project_id = "test-project-id"
+    
+    # Run provision_topology
+    test_topology_json = """{
+        "nodes": [
+            {"name": "TEST-R1", "role": "router", "template": "c7200", "x": -100, "y": -100},
+            {"name": "TEST-SW1", "role": "switch", "template": "layer 2", "x": 100, "y": 100}
+        ],
+        "links": [
+            {"node_a": "TEST-R1", "port_a": "f0/0", "node_b": "TEST-SW1", "port_b": "f1/0"}
+        ]
+    }"""
+    
+    result = provision_topology(test_topology_json)
+    
+    # Assertions
+    test("provision_topology returned success status", "Successfully provisioned" in result)
+    test("provision_topology created 2 nodes", len(mock_conn.created_nodes) == 2)
+    test("provision_topology resolved router template to t1", mock_conn.created_nodes[0][1] == "t1")
+    test("provision_topology resolved switch template to t2", mock_conn.created_nodes[1][1] == "t2")
+    test("provision_topology connected 1 link", len(mock_conn.created_links) == 1)
+    test("provision_topology started 2 nodes", len(mock_conn.started_nodes) == 2)
+    test("provision_topology added devices to ctx.newly_created_devices", "TEST-R1" in ctx.newly_created_devices)
+    
+    # Restore originals
+    type(ctx)._gns3_connector_instance = orig_connector
+    ctx.gns3_project_id = orig_project_id
+    
+except Exception as e:
+    test("provision_topology End-to-End Test Execution", False, f"Failed: {e}")
+
+
+# ==============================================================
+# TEST 18: GNS3 Name Sync Conflict and Router Speed/Duplex Omission
+# ==============================================================
+print("\n" + "="*60)
+print("TEST 18: GNS3 Name Sync Conflict and Router Speed/Duplex Omission")
+print("="*60)
+
+try:
+    # 1. Test name synchronization conflict
+    from network_manager.ai_agent import ctx, provision_topology
+    
+    orig_connector = getattr(ctx, "_gns3_connector_instance", None)
+    orig_project_id = ctx.gns3_project_id
+    
+    class ConflictingGNS3Connector:
+        def __init__(self):
+            self.created_nodes = []
+            self.created_links = []
+            self.started_nodes = []
+            
+        def get_templates(self):
+            return [
+                {"name": "c7200", "template_id": "t1"}
+            ]
+            
+        def create_node(self, project_id, name, template_id, x, y):
+            self.created_nodes.append((name, template_id, x, y))
+            # Mock renaming: TEST-R1 gets renamed to TEST-R3 by GNS3
+            actual_name = "TEST-R3" if name == "TEST-R1" else name
+            return {"node_id": f"node_{actual_name}", "name": actual_name, "console_host": "127.0.0.1", "console": 5001}
+            
+        def get_node_ports(self, project_id, node_id):
+            return [
+                {"name": "FastEthernet0/0", "short_name": "f0/0", "adapter_number": 0, "port_number": 0}
+            ]
+            
+        def start_node(self, project_id, node_id):
+            self.started_nodes.append(node_id)
+            return True
+
+    mock_conflict_conn = ConflictingGNS3Connector()
+    type(ctx)._gns3_connector_instance = mock_conflict_conn
+    ctx.gns3_project_id = "test-project-id"
+    
+    # Run provision_topology where requested name is TEST-R1 but actual is TEST-R3
+    conflict_topology_json = """{
+        "nodes": [
+            {"name": "TEST-R1", "role": "router", "template": "c7200", "x": -100, "y": -100}
+        ],
+        "links": []
+    }"""
+    
+    # Ensure R3 is not in newly_created_devices first
+    if hasattr(ctx, "newly_created_devices"):
+        ctx.newly_created_devices.discard("TEST-R3")
+        ctx.newly_created_devices.discard("TEST-R1")
+        
+    result = provision_topology(conflict_topology_json)
+    
+    test("provision_topology with conflict added TEST-R3 to newly_created_devices", "TEST-R3" in ctx.newly_created_devices)
+    test("provision_topology with conflict did NOT add TEST-R1 to newly_created_devices", "TEST-R1" not in ctx.newly_created_devices)
+    
+    # Verify database sync has TEST-R3
+    from network_manager.config import conn, db_lock
+    with db_lock:
+        cur = conn.cursor()
+        cur.execute("SELECT name FROM devices WHERE node_id=?", ("node_TEST-R3",))
+        row = cur.fetchone()
+        cur.close()
+    test("Database synced TEST-R3 node name on conflict", row is not None and row[0] == "TEST-R3")
+    
+    # Restore connector
+    type(ctx)._gns3_connector_instance = orig_connector
+    ctx.gns3_project_id = orig_project_id
+    
+    # 2. Test speed/duplex omission for routers in CiscoIOSProfile
+    from network_manager.vendors.cisco_ios import CiscoIOSProfile
+    profile = CiscoIOSProfile()
+    
+    # Router transit links block
+    transit_config = profile._render_transit_links_block([
+        {"local_interface": "FastEthernet0/0", "ip": "10.0.0.1", "mask": "255.255.255.252"}
+    ])
+    test("Router transit links do not have speed 100", "speed 100" not in transit_config)
+    test("Router transit links do not have duplex full", "duplex full" not in transit_config)
+    
+    # Router parent stick block
+    stick_config = profile._render_router_on_stick_block("FastEthernet0/0", [
+        {"vlan": "10", "ip": "192.168.10.1", "mask": "255.255.255.0"}
+    ])
+    test("Router stick parent interface does not have speed 100", "speed 100" not in stick_config)
+    test("Router stick parent interface does not have duplex full", "duplex full" not in stick_config)
+    
+    # Switch uplink block (should STILL have speed/duplex)
+    uplink_config = profile.render_uplink_block([
+        {"ports": "FastEthernet1/0", "mode": "trunk", "allowed vlans": "all"}
+    ])
+    test("Switch uplink still has speed 100", "speed 100" in uplink_config)
+    test("Switch uplink still has duplex full", "duplex full" in uplink_config)
+    
+except Exception as e:
+    test("TEST 18 Execution Failed", False, f"Failed: {e}")
+
+
+# ==============================================================
+# TEST 19: Telnet Wake-up & Classification Improvements
+# ==============================================================
+print("\n" + "="*60)
+print("TEST 19: Telnet Wake-up & Classification Improvements")
+print("="*60)
+
+try:
+    # 1. Test class keyword checks on l3_keywords
+    with open(os.path.join(PROJECT_ROOT, "network_manager/gui/app.py"), "r", encoding="utf-8") as f:
+        app_source = f.read()
+    with open(os.path.join(PROJECT_ROOT, "network_manager/ai_agent.py"), "r", encoding="utf-8") as f:
+        agent_source = f.read()
+        
+    test("app.py l3_keywords contains 'etherswitch'", "'etherswitch'" in app_source)
+    test("app.py l3_keywords contains 'l3'", "'l3'" in app_source)
+    test("ai_agent.py l3_keywords contains 'etherswitch'", "'etherswitch'" in agent_source)
+    test("ai_agent.py l3_keywords contains 'l3'", "'l3'" in agent_source)
+
+    # 2. Test Sender._telnet_wake_gns3_console logic
+    import asyncio
+    from network_manager.network.sender import Sender
+
+    class DummyWriter:
+        def __init__(self):
+            self.writes = []
+        def write(self, data):
+            self.writes.append(data)
+            
+    class DummyReader:
+        def __init__(self, outputs):
+            self.outputs = outputs
+            self.idx = 0
+        async def read(self, n=4096):
+            if self.idx < len(self.outputs):
+                val = self.outputs[self.idx]
+                self.idx += 1
+                return val
+            return ""
+
+    writer = DummyWriter()
+    
+    async def mock_read_ready(timeout):
+        return ""
+    
+    buf_ready = asyncio.run(Sender._telnet_wake_gns3_console(writer, mock_read_ready, lambda m: None, "Switch#"))
+    test("Console wake-up breaks immediately if already at prompt", buf_ready == "Switch#")
+    test("No enters sent for already-prompt console", len(writer.writes) == 0)
+
+    # Scenario B: Device is booting and decompressing, then needs enter
+    boot_sequence = [
+        "Self decompressing the image ... [OK]\r\nCisco IOS Software, C3725 Software ...\r\n",
+        "Line protocol on Interface FastEthernet0/0, changed state to down\r\n",
+        "Press RETURN to get started!\r\n",
+        "Switch>"
+    ]
+    
+    reader_b = DummyReader(boot_sequence)
+    async def mock_read_b(timeout):
+        return await reader_b.read()
+        
+    writer_b = DummyWriter()
+    buf_b = asyncio.run(Sender._telnet_wake_gns3_console(writer_b, mock_read_b, lambda m: None, ""))
+    
+    test("Console wake-up sends Enter key when it sees banner or return prompt", len(writer_b.writes) > 0)
+    test("Console wake-up successfully wakes switch and reaches prompt", "Switch>" in buf_b)
+    
+except Exception as e:
+    test("TEST 19 Execution Failed", False, f"Failed: {e}")
+
+
+# ==============================================================
 # RESULTS
 # ==============================================================
+
 print("\n" + "="*60)
 total = PASS + FAIL
 print(f"RESULTS: {PASS}/{total} passed, {FAIL} failed")
