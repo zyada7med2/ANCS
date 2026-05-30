@@ -2318,6 +2318,10 @@
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
                         <span>Workspace</span>
                     </div>
+                    <div class="settings-nav-item" id="settings-nav-gns3" onclick="switchSettingsTab('gns3')">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+                        <span>GNS3 Mappings</span>
+                    </div>
                     <div class="settings-nav-item" id="settings-nav-advanced" onclick="switchSettingsTab('advanced')">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
                         <span>Advanced</span>
@@ -2394,36 +2398,45 @@
                     <div class="settings-form-row">
                         <div class="settings-form-group">
                             <label class="settings-label">Provider</label>
-                            <select class="settings-select" id="settings-provider">
+                            <select class="settings-select" id="settings-provider" onchange="handleProviderChange()">
                                 <option value="openrouter">OpenRouter (Free Models)</option>
                                 <option value="gemini">Gemini (API Key)</option>
                                 <option value="vertex">Vertex AI (Cloud Credits)</option>
                                 <option value="hapuppy">Hapuppy (Cheap Models)</option>
                                 <option value="nvidia">NVIDIA NIM</option>
+                                <option value="ollama">Ollama (Local)</option>
                             </select>
                         </div>
                         <div class="settings-form-group">
                             <label class="settings-label">Model</label>
-                            <select class="settings-select" id="settings-model">
-                                <option value="openai/gpt-4o-mini">openai/gpt-4o-mini</option>
-                                <option value="openai/gpt-oss-120b:free">openai/gpt-oss-120b:free</option>
-                                <option value="gemini-1.5-flash">gemini-1.5-flash</option>
-                                <option value="gemini-2.0-flash">gemini-2.0-flash</option>
-                                <option value="gemini-1.5-pro">gemini-1.5-pro</option>
-                                <option value="gemini-2.5-flash">gemini-2.5-flash</option>
-                                <option value="gemini-3.5-flash">gemini-3.5-flash</option>
-                                <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
-                                <option value="gemini-3-flash">gemini-3-flash</option>
-                                <option value="gpt-4o-mini">gpt-4o-mini</option>
-                                <option value="deepseek-v3">deepseek-v3</option>
-                                <option value="mistralai/mistral-nemo:free">mistralai/mistral-nemo:free</option>
-                                <option value="meta-llama/llama-3.1-8b-instruct:free">meta-llama/llama-3.1-8b-instruct:free</option>
-                                <option value="google/gemma-2-27b-it:free">google/gemma-2-27b-it:free</option>
-                            </select>
+                            <div id="settings-model-container">
+                                <select class="settings-select" id="settings-model">
+                                    <option value="openai/gpt-4o-mini">openai/gpt-4o-mini</option>
+                                    <option value="openai/gpt-oss-120b:free">openai/gpt-oss-120b:free</option>
+                                    <option value="gemini-1.5-flash">gemini-1.5-flash</option>
+                                    <option value="gemini-2.0-flash">gemini-2.0-flash</option>
+                                    <option value="gemini-1.5-pro">gemini-1.5-pro</option>
+                                    <option value="gemini-2.5-flash">gemini-2.5-flash</option>
+                                    <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+                                    <option value="gemini-3-flash-preview">gemini-3-flash-preview</option>
+                                    <option value="gemini-3-flash">gemini-3-flash</option>
+                                    <option value="gpt-4o-mini">gpt-4o-mini</option>
+                                    <option value="deepseek-v3">deepseek-v3</option>
+                                    <option value="mistralai/mistral-nemo:free">mistralai/mistral-nemo:free</option>
+                                    <option value="meta-llama/llama-3.1-8b-instruct:free">meta-llama/llama-3.1-8b-instruct:free</option>
+                                    <option value="google/gemma-2-27b-it:free">google/gemma-2-27b-it:free</option>
+                                </select>
+                            </div>
+                            <span class="settings-desc" id="settings-model-warning" style="display: none; color: #ff9e2c; font-size: 11px;">Ollama offline — enter model name manually</span>
                         </div>
                     </div>
 
-                    <div class="settings-form-group">
+                    <div class="settings-form-group" id="settings-ollama-url-group" style="display: none;">
+                        <label class="settings-label">Ollama Server URL</label>
+                        <input type="text" class="settings-input" id="settings-ollama-url" placeholder="http://localhost:11434" value="http://localhost:11434" onchange="handleProviderChange()">
+                    </div>
+
+                    <div class="settings-form-group" id="settings-api-key-group">
                         <div style="display:flex; justify-content:space-between;">
                             <label class="settings-label">API Key</label>
                             <span style="font-size:11px; color:var(--green); font-weight:600;" id="settings-api-status-label">✓ API connection successful</span>
@@ -2517,6 +2530,40 @@
                                 <!-- Populated dynamically by JS -->
                             </tbody>
                         </table>
+                    </div>
+
+                    <div class="settings-actions">
+                        <button class="settings-btn secondary" onclick="toggleSettingsModal()">Cancel</button>
+                        <button class="settings-btn primary" onclick="saveSettings()">Save Changes</button>
+                    </div>
+                </div>
+
+                <!-- TAB GNS3 MAPPINGS -->
+                <div class="settings-tab-content" id="settings-tab-gns3">
+                    <h3 class="settings-tab-title">GNS3 Template Mappings</h3>
+                    <span class="settings-desc" style="display:block; margin-bottom:15px; color:var(--text-sec);">
+                        Assign specific GNS3 templates/images for each device role so that GNS3 creation tools automatically spawn the correct template/image.
+                    </span>
+                    
+                    <div class="settings-form-group">
+                        <label class="settings-label">Router Template</label>
+                        <select class="settings-select" id="mapping-router-template">
+                            <option value="">-- Select Template --</option>
+                        </select>
+                    </div>
+
+                    <div class="settings-form-group" style="margin-top:12px;">
+                        <label class="settings-label">Core Switch Template</label>
+                        <select class="settings-select" id="mapping-core-template">
+                            <option value="">-- Select Template --</option>
+                        </select>
+                    </div>
+
+                    <div class="settings-form-group" style="margin-top:12px; margin-bottom:20px;">
+                        <label class="settings-label">Access Switch Template</label>
+                        <select class="settings-select" id="mapping-switch-template">
+                            <option value="">-- Select Template --</option>
+                        </select>
                     </div>
 
                     <div class="settings-actions">
@@ -3661,6 +3708,71 @@
             }
         }
 
+        // Handle provider selection change (shows/hides Ollama details, loads local models)
+        async function handleProviderChange() {
+            const providerSelect = document.getElementById('settings-provider');
+            if (!providerSelect) return;
+            const provider = providerSelect.value;
+            const apiKeyGroup = document.getElementById('settings-api-key-group');
+            const ollamaUrlGroup = document.getElementById('settings-ollama-url-group');
+            const modelContainer = document.getElementById('settings-model-container');
+            const modelWarning = document.getElementById('settings-model-warning');
+            
+            // Lazy initialize original HTML
+            if (!window.originalModelSelectHTML && modelContainer) {
+                window.originalModelSelectHTML = modelContainer.innerHTML;
+            }
+            
+            if (provider === 'ollama') {
+                if (apiKeyGroup) apiKeyGroup.style.display = 'none';
+                if (ollamaUrlGroup) ollamaUrlGroup.style.display = 'block';
+                
+                const urlInput = document.getElementById('settings-ollama-url');
+                const ollamaUrl = urlInput ? urlInput.value : 'http://localhost:11434';
+                try {
+                    const response = await fetch(ollamaUrl.replace(/\/+$/, '') + '/api/tags');
+                    if (!response.ok) throw new Error('Ollama offline');
+                    const data = await response.json();
+                    if (data.models && data.models.length > 0) {
+                        let optionsHtml = '';
+                        data.models.forEach(m => {
+                            optionsHtml += `<option value="${m.name}">${m.name}</option>`;
+                        });
+                        modelContainer.innerHTML = `<select class="settings-select" id="settings-model">${optionsHtml}</select>`;
+                        if (modelWarning) modelWarning.style.display = 'none';
+                        
+                        // Try to restore saved model
+                        const savedModel = localStorage.getItem('agent_model');
+                        const selectEl = document.getElementById('settings-model');
+                        if (savedModel && selectEl && Array.from(selectEl.options).some(opt => opt.value === savedModel)) {
+                            selectEl.value = savedModel;
+                        }
+                    } else {
+                        throw new Error('No models found');
+                    }
+                } catch (e) {
+                    console.warn('Ollama fetch error:', e);
+                    const savedModel = localStorage.getItem('agent_model') || 'gemma2:2b';
+                    modelContainer.innerHTML = `<input type="text" class="settings-input" id="settings-model" placeholder="e.g. gemma2:2b" value="${savedModel}">`;
+                    if (modelWarning) modelWarning.style.display = 'block';
+                }
+            } else {
+                if (apiKeyGroup) apiKeyGroup.style.display = 'block';
+                if (ollamaUrlGroup) ollamaUrlGroup.style.display = 'none';
+                if (modelWarning) modelWarning.style.display = 'none';
+                
+                if (window.originalModelSelectHTML && modelContainer) {
+                    modelContainer.innerHTML = window.originalModelSelectHTML;
+                }
+                
+                const savedModel = localStorage.getItem('agent_model');
+                const modelSelect = document.getElementById('settings-model');
+                if (modelSelect && savedModel) {
+                    modelSelect.value = savedModel;
+                }
+            }
+        }
+
         // Load config from LocalStorage
         function loadSavedConfigSettings() {
             const rawDeployCheck = document.getElementById('settings-allow-raw-deploy');
@@ -3669,6 +3781,7 @@
             const providerSelect = document.getElementById('settings-provider');
             const modelSelect = document.getElementById('settings-model');
             const apiKeyInput = document.getElementById('settings-api-key');
+            const ollamaUrlInput = document.getElementById('settings-ollama-url');
             
             if (rawDeployCheck) {
                 rawDeployCheck.checked = localStorage.getItem('agent_allow_raw_deploy') === 'true';
@@ -3682,6 +3795,9 @@
             if (providerSelect) {
                 providerSelect.value = localStorage.getItem('agent_provider') || 'openrouter';
             }
+            if (ollamaUrlInput) {
+                ollamaUrlInput.value = localStorage.getItem('agent_ollama_url') || 'http://localhost:11434';
+            }
             if (modelSelect) {
                 modelSelect.value = localStorage.getItem('agent_model') || 'openai/gpt-4o-mini';
             }
@@ -3689,8 +3805,52 @@
                 apiKeyInput.value = localStorage.getItem('agent_api_key') || '';
             }
             
+            handleProviderChange();
             updateHeaderModelPill();
+            // Load GNS3 template mappings
+            window.loadGns3TemplateMappings();
         }
+
+        window.loadGns3TemplateMappings = function() {
+            if (!window.bridge || !window.bridge.getGns3Templates) return;
+            
+            // Get available templates from GNS3
+            window.bridge.getGns3Templates(function(templatesJson) {
+                try {
+                    const templates = JSON.parse(templatesJson);
+                    const routerSelect = document.getElementById('mapping-router-template');
+                    const coreSelect = document.getElementById('mapping-core-template');
+                    const switchSelect = document.getElementById('mapping-switch-template');
+                    
+                    if (!routerSelect || !coreSelect || !switchSelect) return;
+                    
+                    const defaultOpt = '<option value="">-- Select Template --</option>';
+                    let optionsHtml = defaultOpt;
+                    
+                    templates.forEach(t => {
+                        optionsHtml += `<option value="${t.name}">${t.name}</option>`;
+                    });
+                    
+                    routerSelect.innerHTML = optionsHtml;
+                    coreSelect.innerHTML = optionsHtml;
+                    switchSelect.innerHTML = optionsHtml;
+                    
+                    // Fetch existing mappings to set selected values
+                    window.bridge.getGns3TemplateMappings(function(mappingsJson) {
+                        try {
+                            const mappings = JSON.parse(mappingsJson);
+                            routerSelect.value = mappings.router || '';
+                            coreSelect.value = mappings.core || '';
+                            switchSelect.value = mappings.switch || mappings.access || '';
+                        } catch (ex) {
+                            console.error('Error parsing GNS3 template mappings:', ex);
+                        }
+                    });
+                } catch (e) {
+                    console.error('Error parsing GNS3 templates:', e);
+                }
+            });
+        };
 
         function updateHeaderModelPill() {
             const model = localStorage.getItem('agent_model') || 'openai/gpt-4o-mini';
@@ -3706,6 +3866,7 @@
                 provider: (document.getElementById('settings-provider') || {}).value || 'openrouter',
                 model: (document.getElementById('settings-model') || {}).value || 'openai/gpt-4o-mini',
                 apiKey: (document.getElementById('settings-api-key') || {}).value || '',
+                ollamaUrl: (document.getElementById('settings-ollama-url') || {}).value || 'http://localhost:11434',
                 allowRaw: (document.getElementById('settings-allow-raw-deploy') || {}).checked || false,
                 maxTokens: (document.getElementById('settings-max-tokens') || {}).value || '8192',
                 timeout: (document.getElementById('settings-timeout') || {}).value || '30'
@@ -3715,6 +3876,7 @@
             localStorage.setItem('agent_provider', settings.provider);
             localStorage.setItem('agent_model', settings.model);
             localStorage.setItem('agent_api_key', settings.apiKey);
+            localStorage.setItem('agent_ollama_url', settings.ollamaUrl);
             localStorage.setItem('agent_allow_raw_deploy', settings.allowRaw);
             localStorage.setItem('agent_max_tokens', settings.maxTokens);
             localStorage.setItem('agent_timeout', settings.timeout);
@@ -3724,6 +3886,19 @@
             // Send to Python backend
             if (window.bridge) {
                 window.bridge.saveSettings(JSON.stringify(settings));
+                
+                // Save GNS3 Template Mappings
+                const routerSelect = document.getElementById('mapping-router-template');
+                const coreSelect = document.getElementById('mapping-core-template');
+                const switchSelect = document.getElementById('mapping-switch-template');
+                if (routerSelect && coreSelect && switchSelect) {
+                    const Gns3mappings = {
+                        router: routerSelect.value,
+                        core: coreSelect.value,
+                        switch: switchSelect.value
+                    };
+                    window.bridge.saveGns3TemplateMappings(JSON.stringify(Gns3mappings));
+                }
             }
             
             toggleSettingsModal();
@@ -4287,6 +4462,7 @@
                 if (s.provider && el('settings-provider')) el('settings-provider').value = s.provider;
                 if (s.model && el('settings-model')) el('settings-model').value = s.model;
                 if (s.apiKey !== undefined && el('settings-api-key')) el('settings-api-key').value = s.apiKey;
+                if (s.ollamaUrl !== undefined && el('settings-ollama-url')) el('settings-ollama-url').value = s.ollamaUrl;
                 if (s.allowRaw !== undefined && el('settings-allow-raw-deploy')) el('settings-allow-raw-deploy').checked = s.allowRaw;
                 if (s.maxTokens && el('settings-max-tokens')) el('settings-max-tokens').value = s.maxTokens;
                 if (s.timeout && el('settings-timeout')) el('settings-timeout').value = s.timeout;
@@ -4294,6 +4470,9 @@
                 if (s.provider) localStorage.setItem('agent_provider', s.provider);
                 if (s.model) localStorage.setItem('agent_model', s.model);
                 if (s.apiKey) localStorage.setItem('agent_api_key', s.apiKey);
+                if (s.ollamaUrl) localStorage.setItem('agent_ollama_url', s.ollamaUrl);
+                
+                handleProviderChange();
                 updateHeaderModelPill();
             } catch(e) { console.error('_pushSettings error:', e); }
         }
@@ -4879,6 +5058,8 @@
                         origSwitchSettingsTab(tabName);
                         if (tabName === 'history') {
                             window.loadHistorySettings();
+                        } else if (tabName === 'gns3') {
+                            window.loadGns3TemplateMappings();
                         }
                     };
 

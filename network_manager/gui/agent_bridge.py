@@ -193,11 +193,13 @@ Saved Configuration:
             "vertex": "vertex",
             "hapuppy": "hapuppy",
             "nvidia": "nvidia",
+            "ollama": "ollama",
         }
         prov = settings.get("provider", "openrouter")
         cfg["agent_provider"] = provider_map.get(prov, prov)
         cfg["agent_model"] = settings.get("model", "openai/gpt-4o-mini")
         cfg["gemini_api_key"] = settings.get("apiKey", "")
+        cfg["agent_ollama_url"] = settings.get("ollamaUrl", "http://localhost:11434")
         cfg["agent_allow_raw_deploy"] = bool(settings.get("allowRaw", False))
         cfg["agent_max_tokens"] = settings.get("maxTokens", "8192")
         cfg["agent_timeout"] = settings.get("timeout", "30")
@@ -576,4 +578,43 @@ Saved Configuration:
                 dev_type = "router"
             dev_list.append({"name": name, "type": dev_type})
         return json.dumps(dev_list)
+
+    @Slot(result=str)
+    def getGns3Templates(self):
+        """Fetch the list of all available templates from the GNS3 server."""
+        try:
+            from network_manager.ai_agent import ctx
+            gns3 = ctx.get_gns3_connector()
+            templates = gns3.get_templates()
+            return json.dumps(templates)
+        except Exception as e:
+            print(f"Error fetching GNS3 templates: {e}")
+            return json.dumps([])
+
+    @Slot(result=str)
+    def getGns3TemplateMappings(self):
+        """Get the current GNS3 template mappings from gns3_template_mappings.json."""
+        from network_manager.config import _BASE_DIR
+        mapping_file = os.path.join(_BASE_DIR, "gns3_template_mappings.json")
+        if os.path.exists(mapping_file):
+            try:
+                with open(mapping_file, "r", encoding="utf-8") as f:
+                    return f.read()
+            except Exception:
+                pass
+        return json.dumps({"router": "", "core": "", "switch": ""})
+
+    @Slot(str, result=bool)
+    def saveGns3TemplateMappings(self, mappings_json):
+        """Save the GNS3 template mappings to gns3_template_mappings.json."""
+        try:
+            mappings = json.loads(mappings_json)
+            from network_manager.config import _BASE_DIR
+            mapping_file = os.path.join(_BASE_DIR, "gns3_template_mappings.json")
+            with open(mapping_file, "w", encoding="utf-8") as f:
+                json.dump(mappings, f, indent=2)
+            return True
+        except Exception as e:
+            print(f"Error saving GNS3 template mappings: {e}")
+            return False
 

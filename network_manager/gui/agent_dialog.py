@@ -39,9 +39,20 @@ _INDEX_HTML = os.path.join(_WEB_DIR, "index.html")
 
 
 class ANCSWebEnginePage(QWebEnginePage):
-    """Custom QWebEnginePage to redirect JS console logs to Python stdout."""
+    """Custom QWebEnginePage to redirect JS console logs to Python stdout, disable context menus, and block browser navigation/reloads."""
     def javaScriptConsoleMessage(self, level, message, lineNumber, sourceID):
         print(f"[JS Console] {message} (Line: {lineNumber}, Source: {sourceID})")
+
+    def createStandardContextMenu(self):
+        from PySide6.QtWidgets import QMenu
+        return QMenu(self.view())
+
+    def acceptNavigationRequest(self, url, navigationType, isMainFrame):
+        # Block reload and back/forward
+        if navigationType in (QWebEnginePage.NavigationType.NavigationTypeBackForward,
+                              QWebEnginePage.NavigationType.NavigationTypeReload):
+            return False
+        return super().acceptNavigationRequest(url, navigationType, isMainFrame)
 
 class _EdgeGrip(QWidget):
     """Invisible widget placed on a window edge/corner to handle resize."""
@@ -173,6 +184,7 @@ class ANCSAgentDialog(QDialog):
         # ── Build the QWebEngineView ─────────────────────────────────
         self._web = QWebEngineView()
         self._web.setAcceptDrops(False)
+        self._web.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         page = ANCSWebEnginePage(self._web)
         self._web.setPage(page)
         page.setWebChannel(self._channel)
@@ -193,6 +205,9 @@ class ANCSAgentDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.addWidget(self._web)
+
+        # Install event filter to block browser hotkeys
+        self._web.installEventFilter(self)
 
         # ── Device chips refresh timer ───────────────────────────────
         self._chips_timer = QTimer(self)
@@ -217,6 +232,31 @@ class ANCSAgentDialog(QDialog):
                 ctypes.windll.dwmapi.DwmExtendFrameIntoClientArea(hwnd, margins(1, 1, 1, 1))
             except Exception:
                 pass
+
+    # ──────────────────────────────────────────────────────────────────
+    # KEYBOARD EVENT FILTER (Disables Browser Hotkeys)
+    # ──────────────────────────────────────────────────────────────────
+    def eventFilter(self, watched, event):
+        if watched is self._web and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            modifiers = event.modifiers()
+            
+            # F5 (Reload)
+            if key == Qt.Key.Key_F5:
+                event.accept()
+                return True
+                
+            # Ctrl+R or Ctrl+Shift+R (Reload)
+            if key == Qt.Key.Key_R and (modifiers & Qt.KeyboardModifier.ControlModifier):
+                event.accept()
+                return True
+                
+            # Alt+Left or Alt+Right (Back/Forward navigation)
+            if key in (Qt.Key.Key_Left, Qt.Key.Key_Right) and (modifiers & Qt.KeyboardModifier.AltModifier):
+                event.accept()
+                return True
+                
+        return super().eventFilter(watched, event)
 
     # ──────────────────────────────────────────────────────────────────
     # JS READY CALLBACK
@@ -319,6 +359,7 @@ class ANCSAgentDialog(QDialog):
         prov = cfg.get("agent_provider", "openrouter")
         model = cfg.get("agent_model", "openai/gpt-4o-mini")
         key = cfg.get("gemini_api_key", "") or cfg.get("openrouter_api_key", "")
+        ollama_url = cfg.get("agent_ollama_url", "http://localhost:11434")
         allow_raw = bool(cfg.get("agent_allow_raw_deploy", False))
         max_tokens = str(cfg.get("agent_max_tokens", "8192"))
         timeout = str(cfg.get("agent_timeout", "30"))
@@ -328,6 +369,7 @@ class ANCSAgentDialog(QDialog):
             "provider": prov,
             "model": model,
             "apiKey": key,
+            "ollamaUrl": ollama_url,
             "allowRaw": allow_raw,
             "maxTokens": max_tokens,
             "timeout": timeout,
@@ -407,8 +449,9 @@ class ANCSAgentDialog(QDialog):
         provider = cfg.get("agent_provider", "openrouter")
         model_name = cfg.get("agent_model", "openai/gpt-4o-mini")
         allow_raw = bool(cfg.get("agent_allow_raw_deploy", False))
+        ollama_url = cfg.get("agent_ollama_url", "http://localhost:11434")
 
-        if provider != "vertex" and not api_key:
+        if provider not in ("vertex", "ollama") and not api_key:
             self._bridge.addChatMessage.emit(
                 "system",
                 "Please enter your API key in Settings (⚙) to connect.",
@@ -420,7 +463,8 @@ class ANCSAgentDialog(QDialog):
             cw = self.app._copilot_worker
             if (getattr(cw, "api_key", "") == api_key
                     and getattr(cw, "provider", "") == provider
-                    and getattr(cw, "model_name", "") == model_name):
+                    and getattr(cw, "model_name", "") == model_name
+                    and getattr(cw, "ollama_url", "") == ollama_url):
                 self._bridge.setConnectionStatus.emit("connected", model_name)
                 return
             self._bridge.addChatMessage.emit("system", "Reconnecting with updated settings...", "")
@@ -454,7 +498,8 @@ class ANCSAgentDialog(QDialog):
             model_name=model_name,
             initial_messages=self.app._copilot_history,
             mode=getattr(self, '_current_mode', 'chat'),
-            app=self.app
+            app=self.app,
+            ollama_url=ollama_url
         )
         self._connect_worker_signals()
         self.app._copilot_worker.start()
@@ -478,10 +523,12 @@ class ANCSAgentDialog(QDialog):
         api_key = cfg.get("gemini_api_key", "")
         provider = cfg.get("agent_provider", "openrouter")
         model_name = cfg.get("agent_model", "openai/gpt-4o-mini")
+        ollama_url = cfg.get("agent_ollama_url", "http://localhost:11434")
 
         if (getattr(cw, "api_key", "") != api_key
                 or getattr(cw, "provider", "") != provider
-                or getattr(cw, "model_name", "") != model_name):
+                or getattr(cw, "model_name", "") != model_name
+                or getattr(cw, "ollama_url", "") != ollama_url):
             self._bridge.addChatMessage.emit("system", "Reconnecting with new settings...", "")
             self.app._copilot_history = []
             self._stop_worker()

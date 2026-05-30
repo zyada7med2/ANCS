@@ -185,9 +185,6 @@ class CiscoIOSProfile(VendorProfile):
         if not router_interface or not routing_entries:
             return ""
         lines = ["configure terminal", f"interface {router_interface}"]
-        if router_interface.lower().startswith("fastethernet") or router_interface.lower().startswith("ethernet"):
-            lines.append(" speed 100")
-            lines.append(" duplex full")
         lines += [" no shutdown", "exit"]
         for e in routing_entries:
             vlan, ip, mask = e.get("vlan"), e.get("ip"), e.get("mask", "255.255.255.0")
@@ -211,9 +208,6 @@ class CiscoIOSProfile(VendorProfile):
             iface = link["local_interface"]
             ip, mask = link["ip"], link["mask"]
             lines.append(f"interface {iface}")
-            if iface.lower().startswith("fastethernet") or iface.lower().startswith("ethernet"):
-                lines.append(" speed 100")
-                lines.append(" duplex full")
             lines += [f" ip address {ip} {mask}", " no shutdown", "exit"]
         lines += ["!", "end"]
         return "\n".join(lines)

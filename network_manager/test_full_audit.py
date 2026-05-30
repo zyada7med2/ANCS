@@ -179,8 +179,8 @@ check("A13: configure terminal at start", config.startswith("configure terminal"
 check("A14: end at end", config.strip().endswith("end"))
 
 # A15: Speed/duplex on FastEthernet
-check("A15: speed 100 on FastEthernet parent", "speed 100" in config)
-check("A16: duplex full on FastEthernet parent", "duplex full" in config)
+check("A15: NO speed 100 on FastEthernet parent", "speed 100" not in config)
+check("A16: NO duplex full on FastEthernet parent", "duplex full" not in config)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -485,8 +485,8 @@ check("I6: Redistribute EIGRP into OSPF",
 
 # Transit links block
 config = w._render_routing_block()
-check("I7: Speed/duplex on FastEthernet transit",
-      "speed 100" in config and "duplex full" in config)
+check("I7: NO Speed/duplex on FastEthernet transit",
+      "speed 100" not in config and "duplex full" not in config)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
