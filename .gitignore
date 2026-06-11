@@ -66,3 +66,33 @@ dist/
 /ancs agent refrence target.png
 /copilot_logs/
 /scratch/
+
+# Legacy logs & files removed from git tracking
+/2026-*
+/CODE_REVIEW_FINDINGS_*
+/FIX_*
+/IMPLEMENTATION_*
+/PHASE_*
+/TEST_*
+/TESTING_GUIDE.txt
+/_fix_prompt.py
+/antigravity_session_*
+/chat_history_mockup.html
+/claude_code_prompt.md
+/claude_instructions.md
+/debug_puller.py
+/figma_*
+/future_ideas.md
+/git
+/litellm_log.txt
+/multi-vendor_support_*
+/screenshot.py
+/test_fixes_comprehensive.py
+/test_out.png
+/ui_selfcheck_after_polish*
+/AI Model
+/ROUTER_FEATURES.md
+/network_manager/test_full_audit.py
+/network_manager/test_routing_protocols.py
+/network_manager/COPILOT_EVAL_SCENARIOS.txt
+/network_manager/gui/*backup.py
