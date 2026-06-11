@@ -1,7 +1,6 @@
-# GNS3 Deployment Fixes Tasks
+# README Screenshot Updates
 
 | Task ID | Description | Status |
 | :--- | :--- | :--- |
-| **Task 1** | Refactor `_telnet_wake_gns3_console` in `network_manager/network/sender.py` | completed |
-| **Task 2** | Add keywords to `l3_keywords` in `gui/app.py` and `ai_agent.py` | completed |
-| **Task 3** | Add unit tests to `network_manager/tests/test_improvements.py` and run tests | completed |
+| **Task 1** | Replace placeholder 0-byte screenshots in `docs/screenshots` with actual app images | completed |
+| **Task 2** | Update `README.md` to use relative paths and layout all 3 screenshots in a clean 2x2 grid | completed |

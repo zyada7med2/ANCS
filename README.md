@@ -35,12 +35,18 @@
 
 <table>
 <tr>
-<td><b>Main Application — Network Manager</b></td>
-<td><b>AI Agent — Chat Interface</b></td>
+<td colspan="2" align="center"><b>Main Application — Network Manager Dashboard</b></td>
 </tr>
 <tr>
-<td><img src="https://raw.githubusercontent.com/zyada7med2/ANCS/main/figma_preview.png" alt="Main UI" width="480"/></td>
-<td><img src="https://raw.githubusercontent.com/zyada7med2/ANCS/main/ui_selfcheck_after_polish_v2.png" alt="Agent Chat" width="480"/></td>
+<td colspan="2" align="center"><img src="docs/screenshots/main-ui.jpg" alt="Main UI" width="100%"/></td>
+</tr>
+<tr>
+<td width="50%" align="center"><b>AI Copilot — Chat Interface</b></td>
+<td width="50%" align="center"><b>AI Copilot — Logs & Console Stream</b></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/screenshots/agent-chat.jpg" alt="Agent Chat" width="100%"/></td>
+<td align="center"><img src="docs/screenshots/agent-logs.jpg" alt="Agent Logs" width="100%"/></td>
 </tr>
 </table>
 
