@@ -1,31 +1,25 @@
 <div align="center">
 
-<!-- Logo / Banner -->
-<img src="https://raw.githubusercontent.com/zyada7med2/ANCS/main/figma_preview.png" alt="ANCS Banner" width="800" style="border-radius:12px"/>
+<img src="https://raw.githubusercontent.com/zyada7med2/ANCS/main/network_manager/gui/logo.png" alt="ANCS Logo" width="120"/>
 
-<br/>
-<br/>
+<h1>ANCS — Auto Network Configuration System</h1>
 
-<h1>
-  <img src="https://readme-typing-svg.demolab.com?font=Fira+Code&weight=700&size=32&pause=1000&color=00C6FF&center=true&vCenter=true&width=600&lines=ANCS+%E2%80%94+Auto+Network+Config+System;AI-Powered+Network+Management;GNS3+Integration+%2B+Smart+Wizards" alt="Typing SVG" />
-</h1>
-
-<p align="center">
-  <strong>A modern desktop application for network device configuration management<br/>with GNS3 integration and an embedded Agentic AI Copilot.</strong>
+<p>
+  <strong>A professional desktop application for network device configuration management<br/>
+  with GNS3 integration, live topology visualization, and an embedded Agentic AI Copilot.</strong>
 </p>
 
-<br/>
-
-<!-- Badges -->
-<p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
-  <img src="https://img.shields.io/badge/PySide6-Qt%20Framework-41CD52?style=for-the-badge&logo=qt&logoColor=white" alt="PySide6"/>
-  <img src="https://img.shields.io/badge/AI-Gemini%20Powered-4285F4?style=for-the-badge&logo=google&logoColor=white" alt="Gemini AI"/>
-  <img src="https://img.shields.io/badge/GNS3-Integration-FF6600?style=for-the-badge&logo=cisco&logoColor=white" alt="GNS3"/>
-  <img src="https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge" alt="MIT License"/>
+<p>
+  <img src="https://img.shields.io/badge/Python-3.10%2B-3776AB?style=for-the-badge&logo=python&logoColor=white"/>
+  <img src="https://img.shields.io/badge/PySide6-Qt%206-41CD52?style=for-the-badge&logo=qt&logoColor=white"/>
+  <img src="https://img.shields.io/badge/AI-Gemini%20Powered-4285F4?style=for-the-badge&logo=google&logoColor=white"/>
+  <img src="https://img.shields.io/badge/GNS3-Integration-FF6600?style=for-the-badge&logo=cisco&logoColor=white"/>
+  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Linux-0078D4?style=for-the-badge&logo=windows&logoColor=white"/>
+  <img src="https://img.shields.io/badge/License-MIT-22C55E?style=for-the-badge"/>
 </p>
 
-<p align="center">
+<p>
+  <a href="#-screenshots">Screenshots</a> •
   <a href="#-features">Features</a> •
   <a href="#-installation">Installation</a> •
   <a href="#-architecture">Architecture</a> •
@@ -37,6 +31,24 @@
 
 ---
 
+## 📸 Screenshots
+
+<table>
+<tr>
+<td><b>Main Application — Network Manager</b></td>
+<td><b>AI Agent — Chat Interface</b></td>
+</tr>
+<tr>
+<td><img src="https://raw.githubusercontent.com/zyada7med2/ANCS/main/figma_preview.png" alt="Main UI" width="480"/></td>
+<td><img src="https://raw.githubusercontent.com/zyada7med2/ANCS/main/ui_selfcheck_after_polish_v2.png" alt="Agent Chat" width="480"/></td>
+</tr>
+</table>
+
+> **Main View:** Device list, Config Preview, GNS3 Topology tab, Guided Setup & Deploy All buttons, Discovery & Send panel.
+> **AI Agent:** Live device status bar, Chat + Execution Logs tabs, Console Stream with color-coded output, Structured Events panel, Network Topology graph with KPI cards.
+
+---
+
 ## ✨ Features
 
 <table>
@@ -44,57 +56,66 @@
 <td width="50%">
 
 ### 🤖 Agentic AI Copilot
-Powered by **Google Gemini**, the built-in AI brain can:
-- Run multi-hop connectivity traces
-- Audit network security & routing protocol mismatches
-- Auto-generate device configurations from topology
-- Interact directly with device consoles
+A fully autonomous network assistant powered by **Google Gemini** (via Vertex AI). It:
+- Opens a **pooled Telnet session** to every managed device
+- Runs multi-hop **connectivity traces**
+- **Audits** routing protocols and security ACLs
+- **Auto-generates** Cisco IOS config blocks from topology
+- Streams reasoning live to the **Console Stream** panel
+- Logs every tool call to the **Structured Events** panel
 
 </td>
 <td width="50%">
 
-### 🔁 Live State Sync
-Pull live `running-config` from devices using smart parsing:
-- Detects existing VLANs, IPs, and routing protocols
-- Prevents blind configuration overwrites
-- Works seamlessly with physical and virtual devices
+### 🗺️ Live Topology Viewer
+- Imports entire GNS3 topologies (nodes + console links) in one click
+- Renders an interactive **network graph** with labeled interfaces
+- Shows per-device details: Console Target, Operational IP, Platform, Connectivity, Last Seen
+- **Refresh** button for live topology updates
 
 </td>
 </tr>
 <tr>
 <td width="50%">
 
-### 🗺️ Topology Management
-- Import entire network topologies from **GNS3** in one click
-- Manage Routers, Switches, and Core Switches
-- Visual topology graph with live device status
+### 🔁 Live State Sync
+- `puller.py` connects to live devices and scrapes `running-config`
+- `parser.py` converts raw CLI output into structured wizard data
+- Detects existing VLANs, IPs, and routing protocols
+- Prevents blind overwrites on already-configured devices
 
 </td>
 <td width="50%">
 
 ### ⚡ Smart Guided Wizards
-Step-by-step wizards that intelligently auto-derive:
-- DHCP pools & static routes
-- ACL rules
-- Routing protocols: **RIP**, **OSPF**, **EIGRP**
+Step-by-step wizards that auto-derive full configs:
+- DHCP pools, static routes, and ACL rules
+- Routing protocols: **RIP v2**, **OSPF**, **EIGRP**
+- Config engine outputs clean **Cisco IOS strings** ready to deploy
+- **Deploy Review Dialog** to inspect before pushing
 
 </td>
 </tr>
 <tr>
 <td width="50%">
 
-### 🖥️ Modern Glass UI
-- Custom-themed **dark mode** PySide6 interface
-- True glass transparency & responsive geometry
-- Custom widget components — zero default Qt styling
+### 🚀 Async Bulk Deployment
+- `bulk_deploy.py` + `parallel_deploy.py` for concurrent multi-device pushes
+- **Telnet** (`telnetlib3`) for GNS3 virtual devices
+- **SSH** (`paramiko`) for physical hardware
+- **Serial** (`pyserial`) fallback for console connections
+- UI stays fully responsive during long deployments
 
 </td>
 <td width="50%">
 
-### 🚀 Async Network Engine
-- High-performance concurrent deployments
-- **Telnet** (`telnetlib3`) + **SSH** (`paramiko`) support
-- UI never freezes during long deployments
+### 🖥️ Custom Dark Glass UI
+- Frameless, translucent window with custom title bar
+- Custom fonts: **Orbitron**, **Michroma**, **Audiowide**, Montserrat
+- Animated network background (`bg.png`)
+- `monitor.py` for live device monitoring panel
+- `calculators/` module for subnet & VLSM tools
+- `outlined_label.py` for custom glowing text widgets
 
 </td>
 </tr>
@@ -104,7 +125,7 @@ Step-by-step wizards that intelligently auto-derive:
 
 ## 📦 Installation
 
-> **Requirements:** Python 3.10+, GNS3 (optional), Windows/Linux
+> **Requirements:** Python 3.10+, Windows or Linux. GNS3 is optional (for virtual lab mode).
 
 ### 1. Clone the repository
 
@@ -137,7 +158,7 @@ python run.py
 
 ```bash
 python setup_build.py build
-# Executable is generated in build/
+# Standalone .exe generated in build/
 ```
 
 ---
@@ -146,40 +167,90 @@ python setup_build.py build
 
 ```
 ANCS/
-├── run.py                            # 🚀 Primary entry point
-├── network_manager/
-│   ├── main.py                       # App initialisation
-│   ├── config.py                     # Global styling tokens & DB path
-│   ├── ai_agent.py                   # 🤖 AI Copilot — logic & tool definitions
-│   ├── models/
-│   │   └── devices.py                # SQLite data classes (Router, Switch, CoreSwitch)
-│   ├── network/
-│   │   ├── sender.py                 # Async CLI execution (telnetlib3, paramiko)
-│   │   ├── puller.py                 # Connects to live devices & scrapes configs
-│   │   ├── parser.py                 # Parses live config into structured wizard data
-│   │   └── gns3.py                   # GNS3 local server API client
-│   └── gui/
-│       ├── app.py                    # Main PySide6 window & routing layout
-│       ├── wizards/
-│       │   ├── guided_setup_wizard.py # Core network logic generator
-│       │   └── config_engine.py      # Builds raw Cisco IOS strings
-│       ├── terminal_panel.py         # 💻 Live interactive device console
-│       └── topology_viewer.py        # 🗺️ Network graph visualisation
+├── run.py                                  # 🚀 Entry point — handles venv re-execution
+├── setup_build.py                          # PyInstaller build script
+├── build_exe.py                            # Alternative build helper
+└── network_manager/
+    ├── main.py                             # App initialisation & Qt event loop
+    ├── config.py                           # Global styling tokens, DB path, theme constants
+    ├── ai_agent.py                         # 🤖 Agentic AI core — Gemini tools & reasoning
+    ├── ancs_config.json                    # Runtime config (model, project, etc.)
+    ├── requirements.txt                    # Python dependencies
+    │
+    ├── models/
+    │   └── devices.py                      # SQLite data classes: Router, Switch, CoreSwitch
+    │
+    ├── network/
+    │   ├── sender.py                       # Async CLI execution (Telnet + SSH)
+    │   ├── puller.py                       # Live config scraper from running devices
+    │   ├── parser.py                       # Parses CLI output → structured wizard data
+    │   └── gns3.py                         # GNS3 REST API client
+    │
+    ├── vendors/                            # Multi-vendor support modules
+    │
+    └── gui/
+        ├── app.py                          # Main PySide6 window, tab routing, layout
+        │
+        ├── agent_bridge.py                 # Bridge: AI agent ↔ GUI signals
+        ├── agent_dialog.py                 # AI Agent dialog (stable release)
+        ├── agent_dialog_new.py             # AI Agent dialog (latest — Chat + Exec Logs)
+        │
+        ├── bulk_deploy.py                  # Sequential bulk deployment engine
+        ├── parallel_deploy.py              # Concurrent multi-device deployment
+        ├── deploy_review_dialog.py         # Pre-deploy config review UI
+        ├── sync_workflows.py               # Live-sync workflow orchestration
+        │
+        ├── monitor.py                      # Live device monitoring panel
+        ├── topology_viewer.py              # 🗺️ Interactive network graph
+        ├── terminal_panel.py               # 💻 Live device console (interactive)
+        │
+        ├── template_selector_dialog.py     # Config template picker
+        ├── physical_discovery_dialog.py    # Physical device auto-discovery
+        ├── outlined_label.py               # Custom glowing text widget
+        ├── validators.py                   # Input validation helpers
+        ├── utils.py                        # Shared GUI utilities
+        │
+        ├── dialogs/                        # Additional dialog windows
+        ├── calculators/                    # Subnet & VLSM calculator tools
+        ├── web/                            # Embedded web view components
+        ├── icons/                          # UI icon assets
+        │
+        ├── wizards/
+        │   ├── guided_setup_wizard.py      # Core network logic generator (multi-step)
+        │   └── config_engine.py            # Builds raw Cisco IOS config strings
+        │
+        ├── logo.png / logo.svg             # ANCS brand assets
+        ├── ancs_logo.ico                   # Window icon
+        ├── bg.png                          # Animated background
+        └── [Orbitron / Michroma / Audiowide / Montserrat].ttf  # Custom fonts
 ```
 
 ---
 
 ## 🤖 AI Copilot
 
-The **ANCS AI Copilot** is not a simple chatbot — it's a fully agentic network assistant embedded directly into the application. It holds a live connection to all your managed devices and can:
+The ANCS AI Copilot is a **fully agentic network assistant** — not a simple chatbot. It maintains a live pooled Telnet/SSH session to every device in your topology and can act autonomously.
+
+### Interface
+
+| Panel | Description |
+|---|---|
+| **Chat** | Natural language interface — ask anything about your network |
+| **Execution Logs** | Live view of every tool call and its raw result |
+| **Console Stream** | Real-time colored output from device sessions and reasoning steps |
+| **Structured Events** | Parsed tool call log with timestamps |
+| **Topology (Agent)** | Live topology graph + per-device KPI cards (Devices, Configured, Pending, Connected) |
+
+### Capabilities
 
 | Capability | Description |
 |---|---|
-| **Connectivity Tracing** | Traces multi-hop paths between any two nodes in your topology |
-| **Security Auditing** | Detects ACL misconfigurations, open ports, and routing anomalies |
-| **Config Generation** | Auto-builds Cisco IOS config blocks from your topology structure |
-| **Console Interaction** | Directly executes CLI commands on devices via `sender.py` |
-| **Protocol Awareness** | Understands and validates RIP, OSPF, and EIGRP configurations |
+| **Connectivity Tracing** | Multi-hop ping/trace between any two nodes |
+| **Security Audit** | ACL review, open port scan, routing anomaly detection |
+| **Config Generation** | Full Cisco IOS block generation from topology |
+| **Console Execution** | Direct CLI on any device via the `sender.py` pool |
+| **Protocol Validation** | Validates RIP, OSPF, EIGRP consistency across devices |
+| **Live Sync** | Pulls `running-config` before acting to avoid blind overwrites |
 
 ---
 
@@ -188,19 +259,20 @@ The **ANCS AI Copilot** is not a simple chatbot — it's a fully agentic network
 | Layer | Technology |
 |---|---|
 | **UI Framework** | PySide6 (Qt 6) |
-| **AI Backend** | Google Gemini (`google-genai`) |
+| **AI Backend** | Google Gemini (`google-genai`) via Vertex AI |
 | **Async Telnet** | `telnetlib3` |
 | **SSH** | `paramiko` |
-| **GNS3 Integration** | REST API via `gns3.py` |
-| **Database** | SQLite (via Python data classes) |
 | **Serial (fallback)** | `pyserial` |
-| **Build Tool** | PyInstaller (`setup_build.py`) |
+| **GNS3 Integration** | REST API via `network/gns3.py` |
+| **Database** | SQLite (Python data classes, no ORM) |
+| **Custom Fonts** | Orbitron, Michroma, Audiowide, Montserrat |
+| **Build Tool** | PyInstaller via `setup_build.py` |
 
 ---
 
 ## 📄 License
 
-This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details.
+This project is licensed under the **MIT License**.
 
 ---
 
