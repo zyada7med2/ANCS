@@ -286,6 +286,5 @@ This project is licensed under the **MIT License**.
 
 
 
-<sub>Computer Science Student · Cyber Security Enthusiast · Cairo, Egypt</sub>
 
 </div>
