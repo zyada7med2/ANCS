@@ -2405,6 +2405,8 @@
                                 <option value="hapuppy">Hapuppy (Cheap Models)</option>
                                 <option value="nvidia">NVIDIA NIM</option>
                                 <option value="ollama">Ollama (Local)</option>
+                                <option value="deepseek">DeepSeek (API Key)</option>
+                                <option value="openmodel">OpenModel (Free DeepSeek)</option>
                             </select>
                         </div>
                         <div class="settings-form-group">
@@ -3709,6 +3711,53 @@
         }
 
         // Handle provider selection change (shows/hides Ollama details, loads local models)
+        // Model lists per provider
+        const PROVIDER_MODELS = {
+            openrouter: [
+                { value: 'openai/gpt-4o-mini',                        label: 'openai/gpt-4o-mini' },
+                { value: 'openai/gpt-oss-120b:free',                   label: 'openai/gpt-oss-120b:free' },
+                { value: 'mistralai/mistral-nemo:free',                 label: 'mistralai/mistral-nemo:free' },
+                { value: 'meta-llama/llama-3.1-8b-instruct:free',       label: 'meta-llama/llama-3.1-8b-instruct:free' },
+                { value: 'google/gemma-2-27b-it:free',                  label: 'google/gemma-2-27b-it:free' },
+            ],
+            gemini: [
+                { value: 'gemini-3-flash',          label: 'gemini-3-flash' },
+                { value: 'gemini-3-flash-preview',  label: 'gemini-3-flash-preview' },
+                { value: 'gemini-3.5-flash',        label: 'gemini-3.5-flash' },
+                { value: 'gemini-2.5-flash',        label: 'gemini-2.5-flash' },
+                { value: 'gemini-2.0-flash',        label: 'gemini-2.0-flash' },
+                { value: 'gemini-1.5-flash',        label: 'gemini-1.5-flash' },
+                { value: 'gemini-1.5-pro',          label: 'gemini-1.5-pro' },
+            ],
+            vertex: [
+                { value: 'gemini-3-flash',          label: 'gemini-3-flash' },
+                { value: 'gemini-3.5-flash',        label: 'gemini-3.5-flash' },
+                { value: 'gemini-2.5-flash',        label: 'gemini-2.5-flash' },
+                { value: 'gemini-2.0-flash',        label: 'gemini-2.0-flash' },
+            ],
+            hapuppy: [
+                { value: 'deepseek-v3',    label: 'deepseek-v3' },
+                { value: 'gpt-4o-mini',   label: 'gpt-4o-mini' },
+            ],
+            nvidia: [
+                { value: 'nvidia/llama-3.1-nemotron-ultra-253b-v1',  label: 'Nemotron Ultra 253B' },
+                { value: 'nvidia/llama-3.3-nemotron-super-49b-v1',  label: 'Nemotron Super 49B' },
+                { value: 'meta/llama-3.1-70b-instruct',             label: 'Llama 3.1 70B' },
+            ],
+            deepseek: [
+                { value: 'deepseek-v4-flash:none',    label: 'V4 Flash  — No Thinking' },
+                { value: 'deepseek-v4-flash:medium',  label: 'V4 Flash  — Thinking (Medium)' },
+                { value: 'deepseek-v4-flash:high',    label: 'V4 Flash  — Thinking (High)' },
+                { value: 'deepseek-v4-pro:none',      label: 'V4 Pro    — No Thinking' },
+                { value: 'deepseek-v4-pro:medium',    label: 'V4 Pro    — Thinking (Medium)' },
+                { value: 'deepseek-v4-pro:high',      label: 'V4 Pro    — Thinking (High)' },
+            ],
+            openmodel: [
+                { value: 'deepseek-v4-flash',  label: 'DeepSeek V4 Flash' },
+                { value: 'deepseek-v4-pro',    label: 'DeepSeek V4 Pro' },
+            ],
+        };
+
         async function handleProviderChange() {
             const providerSelect = document.getElementById('settings-provider');
             if (!providerSelect) return;
@@ -3717,16 +3766,23 @@
             const ollamaUrlGroup = document.getElementById('settings-ollama-url-group');
             const modelContainer = document.getElementById('settings-model-container');
             const modelWarning = document.getElementById('settings-model-warning');
-            
-            // Lazy initialize original HTML
-            if (!window.originalModelSelectHTML && modelContainer) {
-                window.originalModelSelectHTML = modelContainer.innerHTML;
+
+            // Update API key label hint
+            const apiKeyInput = document.getElementById('settings-api-key');
+            if (apiKeyInput) {
+                if (provider === 'deepseek') {
+                    apiKeyInput.placeholder = 'Enter DeepSeek API key (sk-...)';
+                } else if (provider === 'vertex') {
+                    apiKeyInput.placeholder = 'Enter GCP Project ID (not needed with ADC)';
+                } else {
+                    apiKeyInput.placeholder = 'Enter API key (not needed for Vertex AI)';
+                }
             }
-            
+
             if (provider === 'ollama') {
                 if (apiKeyGroup) apiKeyGroup.style.display = 'none';
                 if (ollamaUrlGroup) ollamaUrlGroup.style.display = 'block';
-                
+
                 const urlInput = document.getElementById('settings-ollama-url');
                 const ollamaUrl = urlInput ? urlInput.value : 'http://localhost:11434';
                 try {
@@ -3740,8 +3796,6 @@
                         });
                         modelContainer.innerHTML = `<select class="settings-select" id="settings-model">${optionsHtml}</select>`;
                         if (modelWarning) modelWarning.style.display = 'none';
-                        
-                        // Try to restore saved model
                         const savedModel = localStorage.getItem('agent_model');
                         const selectEl = document.getElementById('settings-model');
                         if (savedModel && selectEl && Array.from(selectEl.options).some(opt => opt.value === savedModel)) {
@@ -3757,17 +3811,23 @@
                     if (modelWarning) modelWarning.style.display = 'block';
                 }
             } else {
-                if (apiKeyGroup) apiKeyGroup.style.display = 'block';
+                if (apiKeyGroup) apiKeyGroup.style.display = provider === 'vertex' ? 'none' : 'block';
                 if (ollamaUrlGroup) ollamaUrlGroup.style.display = 'none';
                 if (modelWarning) modelWarning.style.display = 'none';
-                
-                if (window.originalModelSelectHTML && modelContainer) {
-                    modelContainer.innerHTML = window.originalModelSelectHTML;
-                }
-                
-                const savedModel = localStorage.getItem('agent_model');
+
+                // Build model list for selected provider
+                const models = PROVIDER_MODELS[provider] || PROVIDER_MODELS['openrouter'];
+                const savedModel = localStorage.getItem('agent_model') || '';
+                let optionsHtml = '';
+                models.forEach(m => {
+                    const selected = m.value === savedModel ? ' selected' : '';
+                    optionsHtml += `<option value="${m.value}"${selected}>${m.label}</option>`;
+                });
+                modelContainer.innerHTML = `<select class="settings-select" id="settings-model">${optionsHtml}</select>`;
+
+                // If saved model not in list, try selecting it anyway
                 const modelSelect = document.getElementById('settings-model');
-                if (modelSelect && savedModel) {
+                if (modelSelect && savedModel && !modelSelect.value) {
                     modelSelect.value = savedModel;
                 }
             }
@@ -3854,9 +3914,17 @@
 
         function updateHeaderModelPill() {
             const model = localStorage.getItem('agent_model') || 'openai/gpt-4o-mini';
+            // Build a display-friendly label for DeepSeek thinking-level model strings
+            let displayModel = model;
+            if (model.startsWith('deepseek-') && model.includes(':')) {
+                const [base, level] = model.rsplit ? model.split(':') : [model.split(':')[0], model.split(':')[1]];
+                const baseLabel = base.replace('deepseek-v4-flash', 'DeepSeek V4 Flash').replace('deepseek-v4-pro', 'DeepSeek V4 Pro');
+                const levelLabel = level === 'none' ? '' : level === 'high' ? ' \u26a1 High' : ' \ud83e\udde0 Medium';
+                displayModel = baseLabel + levelLabel;
+            }
             const pills = document.querySelectorAll('.model-pill');
             pills.forEach(pill => {
-                pill.textContent = model;
+                pill.textContent = displayModel;
             });
         }
 
