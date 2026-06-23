@@ -5235,49 +5235,9 @@ class CopilotWorker(QThread):
     def _compress_context(self):
         """Compress old tool results in message history to save context window space.
 
-        Instead of dropping entire messages (which loses context), this:
-        1. Keeps the system prompt + original user intent pinned
-        2. Truncates large tool results (>500 chars) to their first 200 chars + summary
-        3. Only touches messages older than the last 6 exchanges
-
-        This preserves the agent's awareness of what was already tried while
-        freeing up tokens for new reasoning.
+        Disabled by user request to keep history completely intact for all models and providers.
         """
-        if self.provider in ("gemini", "vertex"):
-            return
-        if len(self._messages) < 12:
-            return  # Not enough history to compress
-
-        compressed_count = 0
-        # Don't touch: [0] = system prompt, last 6 messages = recent context
-        safe_zone = max(1, len(self._messages) - 6)
-
-        for i in range(1, safe_zone):
-            msg = self._messages[i]
-            if not isinstance(msg, dict):
-                continue
-
-            role = msg.get("role", "")
-
-            # Compress old tool results
-            if role == "tool":
-                content = msg.get("content", "")
-                if len(content) > 500:
-                    # Keep first 200 chars as a summary hint
-                    msg["content"] = content[:200] + "\n...[compressed — original was " + str(len(content)) + " chars]"
-                    compressed_count += 1
-
-            # Compress old assistant messages (non-tool-call ones)
-            elif role == "assistant" and not msg.get("tool_calls"):
-                content = msg.get("content", "")
-                if content and len(content) > 800:
-                    msg["content"] = content[:300] + "\n...[compressed]"
-                    compressed_count += 1
-
-        if compressed_count > 0:
-            self.terminal_log_signal.emit(
-                f"<span style='color:#8b949e'>[Copilot] Context compressed: {compressed_count} old messages trimmed in-place</span>\n"
-            )
+        return
 
     def _process_response(self, response):
         """Dispatch to the appropriate response processor based on provider."""

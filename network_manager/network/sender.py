@@ -333,7 +333,7 @@ class Sender:
                     break  # settled (no new characters for 0.5s)
                     
         # 2. Interactive wake-up loop
-        for attempt in range(12):
+        for attempt in range(3):
             low = buf.lower()
             if "username:" in low or "login:" in low:
                 break
@@ -357,7 +357,7 @@ class Sender:
                 or not tail
                 or tail[-1] not in ("#", ">")
             ):
-                log_fn(f"[telnet] GNS3: sending Enter keypress to wake/bypass console (attempt {attempt+1}/12)")
+                log_fn(f"[telnet] GNS3: sending Enter keypress to wake/bypass console (attempt {attempt+1}/3)")
                 writer.write("\r\n")
                 await asyncio.sleep(0.8)
                 buf += await read_available(1.5)
