@@ -194,6 +194,8 @@ Saved Configuration:
             "hapuppy": "hapuppy",
             "nvidia": "nvidia",
             "ollama": "ollama",
+            "deepseek": "deepseek",
+            "openmodel": "openmodel",
         }
         prov = settings.get("provider", "openrouter")
         cfg["agent_provider"] = provider_map.get(prov, prov)
