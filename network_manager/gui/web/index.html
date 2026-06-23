@@ -4454,6 +4454,13 @@
                     <span class="log-status-col ${statusClass}">${dotHtml} ${_escapeHtml(entry.status || '')}</span>
                 `;
                 card.appendChild(row);
+                
+                // Cap the number of tool logs in the view to 200 to prevent performance degradation
+                while (card.querySelectorAll('.log-row').length > 200) {
+                    const firstRow = card.querySelector('.log-row');
+                    if (firstRow) firstRow.remove();
+                }
+                
                 card.scrollTop = card.scrollHeight;
             } catch(e) { console.error('_addToolLogEntry error:', e); }
         }
@@ -4490,6 +4497,11 @@
 
             logLine.innerHTML = styledHtml;
             container.appendChild(logLine);
+
+            // Cap the number of log lines to 1000 to prevent performance degradation
+            while (container.children.length > 1000) {
+                container.removeChild(container.firstChild);
+            }
 
             // Auto scroll to bottom
             container.scrollTop = container.scrollHeight;
