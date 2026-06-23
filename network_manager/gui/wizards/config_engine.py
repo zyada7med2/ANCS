@@ -1,9 +1,12 @@
 """
-ConfigEngine — Headless IOS Configuration Generator
+ConfigEngine — Headless Configuration Generator (vendor-aware)
 
-This module extracts the IOS config rendering logic from the Guided Setup Wizard
+This module extracts the config rendering logic from the Guided Setup Wizard
 into a standalone, non-GUI class. Both the wizard UI and the AI Copilot agent
 share this engine so that generated configurations are always identical.
+
+The engine delegates all vendor-specific syntax to a ``VendorProfile`` looked
+up via ``vendor_id`` (defaults to ``"cisco_ios"`` for backward compatibility).
 
 Usage:
     engine = ConfigEngine(
@@ -14,15 +17,18 @@ Usage:
         routing_entries=[{"vlan": "10", "ip": "192.168.10.1", "mask": "255.255.255.0"}],
         ...
     )
-    blocks = engine.render_all_blocks()   # dict of block_name -> IOS text
+    blocks = engine.render_all_blocks()   # dict of block_name -> config text
     full   = engine.build_full_config()   # concatenated with ! BLOCK N: headers
 """
 from __future__ import annotations
 from typing import Dict, List, Optional
 
+from ...vendors import get_profile
+from ...vendors.base import VendorProfile
+
 
 class ConfigEngine:
-    """Headless IOS config generator — shared by Guided Setup wizard and AI Copilot."""
+    """Headless config generator — shared by Guided Setup wizard and AI Copilot."""
 
     def __init__(
         self,
@@ -45,9 +51,13 @@ class ConfigEngine:
         is_boundary_router: bool = False,
         transit_links: list | None = None,
         connected_links: list | None = None,
+        vendor_id: str = "cisco_ios",
+        stp_root: str = "",
     ):
         self.device_role = device_role          # "router" | "core" | "access"
         self.hostname = hostname
+        self.vendor_id = vendor_id
+        self.profile: VendorProfile = get_profile(vendor_id)
 
         # Data buckets
         self.identity_data = identity_data or {"hostname": hostname}
@@ -70,11 +80,12 @@ class ConfigEngine:
         self.is_boundary_router = is_boundary_router
         self.transit_links = transit_links or []
         self.connected_links = connected_links or []
+        self.stp_root = stp_root
 
     # ══════════════════════════ Public API ══════════════════════════════════
 
     def render_all_blocks(self) -> Dict[str, str]:
-        """Return a dict of template_key -> IOS config text for all non-empty blocks."""
+        """Return a dict of template_key -> config text for all non-empty blocks."""
         templates = {
             "guided_identity":         self._render_identity_block(),
             "guided_vlans":            self._render_vlan_block(),
@@ -85,7 +96,7 @@ class ConfigEngine:
             "guided_routing_protocol": self._render_routing_protocol_block(),
             "guided_dhcp":             self._render_dhcp_block(),
             "guided_acl":              self._render_acl_block(),
-            "guided_save":             "write memory",
+            "guided_save":             self.profile.render_save_command(),
         }
         return {k: v for k, v in templates.items() if v.strip()}
 
@@ -100,54 +111,23 @@ class ConfigEngine:
         return "\n".join(out)
 
     # ══════════════════════════ Helpers ═════════════════════════════════════
+    # Kept as static methods for backward compatibility (wizard may reference them).
 
     @staticmethod
     def _expand_ports_to_list(ports: str) -> List[str]:
-        if not ports:
-            return []
-        result = []
-        for part in str(ports).split(","):
-            part = part.strip()
-            if not part:
-                continue
-            slash = part.rfind("/")
-            if slash == -1:
-                result.append(part)
-                continue
-            prefix = part[: slash + 1]
-            tail = part[slash + 1 :]
-            if "-" in tail:
-                a, b = tail.split("-", 1)
-                try:
-                    start, end = int(a), int(b)
-                except ValueError:
-                    result.append(part)
-                    continue
-                step = 1 if end >= start else -1
-                for n in range(start, end + step, step):
-                    result.append(f"{prefix}{n}")
-            else:
-                result.append(part)
-        return result
+        return VendorProfile.expand_ports_to_list(ports)
 
     @staticmethod
     def _to_wildcard(mask: str) -> str:
-        return ".".join(str(255 - int(o)) for o in mask.split("."))
+        return VendorProfile.to_wildcard(mask)
 
     @staticmethod
     def _to_network(ip: str, mask: str) -> str:
-        return ".".join(str(int(a) & int(b)) for a, b in zip(ip.split("."), mask.split(".")))
+        return VendorProfile.to_network(ip, mask)
 
     @staticmethod
     def _to_classful(ip: str) -> str:
-        first = int(ip.split(".")[0])
-        parts = ip.split(".")
-        if first <= 127:
-            return f"{parts[0]}.0.0.0"
-        elif first <= 191:
-            return f"{parts[0]}.{parts[1]}.0.0"
-        else:
-            return f"{parts[0]}.{parts[1]}.{parts[2]}.0"
+        return VendorProfile.to_classful(ip)
 
     def _find_all_links_to(self, *roles: str) -> List[Dict]:
         return [link for link in self.connected_links if link.get("remote_role") in roles]
@@ -179,371 +159,49 @@ class ConfigEngine:
         return by_proto
 
     # ══════════════════════════ Render Blocks ═══════════════════════════════
+    # Each method delegates to self.profile, passing needed data as arguments.
 
     def _render_identity_block(self) -> str:
-        if not self.identity_data:
-            return ""
-        hostname = self.identity_data.get("hostname", self.hostname)
-        domain = self.identity_data.get("domain", "")
-        lines = ["configure terminal", f"hostname {hostname}", "no ip domain-lookup"]
-        if domain:
-            lines.append(f"ip domain-name {domain}")
-        lines += [
-            "!", "! ---------------------------------------------------------------",
-            "! SECURITY NOTE: Passwords, enable secrets, and login authentication",
-            "! have been intentionally left out. Please set up 'enable secret',",
-            "! 'username', and 'line con/vty login' manually.",
-            "! ---------------------------------------------------------------", "!",
-            "line vty 0 4", " transport input telnet ssh", " logging synchronous",
-            "exit", "!", "end",
-        ]
-        return "\n".join(lines)
+        return self.profile.render_identity_block(self.identity_data, self.hostname)
 
     def _render_vlan_block(self) -> str:
-        if self.device_role == "router" or not self.vlans:
-            return ""
-
-        # Gather all ports configured as uplinks so we don't make them access ports
-        uplink_ports = set()
-        for link in self.uplinks:
-            for p in link.get("ports", "").split(","):
-                if p.strip():
-                    uplink_ports.add(p.strip())
-
-        lines = []
-        if self.device_role == "core":
-            lines.append("vlan database")
-            for v in self.vlans:
-                lines.append(f"vlan {v.get('id')} name {v.get('name') or 'VLAN' + str(v.get('id', ''))}")
-            lines += ["exit", "!", "configure terminal"]
-            for v in self.vlans:
-                for iface in self._expand_ports_to_list(v.get("ports", "")):
-                    if iface and iface not in uplink_ports:
-                        lines += [f"interface {iface}", " switchport mode access",
-                                  f" switchport access vlan {v.get('id')}", " no shutdown", "exit"]
-            lines += ["!", "end"]
-        else:
-            lines.append("configure terminal")
-            for v in self.vlans:
-                lines += [f"vlan {v.get('id')}", f" name {v.get('name') or 'VLAN' + str(v.get('id', ''))}", "exit"]
-            lines.append("!")
-            for v in self.vlans:
-                for iface in self._expand_ports_to_list(v.get("ports", "")):
-                    if iface and iface not in uplink_ports:
-                        lines += [f"interface {iface}", " switchport mode access",
-                                  f" switchport access vlan {v.get('id')}", " spanning-tree portfast",
-                                  " no shutdown", "exit"]
-            lines += ["!", "end"]
-        return "\n".join(lines)
+        # Pass stp_root to profile if supported, otherwise just pass standard args
+        try:
+            return self.profile.render_vlan_block(self.device_role, self.vlans, self.uplinks, self.stp_root)
+        except TypeError:
+            return self.profile.render_vlan_block(self.device_role, self.vlans, self.uplinks)
 
     def _render_uplink_block(self) -> str:
-        if not self.uplinks:
-            return ""
-        lines = ["configure terminal"]
-        for link in self.uplinks:
-            ports = link.get("ports", "").strip()
-            mode = (link.get("mode") or "trunk").lower()
-            allowed = link.get("allowed vlans", "all")
-            if not ports:
-                continue
-            for port in [p.strip() for p in ports.split(",") if p.strip()]:
-                lines.append(f"interface {port}")
-                if mode == "trunk":
-                    lines.append(" switchport trunk encapsulation dot1q")
-                    lines.append(" switchport mode trunk")
-                    lines.append(
-                        f" switchport trunk allowed vlan {allowed}"
-                        if allowed.lower() != "all"
-                        else " switchport trunk allowed vlan all"
-                    )
-                else:
-                    lines.append(" switchport mode access")
-                    if allowed.lower() != "all":
-                        lines.append(f" switchport access vlan {allowed}")
-                    lines.append(" spanning-tree portfast")
-
-                if port.lower().startswith("fastethernet") or port.lower().startswith("ethernet"):
-                    lines.append(" speed 100")
-                    lines.append(" duplex full")
-                lines += [" no shutdown", "exit"]
-        lines += ["!", "end"]
-        return "\n".join(lines)
+        return self.profile.render_uplink_block(self.uplinks)
 
     def _render_routing_block(self) -> str:
-        if self.is_boundary_router:
-            return self._render_transit_links_block()
-        if not self.routing_entries:
-            return ""
-        if self.device_role == "router":
-            return self._render_router_on_stick_block()
-        # Core switch — SVIs
-        lines = ["configure terminal", "ip routing"]
-        for e in self.routing_entries:
-            vlan, ip, mask = e.get("vlan"), e.get("ip"), e.get("mask", "255.255.255.0")
-            if vlan and ip:
-                lines += [f"interface Vlan{vlan}", f" ip address {ip} {mask}", " no shutdown", "exit"]
-        lines += ["!", "end"]
-        return "\n".join(lines)
-
-    def _render_router_on_stick_block(self) -> str:
-        if not self.router_interface or not self.routing_entries:
-            return ""
-        lines = ["configure terminal", f"interface {self.router_interface}"]
-        if self.router_interface.lower().startswith("fastethernet") or self.router_interface.lower().startswith("ethernet"):
-            lines.append(" speed 100")
-            lines.append(" duplex full")
-        lines += [" no shutdown", "exit"]
-        for e in self.routing_entries:
-            vlan, ip, mask = e.get("vlan"), e.get("ip"), e.get("mask", "255.255.255.0")
-            if vlan and ip:
-                lines += [f"interface {self.router_interface}.{vlan}",
-                          f" encapsulation dot1Q {vlan}", f" ip address {ip} {mask}",
-                          " no shutdown", "exit"]
-        lines += ["!", "end"]
-        return "\n".join(lines)
-
-    def _render_transit_links_block(self) -> str:
-        if not self.transit_links:
-            return ""
-        lines = ["configure terminal"]
-        for link in self.transit_links:
-            iface = link["local_interface"]
-            ip, mask = link["ip"], link["mask"]
-            lines.append(f"interface {iface}")
-            if iface.lower().startswith("fastethernet") or iface.lower().startswith("ethernet"):
-                lines.append(" speed 100")
-                lines.append(" duplex full")
-            lines += [f" ip address {ip} {mask}", " no shutdown", "exit"]
-        lines += ["!", "end"]
-        return "\n".join(lines)
+        return self.profile.render_routing_block(
+            self.device_role, self.routing_entries,
+            self.router_interface, self.is_boundary_router,
+            self.transit_links,
+        )
 
     def _render_wan_block(self) -> str:
-        if not self.wan_interface or not self.wan_ip:
-            return ""
-        lines = ["configure terminal", f"interface {self.wan_interface}"]
-        if self.wan_ip.lower() == "dhcp":
-            lines.append(" ip address dhcp")
-        else:
-            lines.append(f" ip address {self.wan_ip} {self.wan_mask or '255.255.255.0'}")
-        lines += [" no shutdown", "exit", "!", "end"]
-        return "\n".join(lines)
+        return self.profile.render_wan_block(self.wan_interface, self.wan_ip, self.wan_mask)
 
     def _render_static_routes_block(self) -> str:
-        if not self.static_routes:
-            return ""
-        lines = ["configure terminal"]
-        for r in self.static_routes:
-            net, mask, nh, desc = r.get("network"), r.get("mask"), r.get("next-hop"), r.get("description", "")
-            if net and nh:
-                if desc:
-                    lines.append(f"! {desc}")
-                lines.append(f"ip route {net} {mask} {nh}")
-        lines += ["!", "end"]
-        return "\n".join(lines)
+        return self.profile.render_static_routes_block(self.static_routes)
 
     def _render_routing_protocol_block(self) -> str:
-        proto = self.routing_protocol
-        if proto == "none" and not self.is_redistribution_router:
-            return ""
-        if proto == "none" and self.enable_rip:
-            proto = "rip"
-
-        lines = ["configure terminal"]
-
-        # Boundary redistribution router
-        if self.is_boundary_router and len(self.redistribution_protocols) >= 2:
-            by_proto = self._collect_boundary_networks_by_protocol()
-            if not by_proto:
-                return ""
-            proto_a = self.redistribution_protocols[0]
-            proto_b = self.redistribution_protocols[1]
-            nets_a = by_proto.get(proto_a, [])
-            nets_b = by_proto.get(proto_b, [])
-            lines += self._render_single_protocol_block(proto_a, nets_a, redistribute_from=proto_b)
-            lines.append("!")
-            lines += self._render_single_protocol_block(proto_b, nets_b, redistribute_from=proto_a)
-            lines += ["!", "end"]
-            return "\n".join(lines)
-
-        # Normal redistribution router
-        networks = self._collect_protocol_networks()
-        if not networks and not self.is_redistribution_router:
-            return ""
-
-        if self.is_redistribution_router and len(self.redistribution_protocols) >= 2:
-            proto_a = self.redistribution_protocols[0]
-            proto_b = self.redistribution_protocols[1]
-            lines += self._render_single_protocol_block(proto_a, networks, redistribute_from=proto_b)
-            lines.append("!")
-            lines += self._render_single_protocol_block(proto_b, networks, redistribute_from=proto_a)
-        else:
-            lines += self._render_single_protocol_block(proto, networks)
-
-        lines += ["!", "end"]
-        return "\n".join(lines)
-
-    def _render_single_protocol_block(self, proto: str, networks: list,
-                                       redistribute_from: str = "") -> list:
-        lines = []
-        has_default = self._has_default_route()
-
-        if proto == "rip":
-            lines += ["router rip", " version 2", " no auto-summary"]
-            seen = set()
-            for ip, mask in networks:
-                try:
-                    cn = self._to_classful(ip)
-                    if cn not in seen:
-                        seen.add(cn)
-                        lines.append(f" network {cn}")
-                except Exception:
-                    pass
-            if redistribute_from:
-                lines.append(self._redist_into_rip(redistribute_from))
-            if has_default:
-                lines.append(" default-information originate")
-            lines.append("exit")
-
-        elif proto == "ospf":
-            lines.append("router ospf 1")
-            for ip, mask in networks:
-                try:
-                    net = self._to_network(ip, mask)
-                    wc = self._to_wildcard(mask)
-                    lines.append(f" network {net} {wc} area 0")
-                except Exception:
-                    pass
-            if redistribute_from:
-                lines.append(self._redist_into_ospf(redistribute_from))
-            if has_default:
-                lines.append(" default-information originate")
-            lines.append("exit")
-
-        elif proto == "eigrp":
-            lines += ["router eigrp 10", " no auto-summary"]
-            for ip, mask in networks:
-                try:
-                    net = self._to_network(ip, mask)
-                    wc = self._to_wildcard(mask)
-                    lines.append(f" network {net} {wc}")
-                except Exception:
-                    pass
-            if redistribute_from:
-                lines.append(self._redist_into_eigrp(redistribute_from))
-            if has_default:
-                lines.append(" redistribute static")
-            lines.append("exit")
-
-        return lines
-
-    @staticmethod
-    def _redist_into_rip(source_proto: str) -> str:
-        if source_proto == "ospf":
-            return " redistribute ospf 1 metric 3"
-        elif source_proto == "eigrp":
-            return " redistribute eigrp 10 metric 3"
-        return ""
-
-    @staticmethod
-    def _redist_into_ospf(source_proto: str) -> str:
-        if source_proto == "rip":
-            return " redistribute rip subnets"
-        elif source_proto == "eigrp":
-            return " redistribute eigrp 10 subnets"
-        return ""
-
-    @staticmethod
-    def _redist_into_eigrp(source_proto: str) -> str:
-        if source_proto == "ospf":
-            return " redistribute ospf 1 metric 1000 100 255 1 1500"
-        elif source_proto == "rip":
-            return " redistribute rip metric 1000 100 255 1 1500"
-        return ""
+        return self.profile.render_routing_protocol_block(
+            self.routing_protocol, self.routing_entries,
+            self.static_routes, self.transit_links,
+            self.is_redistribution_router, self.redistribution_protocols,
+            self.is_boundary_router, self.connected_links,
+        )
 
     def _render_dhcp_block(self) -> str:
-        if self.is_boundary_router or self.device_role == "access" or not self.dhcp_pools:
-            return ""
-        lines = ["configure terminal"]
-        for pool in self.dhcp_pools:
-            gw, start, end = pool.get("gateway", ""), pool.get("start", ""), pool.get("end", "")
-            if gw and start:
-                p = start.split(".")
-                try:
-                    s_last = int(p[3])
-                    pfx = ".".join(gw.split(".")[:3])
-                    lines.append(f"ip dhcp excluded-address {gw} {pfx}.{s_last - 1}" if s_last > 1 else f"ip dhcp excluded-address {gw}")
-                except (IndexError, ValueError):
-                    pass
-            elif gw:
-                lines.append(f"ip dhcp excluded-address {gw}")
-            if end:
-                p = end.split(".")
-                try:
-                    e_last = int(p[3])
-                    pfx = ".".join(p[:3])
-                    if e_last < 254:
-                        lines.append(f"ip dhcp excluded-address {pfx}.{e_last + 1} {pfx}.254")
-                except (IndexError, ValueError):
-                    pass
-            pool_name = (pool.get("pool") or pool.get("name") or "POOL").replace(" ", "_").replace("/", "-")
-            lines.append(f"ip dhcp pool {pool_name}")
-            lines.append(f" network {pool.get('network')} {pool.get('mask', '255.255.255.0')}")
-            if gw:
-                lines.append(f" default-router {gw}")
-            if pool.get("dns"):
-                lines.append(f" dns-server {pool['dns']}")
-            lines.append(" lease 0 2")
-            lines.append("exit")
-        lines += ["!", "end"]
-        return "\n".join(lines)
+        return self.profile.render_dhcp_block(
+            self.device_role, self.is_boundary_router, self.dhcp_pools,
+        )
 
     def _render_acl_block(self) -> str:
-        if not self.acl_rules:
-            return ""
-        acl_num = self.acl_rules[0].get("acl #", "101")
-        is_extended = int(acl_num) >= 100
-        lines = ["configure terminal"]
-        for rule in self.acl_rules:
-            num = rule.get("acl #", "101")
-            action = rule.get("action", "permit")
-            src = rule.get("source", "any")
-            wc = rule.get("wildcard", "")
-            dst = rule.get("destination", "")
-            dst_wc = rule.get("destination_wildcard", "")
-            remark = rule.get("remark", "")
-            if remark:
-                lines.append(f"access-list {num} remark {remark}")
-            if is_extended:
-                if src.lower() == "any":
-                    lines.append(f"access-list {num} {action} ip any any")
-                elif dst and dst.lower() != "any":
-                    lines.append(f"access-list {num} {action} ip {src} {wc} {dst} {dst_wc}")
-                else:
-                    lines.append(f"access-list {num} {action} ip {src} {wc} any")
-            else:
-                if src.lower() == "any":
-                    lines.append(f"access-list {num} {action} any")
-                else:
-                    lines.append(f"access-list {num} {action} {src} {wc}")
-        lines.append("!")
-        if is_extended:
-            applied_ifaces = set()
-            for rule in self.acl_rules:
-                src_net = rule.get("source", "")
-                if not src_net or src_net.lower() == "any":
-                    continue
-                for e in self.routing_entries:
-                    e_ip = e.get("ip", "")
-                    e_net = ".".join(e_ip.split(".")[:3]) + ".0" if e_ip else ""
-                    src_prefix = ".".join(src_net.split(".")[:3]) + ".0" if src_net else ""
-                    if e_net and src_prefix and e_net == src_prefix:
-                        vlan = e.get("vlan")
-                        if vlan:
-                            iface = (f"{self.router_interface}.{vlan}"
-                                     if self.device_role == "router" and self.router_interface
-                                     else f"Vlan{vlan}")
-                            if iface not in applied_ifaces:
-                                applied_ifaces.add(iface)
-                                lines += [f"interface {iface}", f" ip access-group {acl_num} in", "exit"]
-        lines += ["!", "end"]
-        return "\n".join(lines)
+        return self.profile.render_acl_block(
+            self.acl_rules, self.routing_entries,
+            self.device_role, self.router_interface,
+        )

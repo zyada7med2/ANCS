@@ -37,9 +37,102 @@ class GNS3Connector:
                 f"{timeout} seconds."
             )
         except requests.exceptions.HTTPError as exc:
-            raise RuntimeError(f"GNS3 API error: {exc}")
+            # Include status code and response body for debugging
+            status = exc.response.status_code if hasattr(exc, 'response') else "unknown"
+            body = exc.response.text if hasattr(exc, 'response') else ""
+            raise RuntimeError(
+                f"GNS3 API error ({status}): {path}\n"
+                f"Response: {body[:200]}"
+            )
         except ValueError as exc:
             raise RuntimeError(f"GNS3 returned non-JSON response: {exc}")
+
+    def _post(self, path: str, json_data: dict = None, timeout: int = 5):
+        """Internal POST helper with consistent error handling."""
+        if requests is None:
+            raise RuntimeError("'requests' library is not installed")
+        try:
+            r = requests.post(f"{self.server_url}{path}", json=json_data or {}, timeout=timeout)
+            r.raise_for_status()
+            return r.json() if r.text else {}
+        except requests.exceptions.ConnectionError:
+            raise RuntimeError(
+                f"Cannot reach GNS3 server at {self.server_url}. "
+                "Make sure GNS3 is running."
+            )
+        except requests.exceptions.Timeout:
+            raise RuntimeError(
+                f"GNS3 server at {self.server_url} did not respond within "
+                f"{timeout} seconds."
+            )
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if hasattr(exc, 'response') else "unknown"
+            body = exc.response.text if hasattr(exc, 'response') else ""
+            raise RuntimeError(
+                f"GNS3 API error ({status}): {path}\n"
+                f"Response: {body[:200]}"
+            )
+        except ValueError as exc:
+            raise RuntimeError(f"GNS3 returned non-JSON response: {exc}")
+
+    def _delete(self, path: str, timeout: int = 5):
+        """Internal DELETE helper with consistent error handling."""
+        if requests is None:
+            raise RuntimeError("'requests' library is not installed")
+        try:
+            r = requests.delete(f"{self.server_url}{path}", timeout=timeout)
+            r.raise_for_status()
+            return r.json() if r.text else {}
+        except requests.exceptions.ConnectionError:
+            raise RuntimeError(
+                f"Cannot reach GNS3 server at {self.server_url}. "
+                "Make sure GNS3 is running."
+            )
+        except requests.exceptions.Timeout:
+            raise RuntimeError(
+                f"GNS3 server at {self.server_url} did not respond within "
+                f"{timeout} seconds."
+            )
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if hasattr(exc, 'response') else "unknown"
+            body = exc.response.text if hasattr(exc, 'response') else ""
+            raise RuntimeError(
+                f"GNS3 API error ({status}): {path}\n"
+                f"Response: {body[:200]}"
+            )
+        except ValueError as exc:
+            raise RuntimeError(f"GNS3 returned non-JSON response: {exc}")
+
+    def _put(self, path: str, json_data: dict = None, timeout: int = 5):
+        """Internal PUT helper with consistent error handling."""
+        if requests is None:
+            raise RuntimeError("'requests' library is not installed")
+        try:
+            r = requests.put(f"{self.server_url}{path}", json=json_data or {}, timeout=timeout)
+            r.raise_for_status()
+            return r.json() if r.text else {}
+        except requests.exceptions.ConnectionError:
+            raise RuntimeError(
+                f"Cannot reach GNS3 server at {self.server_url}. "
+                "Make sure GNS3 is running."
+            )
+        except requests.exceptions.Timeout:
+            raise RuntimeError(
+                f"GNS3 server at {self.server_url} did not respond within "
+                f"{timeout} seconds."
+            )
+        except requests.exceptions.HTTPError as exc:
+            status = exc.response.status_code if hasattr(exc, 'response') else "unknown"
+            body = exc.response.text if hasattr(exc, 'response') else ""
+            raise RuntimeError(
+                f"GNS3 API error ({status}): {path}\n"
+                f"Response: {body[:200]}"
+            )
+        except ValueError as exc:
+            raise RuntimeError(f"GNS3 returned non-JSON response: {exc}")
+
+    def update_node(self, project_id: str, node_id: str, payload: dict):
+        return self._put(f"/v2/projects/{project_id}/nodes/{node_id}", payload)
 
     def get_projects(self):
         return self._get("/v2/projects")
@@ -63,3 +156,59 @@ class GNS3Connector:
           'node_id', 'adapter_number', 'port_number', 'label' (optional).
         """
         return self._get(f"/v2/projects/{project_id}/links")
+
+    def get_templates(self):
+        return self._get("/v2/templates")
+
+    def create_node(self, project_id: str, name: str, template_id: str, x: int = 0, y: int = 0):
+        payload = {"name": name, "x": x, "y": y}
+        return self._post(f"/v2/projects/{project_id}/templates/{template_id}", payload)
+
+    def delete_node(self, project_id: str, node_id: str):
+        return self._delete(f"/v2/projects/{project_id}/nodes/{node_id}")
+
+    def create_link(self, project_id: str, node_a_id: str, adapter_a: int, port_a: int, node_b_id: str, adapter_b: int, port_b: int):
+        payload = {
+            "nodes": [
+                {"node_id": node_a_id, "adapter_number": adapter_a, "port_number": port_a},
+                {"node_id": node_b_id, "adapter_number": adapter_b, "port_number": port_b}
+            ]
+        }
+        return self._post(f"/v2/projects/{project_id}/links", payload)
+
+    def delete_link_between_nodes(self, project_id: str, node_a_id: str, node_b_id: str):
+        links = self.get_links(project_id)
+        for link in links:
+            endpoints = link.get("nodes", [])
+            if len(endpoints) >= 2:
+                id_a = endpoints[0].get("node_id")
+                id_b = endpoints[1].get("node_id")
+                if (id_a == node_a_id and id_b == node_b_id) or (id_a == node_b_id and id_b == node_a_id):
+                    link_id = link.get("link_id")
+                    if link_id:
+                        return self._delete(f"/v2/projects/{project_id}/links/{link_id}")
+        raise RuntimeError(f"No link found between node {node_a_id} and node {node_b_id}")
+
+    def start_node(self, project_id: str, node_id: str):
+        return self._post(f"/v2/projects/{project_id}/nodes/{node_id}/start", {})
+
+    def stop_node(self, project_id: str, node_id: str):
+        return self._post(f"/v2/projects/{project_id}/nodes/{node_id}/stop", {})
+
+    def get_drawings(self, project_id: str):
+        return self._get(f"/v2/projects/{project_id}/drawings")
+
+    def create_drawing(self, project_id: str, x: int, y: int, svg: str, z: int = -1):
+        payload = {
+            "x": x,
+            "y": y,
+            "z": z,
+            "svg": svg,
+            "rotation": 0,
+            "locked": False
+        }
+        return self._post(f"/v2/projects/{project_id}/drawings", payload)
+
+    def delete_drawing(self, project_id: str, drawing_id: str):
+        return self._delete(f"/v2/projects/{project_id}/drawings/{drawing_id}")
+

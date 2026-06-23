@@ -36,6 +36,129 @@ _db_error: str | None = None
 # import chain and prevent the window from opening.
 # ---------------------------------------------------------------------------
 
+def _import_legacy_copilot_logs(connection):
+    """Parse and import legacy .log session history files into chat history tables."""
+    import glob, json, re, time
+    from datetime import datetime
+    
+    logs_dir = os.path.join(_BASE_DIR, "copilot_logs")
+    if not os.path.exists(logs_dir):
+        return
+        
+    log_files = glob.glob(os.path.join(logs_dir, "session_*.log"))
+    if not log_files:
+        return
+        
+    for path in log_files:
+        filename = os.path.basename(path)
+        conv_id = filename[:-4] # e.g. "session_2026-05-27_173334"
+        
+        try:
+            # Quick check if already imported
+            cur_check = connection.cursor()
+            cur_check.execute("SELECT id FROM chat_conversations WHERE conversation_id = ?", (conv_id,))
+            exists = cur_check.fetchone()
+            cur_check.close()
+            if exists:
+                continue
+        except Exception:
+            continue
+            
+        try:
+            with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                content = f.read()
+        except Exception:
+            continue
+            
+        # Parse Started metadata to extract YYYY-MM-DD HH:MM:SS format
+        started_match = re.search(r"Started:\s*([^\n\r]+)", content)
+        created_at = None
+        if started_match:
+            try:
+                dt_str = started_match.group(1).strip()
+                dt = datetime.fromisoformat(dt_str)
+                created_at = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                pass
+                
+        if not created_at:
+            try:
+                parts = conv_id.split("_")
+                if len(parts) >= 3:
+                    dt = datetime.strptime(f"{parts[1]} {parts[2]}", "%Y-%m-%d %H%M%S")
+                    created_at = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                created_at = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(os.path.getmtime(path)))
+                
+        lines = content.splitlines()
+        messages = []
+        current_msg = None
+        accumulated_thoughts = []
+        
+        header_re = re.compile(r"^\[\d{2}:\d{2}:\d{2}\.\d{3}\]\s*\[(USER|AI|TOOL_CALL|TOOL_RESULT)\]\s*(.*)$")
+        
+        for line in lines:
+            m = header_re.match(line)
+            if m:
+                tag = m.group(1)
+                text = m.group(2)
+                
+                if tag == "USER":
+                    if current_msg:
+                        messages.append(current_msg)
+                    current_msg = {
+                        "sender": "user",
+                        "text": text,
+                        "thoughts": []
+                    }
+                elif tag == "AI":
+                    if current_msg:
+                        messages.append(current_msg)
+                    current_msg = {
+                        "sender": "agent",
+                        "text": text,
+                        "thoughts": list(accumulated_thoughts)
+                    }
+                    accumulated_thoughts.clear()
+                elif tag in ("TOOL_CALL", "TOOL_RESULT"):
+                    accumulated_thoughts.append(f"[{tag}] {text}")
+            else:
+                if current_msg and not accumulated_thoughts:
+                    if current_msg["text"]:
+                        current_msg["text"] += "\n" + line
+                    else:
+                        current_msg["text"] = line
+                elif accumulated_thoughts:
+                    accumulated_thoughts[-1] += "\n" + line
+                    
+        if current_msg:
+            messages.append(current_msg)
+            
+        if not messages:
+            continue
+            
+        # Extract title from the first user message
+        first_user_msg = next((m["text"] for m in messages if m["sender"] == "user"), "Restored Session")
+        title = first_user_msg[:40] + ("..." if len(first_user_msg) > 40 else "")
+        
+        try:
+            cur_write = connection.cursor()
+            cur_write.execute("INSERT OR IGNORE INTO chat_conversations (conversation_id, title, created_at) VALUES (?, ?, ?)",
+                              (conv_id, title, created_at))
+            connection.commit()
+            
+            cur_write.execute("SELECT id FROM chat_conversations WHERE conversation_id = ?", (conv_id,))
+            conv_row = cur_write.fetchone()
+            if conv_row:
+                for msg in messages:
+                    cur_write.execute("INSERT INTO chat_messages (conversation_id, sender, text, thoughts, created_at) VALUES (?, ?, ?, ?, ?)",
+                                      (conv_id, msg["sender"], msg["text"], json.dumps(msg["thoughts"]), created_at))
+                connection.commit()
+            cur_write.close()
+        except Exception:
+            pass
+
+
 class _DummyCursor:
     """No-op cursor used when the real DB is unavailable."""
     def execute(self, *a, **kw): pass
@@ -126,6 +249,8 @@ try:
     # SHA-256 hash of the last successfully deployed config — used by Deploy All
     # to detect whether the config changed since the last send.
     _add_column_if_not_exists("devices", "deployed_config_hash TEXT DEFAULT ''")
+    # Vendor OS (cisco_ios, huawei_vrp, etc.) — used by multi-vendor abstraction layer
+    _add_column_if_not_exists("devices", "vendor_id TEXT DEFAULT 'cisco_ios'")
 
     # -----------------------------------------------------------------------
     # New tables
@@ -194,6 +319,9 @@ try:
         FOREIGN KEY(device_id) REFERENCES devices(id) ON DELETE SET NULL
     )
     """)
+    _add_column_if_not_exists("logs", "device_name TEXT")
+    _add_column_if_not_exists("logs", "config_snapshot TEXT")
+    _add_column_if_not_exists("logs", "timestamp TEXT")
 
     cur.execute("""
     CREATE TABLE IF NOT EXISTS training_data (
@@ -242,13 +370,42 @@ try:
     )
     """)
 
+    # Dedicated tables for Copilot Agent Chat History
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS chat_conversations (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT UNIQUE NOT NULL,
+        title TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS chat_messages (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        conversation_id TEXT NOT NULL,
+        sender TEXT CHECK(sender IN ('user', 'agent', 'system')) NOT NULL,
+        text TEXT NOT NULL,
+        thoughts TEXT DEFAULT '',
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(conversation_id) REFERENCES chat_conversations(conversation_id) ON DELETE CASCADE
+    )
+    """)
+
     # Indexes for performance on common lookups / filters
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_chat_messages_conversation_id ON chat_messages(conversation_id)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_devices_status ON devices(status)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_logs_created_at ON logs(created_at)")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status ON tasks(status)")
 
     conn.commit()
+
+    # Automatically synchronize and import any legacy .log files on startup
+    try:
+        _import_legacy_copilot_logs(conn)
+    except Exception:
+        pass
 
 except sqlite3.Error as exc:
     _db_error = str(exc)

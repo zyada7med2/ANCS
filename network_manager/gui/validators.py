@@ -5,6 +5,7 @@ Scans all device templates for common network mistakes before sending
 any config to a device, giving the user a chance to review and abort.
 """
 import re
+from ...vendors import get_profile
 
 
 class ConfigValidator:
@@ -31,16 +32,13 @@ class ConfigValidator:
     def _check_duplicate_ips(devices: list) -> list[str]:
         """Flag any IP address that appears on more than one device."""
         ip_to_devices: dict[str, list[str]] = {}
-        ip_pattern = re.compile(
-            r"ip address\s+((?:\d{1,3}\.){3}\d{1,3})\s+((?:\d{1,3}\.){3}\d{1,3})"
-        )
         for name, model, _meta in devices:
+            profile = get_profile(getattr(model, "vendor_id", "cisco_ios"))
             full = model.build_full_config()
-            for match in ip_pattern.finditer(full):
-                ip = match.group(1)
-                if ip in ("0.0.0.0",):
-                    continue
-                ip_to_devices.setdefault(ip, []).append(name)
+            ips = profile.parse_ip_addresses(full)
+            for ip, mask in ips:
+                if ip not in ("0.0.0.0",):
+                    ip_to_devices.setdefault(ip, []).append(name)
 
         warnings = []
         for ip, owners in ip_to_devices.items():
@@ -63,25 +61,20 @@ class ConfigValidator:
         switch_vlans: dict[str, set[str]] = {}   # device_name -> {vlan_id}
         router_vlans: set[str] = set()
 
-        vlan_id_pattern   = re.compile(r"\bvlan\s+(\d+)\b", re.IGNORECASE)
-        subif_pattern     = re.compile(r"interface\s+\S+\.(\d+)", re.IGNORECASE)
-        svi_pattern       = re.compile(r"interface\s+[Vv]lan(\d+)")
-
         for name, model, _meta in devices:
+            profile = get_profile(getattr(model, "vendor_id", "cisco_ios"))
             vlan_tmpl    = model.get_template("guided_vlans")
             routing_tmpl = model.get_template("guided_routing")
 
             if vlan_tmpl.strip():
-                ids = set(vlan_id_pattern.findall(vlan_tmpl))
+                ids = profile.parse_vlan_ids(vlan_tmpl)
                 ids.discard("1")  # VLAN 1 is the default, not worth flagging
                 if ids:
                     switch_vlans[name] = ids
 
             if routing_tmpl.strip():
-                # subinterfaces (router-on-stick)
-                router_vlans.update(subif_pattern.findall(routing_tmpl))
-                # SVIs (core switch)
-                router_vlans.update(svi_pattern.findall(routing_tmpl))
+                # subinterfaces and SVIs
+                router_vlans.update(profile.parse_l3_interface_vlans(routing_tmpl))
 
         warnings = []
         for dev_name, vlans in switch_vlans.items():

@@ -197,11 +197,26 @@ class TerminalPanel(QDialog):
     async def _async_session(self):
         self._async_queue = asyncio.Queue()
         try:
-            reader, writer = await asyncio.wait_for(
-                telnetlib3.open_connection(self.host, self.port), timeout=10)
+            raw_r, raw_w = await asyncio.wait_for(
+                asyncio.open_connection(self.host, self.port), timeout=10)
         except Exception as exc:
             self._resp_queue.put(("error", f"Connection failed: {exc}"))
             return
+
+        from network_manager.network.sender import _strip_telnet_iac
+        class _StrReader:
+            def __init__(self, r): self._r = r
+            async def read(self, n):
+                data = await self._r.read(n)
+                if not data: return ""
+                return _strip_telnet_iac(data).decode("utf-8", errors="ignore")
+        class _StrWriter:
+            def __init__(self, w): self._w = w
+            def write(self, s): self._w.write(s.encode("utf-8") if isinstance(s, str) else s)
+            def close(self): self._w.close()
+        reader = _StrReader(raw_r)
+        writer = _StrWriter(raw_w)
+
         self._resp_queue.put(("connected", None))
 
         async def read_burst(max_wait=1.5):

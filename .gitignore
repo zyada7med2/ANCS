@@ -4,9 +4,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
 develop-eggs/
-dist/
 downloads/
 eggs/
 .eggs/
@@ -22,12 +20,15 @@ wheels/
 
 # Virtual environments
 venv/
+.venv/
 ENV/
 env/
 
-# IDEs
+# IDEs & Tools
 .vscode/
 .idea/
+.claude/
+.agents/
 *.swp
 *.swo
 *~
@@ -36,14 +37,62 @@ env/
 .DS_Store
 Thumbs.db
 
-# Project specific
+# Project specific logs & databases
 *.log
+*.bak
 .env
 network_manager.db
+network_manager.db-shm
+network_manager.db-wal
 ancs_config.json
 
 # Build artifacts
 build/
 dist/
 *.spec
+*.JPG
 
+# Local Development & Scratch Files
+/=
+/ancs_agent_logs.txt
+/chat_dump.txt
+/prompt for claude.txt
+/exec_log*
+/execution_log.txt
+/mockup*
+/wrong parsing.JPG
+/test agent.ancs
+/true_page_*.png
+/ancs agent refrence target.png
+/copilot_logs/
+/scratch/
+
+# Legacy logs & files removed from git tracking
+/2026-*
+/CODE_REVIEW_FINDINGS_*
+/FIX_*
+/IMPLEMENTATION_*
+/PHASE_*
+/TEST_*
+/TESTING_GUIDE.txt
+/_fix_prompt.py
+/antigravity_session_*
+/chat_history_mockup.html
+/claude_code_prompt.md
+/claude_instructions.md
+/debug_puller.py
+/figma_*
+/future_ideas.md
+/git
+/litellm_log.txt
+/multi-vendor_support_*
+/screenshot.py
+/test_fixes_comprehensive.py
+/test_out.png
+/ui_selfcheck_after_polish*
+/AI Model
+/ROUTER_FEATURES.md
+/network_manager/test_full_audit.py
+/network_manager/test_routing_protocols.py
+/network_manager/COPILOT_EVAL_SCENARIOS.txt
+/network_manager/gui/*backup.py

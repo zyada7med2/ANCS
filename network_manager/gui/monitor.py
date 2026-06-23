@@ -341,36 +341,41 @@ DARK = """
     QDialog { background-color: #080C11; }
     QLabel { color: #C9D1D9; background: transparent; }
     QFrame { background: transparent; }
-    QFrame[card="true"] { background-color: #121820; border-radius: 8px; border: 1px solid #1E252D; }
-    QFrame[table_card="true"] { background-color: #121820; border-radius: 8px; border: 1px solid #1E252D; padding: 4px; }
+    QFrame[card="true"] { background-color: #121820; border-radius: 10px; border: 1px solid #1E252D; }
+    QFrame[card="true"]:hover { border: 1px solid rgba(88, 166, 255, 60); }
+    QFrame[table_card="true"] { background-color: #121820; border-radius: 10px; border: 1px solid #1E252D; padding: 4px; }
     QListWidget { background-color: #121820; color: #C9D1D9; border: 1px solid #1E252D;
-                  border-radius: 6px; padding: 8px; }
-    QListWidget::item { padding: 8px 12px; border-radius: 4px; margin-bottom: 4px; }
+                  border-radius: 8px; padding: 8px; outline: none; }
+    QListWidget::item { padding: 8px 12px; border-radius: 6px; margin-bottom: 2px; border-left: 3px solid transparent; }
     QListWidget::item:selected { background-color: rgba(64,140,219,30); color: #58A6FF; font-weight: 600; border-left: 3px solid #58A6FF; }
     QListWidget::item:hover:!selected { background-color: #1A222D; }
     QPlainTextEdit { background-color: #0E131A; color: #C9D1D9; border: 1px solid #1E252D;
-                     border-radius: 6px; padding: 10px; font-family: 'Courier New'; font-size: 11px; }
+                     border-radius: 8px; padding: 10px; font-family: 'Cascadia Code', 'Courier New'; font-size: 11px; }
     QLineEdit { background-color: #121820; color: #C9D1D9; border: 1px solid #1E252D;
-                border-radius: 6px; padding: 8px; font-family: 'Courier New'; }
+                border-radius: 8px; padding: 8px; font-family: 'Cascadia Code', 'Courier New'; }
+    QLineEdit:focus { border: 1px solid rgba(88, 166, 255, 180); background-color: rgba(18, 24, 32, 250); }
     QPushButton { background-color: #212833; color: #C9D1D9; border: 1px solid #303B4A;
-                  border-radius: 6px; padding: 8px 16px; font-weight: 600; }
-    QPushButton:hover { background-color: #2A3340; border: 1px solid #408CDB; }
-    QPushButton#accent { background-color: #238636; color: white; border: 1px solid #2EA043; }
-    QPushButton#accent:hover { background-color: #2EA043; border: 1px solid #3FB950; }
+                  border-radius: 8px; padding: 8px 16px; font-weight: 600; }
+    QPushButton:hover { background-color: #2A3340; border: 1px solid rgba(88, 166, 255, 100); }
+    QPushButton#accent { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1B7A30, stop:1 #238636); color: white; border: 1px solid rgba(46, 160, 67, 60); }
+    QPushButton#accent:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #238636, stop:1 #2EA043); border: 1px solid rgba(63, 185, 80, 100); }
     QComboBox { background-color: #121820; color: #C9D1D9; border: 1px solid #1E252D;
-                border-radius: 6px; padding: 6px 10px; }
-    QComboBox QAbstractItemView { background-color: #121820; color: #C9D1D9; }
+                border-radius: 8px; padding: 6px 10px; }
+    QComboBox:hover { border: 1px solid rgba(88, 166, 255, 80); }
+    QComboBox QAbstractItemView { background-color: #121820; color: #C9D1D9; outline: none; }
     QCheckBox { color: #C9D1D9; }
     QScrollArea { background: transparent; border: none; }
-    QScrollBar:vertical { background: #080C11; width: 10px; margin: 0px; }
-    QScrollBar::handle:vertical { background: #1E252D; min-height: 20px; border-radius: 5px; }
-    QScrollBar::handle:vertical:hover { background: #303B4A; }
+    QScrollBar:vertical { background: #080C11; width: 8px; margin: 0px; }
+    QScrollBar::handle:vertical { background: rgba(88, 140, 210, 80); min-height: 30px; border-radius: 4px; }
+    QScrollBar::handle:vertical:hover { background: rgba(88, 166, 255, 150); }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
     
-    QScrollBar:horizontal { background: #080C11; height: 10px; margin: 0px; }
-    QScrollBar::handle:horizontal { background: #1E252D; min-width: 20px; border-radius: 5px; }
-    QScrollBar::handle:horizontal:hover { background: #303B4A; }
+    QScrollBar:horizontal { background: #080C11; height: 8px; margin: 0px; }
+    QScrollBar::handle:horizontal { background: rgba(88, 140, 210, 80); min-width: 30px; border-radius: 4px; }
+    QScrollBar::handle:horizontal:hover { background: rgba(88, 166, 255, 150); }
     QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0px; }
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
     
     QTableWidget { 
         background-color: transparent; 
@@ -386,6 +391,9 @@ DARK = """
     }
     QTableWidget::item:selected { 
         background-color: rgba(64,140,219,25); 
+    }
+    QTableWidget::item:hover:!selected {
+        background-color: rgba(88, 166, 255, 10);
     }
     QHeaderView::section { 
         background-color: transparent; 
@@ -557,13 +565,27 @@ class DeviceMonitor(QDialog):
         if tab == "fleet":
             self._stack.setCurrentIndex(0)
             self.btn_fleet.setObjectName("accent")
-            self.btn_fleet.setStyleSheet("background-color: #58A6FF; color: white; font-weight: bold; border: none; border-radius: 6px; padding: 6px 14px;")
-            self.btn_detail.setStyleSheet("background-color: #161B22; color: #8B949E; border: none; border-radius: 6px; padding: 6px 14px;")
+            self.btn_fleet.setStyleSheet(
+                "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3574C4, stop:1 #58A6FF); "
+                "color: white; font-weight: bold; border: 1px solid rgba(88, 166, 255, 80); "
+                "border-radius: 8px; padding: 6px 14px;"
+            )
+            self.btn_detail.setStyleSheet(
+                "background-color: #161B22; color: #8B949E; border: 1px solid rgba(30, 37, 45, 80); "
+                "border-radius: 8px; padding: 6px 14px;"
+            )
         else:
             self._stack.setCurrentIndex(1)
             self.btn_detail.setObjectName("accent")
-            self.btn_detail.setStyleSheet("background-color: #58A6FF; color: white; font-weight: bold; border: none; border-radius: 6px; padding: 6px 14px;")
-            self.btn_fleet.setStyleSheet("background-color: #161B22; color: #8B949E; border: none; border-radius: 6px; padding: 6px 14px;")
+            self.btn_detail.setStyleSheet(
+                "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3574C4, stop:1 #58A6FF); "
+                "color: white; font-weight: bold; border: 1px solid rgba(88, 166, 255, 80); "
+                "border-radius: 8px; padding: 6px 14px;"
+            )
+            self.btn_fleet.setStyleSheet(
+                "background-color: #161B22; color: #8B949E; border: 1px solid rgba(30, 37, 45, 80); "
+                "border-radius: 8px; padding: 6px 14px;"
+            )
 
     def _build_fleet_cards(self):
         self._fleet_cards = {}
@@ -583,24 +605,25 @@ class DeviceMonitor(QDialog):
 
             card = QFrame()
             card.setProperty("card", True)
-            card.setFixedHeight(120)
+            card.setFixedHeight(130)
             card.setMinimumWidth(240)
             card_layout = QVBoxLayout(card)
-            card_layout.setContentsMargins(12, 10, 12, 10)
+            card_layout.setContentsMargins(14, 12, 14, 12)
 
             top = QHBoxLayout()
             role_colors = {"router": _C["accent"], "core": _C["warn"], "access": _C["muted"]}
+            accent_color = role_colors.get(role, _C['muted'])
             role_lbl = QLabel({"router": "Router", "core": "Core SW", "access": "Access SW"}.get(role, ""))
-            role_lbl.setStyleSheet(f"color: {role_colors.get(role, _C['muted'])}; font-size: 10px;")
+            role_lbl.setStyleSheet(f"color: {accent_color}; font-size: 10px; font-weight: 600; letter-spacing: 0.5px;")
             top.addWidget(role_lbl)
             top.addStretch()
             score_lbl = QLabel("--")
-            score_lbl.setStyleSheet(f"color: {_C['muted']}; font-size: 20px; font-weight: bold;")
+            score_lbl.setStyleSheet(f"color: {_C['muted']}; font-size: 22px; font-weight: bold;")
             top.addWidget(score_lbl)
             card_layout.addLayout(top)
 
             name_lbl = QLabel(name)
-            name_lbl.setStyleSheet("font-size: 13px; font-weight: bold;")
+            name_lbl.setStyleSheet("font-size: 14px; font-weight: bold;")
             card_layout.addWidget(name_lbl)
 
             info_lbl = QLabel("Not polled yet")
@@ -610,6 +633,20 @@ class DeviceMonitor(QDialog):
             status_lbl = QLabel("")
             status_lbl.setStyleSheet(f"color: {_C['muted']}; font-size: 9px;")
             card_layout.addWidget(status_lbl)
+
+            # Left accent bar
+            card.setStyleSheet(f"""
+                QFrame {{
+                    background-color: #121820;
+                    border-radius: 10px;
+                    border: 1px solid #1E252D;
+                    border-left: 3px solid {accent_color};
+                }}
+                QFrame:hover {{
+                    border: 1px solid rgba(88, 166, 255, 50);
+                    border-left: 3px solid {accent_color};
+                }}
+            """)
 
             row, col = divmod(i, 3)
             self.fleet_grid.addWidget(card, row, col)
@@ -702,18 +739,29 @@ class DeviceMonitor(QDialog):
         return cmds
 
     def _run_poll(self, name, host, port, cmds, source, username="", password="", enable_pw=""):
-        if telnetlib3 is None:
-            data = {"_error": "telnetlib3 not installed"}
-        else:
-            try:
-                data = asyncio.run(self._poll_async(host, port, cmds, username, password, enable_pw))
-            except Exception as exc:
-                data = {"_error": str(exc)}
+        try:
+            data = asyncio.run(self._poll_async(host, port, cmds, username, password, enable_pw))
+        except Exception as exc:
+            data = {"_error": str(exc)}
         self._active_polls.discard(name)
         self._result_queue.put((source, name, data))
 
     async def _poll_async(self, host, port, cmds, username="", password="", enable_pw=""):
-        reader, writer = await asyncio.wait_for(telnetlib3.open_connection(host, port), timeout=12)
+        raw_r, raw_w = await asyncio.wait_for(asyncio.open_connection(host, port), timeout=12)
+
+        from network_manager.network.sender import _strip_telnet_iac
+        class _StrReader:
+            def __init__(self, r): self._r = r
+            async def read(self, n):
+                data = await self._r.read(n)
+                if not data: return ""
+                return _strip_telnet_iac(data).decode("utf-8", errors="ignore")
+        class _StrWriter:
+            def __init__(self, w): self._w = w
+            def write(self, s): self._w.write(s.encode("utf-8") if isinstance(s, str) else s)
+            def close(self): self._w.close()
+        reader = _StrReader(raw_r)
+        writer = _StrWriter(raw_w)
 
         async def _read_prompt(timeout=5.0):
             buf = ""

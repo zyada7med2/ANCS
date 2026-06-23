@@ -121,6 +121,7 @@ from ..models import DeviceModel, RouterModel, SwitchModel, CoreSwitchModel
 from ..network import Sender, GNS3Connector
 from .utils import apply_responsive_geometry, enable_global_dark_dialogs
 from .outlined_label import OutlinedLabel
+from .physical_discovery_dialog import PhysicalDiscoveryDialog
 
 try:
     import requests
@@ -131,9 +132,9 @@ except Exception:
 
 GLASS_PANEL = """
     QFrame[glassPanel="true"] {
-        background-color: rgba(10, 20, 35, 0.65);
-        border-radius: 8px;
-        border: 1px solid rgba(60, 100, 170, 0.5);
+        background-color: rgba(10, 20, 35, 0.72);
+        border-radius: 10px;
+        border: 1px solid rgba(60, 100, 170, 0.45);
         padding: 10px;
     }
 """
@@ -150,29 +151,30 @@ GLASS_STYLE = """
     }
 
     QFrame[glassPanel="true"] {
-        background-color: rgba(10, 20, 35, 0.65);
-        border-radius: 8px;
-        border: 1px solid rgba(60, 100, 170, 0.5);
+        background-color: rgba(10, 20, 35, 0.72);
+        border-radius: 10px;
+        border: 1px solid rgba(60, 100, 170, 0.45);
         padding: 10px;
     }
 
     QFrame[topBar="true"] {
-        background-color: rgba(8, 18, 34, 192);
+        background-color: rgba(8, 18, 34, 200);
         border-radius: 0px;
         border: none;
-        border-bottom: 1px solid rgba(86, 146, 228, 48);
+        border-bottom: 1px solid rgba(86, 146, 228, 55);
     }
 
     QFrame[windowTitleBar="true"] {
-        background-color: rgba(8, 18, 34, 236);
+        background-color: rgba(8, 18, 34, 240);
         border: none;
-        border-bottom: 1px solid rgba(86, 146, 228, 52);
+        border-bottom: 1px solid rgba(86, 146, 228, 58);
     }
 
     QLabel[windowTitleText="true"] {
-        color: #D3DCE8;
+        color: #E0E8F0;
         font-size: 14px;
-        font-weight: 600;
+        font-weight: 700;
+        letter-spacing: 0.5px;
     }
 
     QLabel {
@@ -180,37 +182,53 @@ GLASS_STYLE = """
         border: none;
     }
 
+    /* ── TOOLTIP ── */
+    QToolTip {
+        background-color: rgba(13, 17, 23, 240);
+        color: #E6EDF3;
+        border: 1px solid rgba(88, 166, 255, 80);
+        border-radius: 6px;
+        padding: 6px 12px;
+        font-size: 12px;
+    }
+
+    /* ── BUTTONS ── */
     QPushButton {
         background-color: rgba(49, 61, 78, 208);
         color: #A6B2C2;
-        border: none;
+        border: 1px solid rgba(80, 100, 130, 60);
         border-radius: 8px;
         padding: 7px 14px;
         font-size: 15px;
         min-height: 30px;
     }
     QPushButton:hover {
-        background-color: rgba(68, 84, 108, 228);
+        background-color: rgba(68, 84, 108, 235);
         color: #FFFFFF;
+        border: 1px solid rgba(88, 166, 255, 100);
     }
     QPushButton:pressed {
-        background-color: rgba(88, 166, 255, 200);
+        background-color: rgba(55, 75, 100, 255);
+        border: 1px solid rgba(88, 166, 255, 160);
     }
     QPushButton:disabled {
-        background-color: rgba(40, 50, 60, 150);
-        color: #555;
+        background-color: rgba(35, 42, 52, 150);
+        color: #4A5568;
+        border: 1px solid rgba(80, 100, 130, 30);
     }
     QPushButton:focus {
         border: 1px solid rgba(147, 197, 253, 210);
     }
 
     QPushButton[accent="true"] {
-        background-color: rgba(37, 99, 235, 224);
+        background-color: rgba(37, 99, 235, 230);
         color: white;
         font-weight: 700;
+        border: 1px solid rgba(59, 130, 246, 120);
     }
     QPushButton[accent="true"]:hover {
         background-color: rgba(59, 130, 246, 255);
+        border: 1px solid rgba(147, 197, 253, 180);
     }
     
     QPushButton[pill="true"] {
@@ -221,42 +239,48 @@ GLASS_STYLE = """
     }
 
     QPushButton[teal="true"] {
-        background-color: rgba(13, 148, 136, 220);
+        background-color: rgba(13, 148, 136, 225);
         color: white;
         font-weight: bold;
+        border: 1px solid rgba(20, 184, 166, 100);
     }
     QPushButton[teal="true"]:hover {
-        background-color: rgba(15, 118, 110, 240);
+        background-color: rgba(15, 118, 110, 245);
+        border: 1px solid rgba(45, 212, 191, 150);
     }
 
     QPushButton[outlined="true"] {
         background-color: transparent;
-        color: #4A9EFF;
-        border: 1px solid #4A9EFF;
+        color: #58A6FF;
+        border: 1px solid rgba(88, 166, 255, 130);
     }
     QPushButton[outlined="true"]:hover {
-        background-color: rgba(12, 24, 40, 180);
+        background-color: rgba(88, 166, 255, 18);
+        border: 1px solid rgba(88, 166, 255, 200);
+        color: #93C5FD;
     }
 
     QPushButton[danger="true"] {
         background-color: transparent;
-        color: #EF4444;
-        border: 1px solid #EF4444;
+        color: #F87171;
+        border: 1px solid rgba(248, 113, 113, 120);
     }
     QPushButton[danger="true"]:hover {
-        background-color: rgba(26, 10, 10, 180);
+        background-color: rgba(248, 113, 113, 14);
+        border: 1px solid rgba(248, 113, 113, 200);
+        color: #FCA5A5;
     }
     
     /* Top Nav Tabs Active/Inactive Styling */
     QPushButton[navTab="active"] {
         background: transparent;
-        color: #3B82F6;
+        color: #60A5FA;
         font-size: 17px;
         font-weight: 700;
         border: none;
         border-bottom: 2px solid #3B82F6;
         border-radius: 0px;
-        padding: 8px 14px;
+        padding: 8px 18px;
     }
     QPushButton[navTab="inactive"] {
         background: transparent;
@@ -264,12 +288,14 @@ GLASS_STYLE = """
         font-size: 17px;
         font-weight: 600;
         border: none;
+        border-bottom: 2px solid transparent;
         border-radius: 0px;
-        padding: 8px 14px;
+        padding: 8px 18px;
     }
     QPushButton[navTab="inactive"]:hover {
         color: #D1D5DB;
         background: transparent;
+        border-bottom: 2px solid rgba(107, 114, 128, 80);
     }
 
     /* Preview panel tab strip */
@@ -281,7 +307,7 @@ GLASS_STYLE = """
         border: none;
         border-bottom: 2px solid #58A6FF;
         border-radius: 0px;
-        padding: 3px 10px;
+        padding: 3px 12px;
         min-height: 26px;
     }
     QPushButton[previewTab="active"]:hover {
@@ -296,7 +322,7 @@ GLASS_STYLE = """
         border: none;
         border-bottom: 2px solid transparent;
         border-radius: 0px;
-        padding: 3px 10px;
+        padding: 3px 12px;
         min-height: 26px;
     }
     QPushButton[previewTab="inactive"]:hover {
@@ -338,24 +364,26 @@ GLASS_STYLE = """
         color: #FFFFFF;
     }
 
+    /* ── INPUT FIELDS ── */
     QLineEdit {
-        background-color: rgba(31, 42, 58, 208);
+        background-color: rgba(22, 34, 52, 220);
         color: #FFFFFF;
-        border: 1px solid rgba(103, 118, 138, 170);
+        border: 1px solid rgba(88, 110, 145, 130);
         border-radius: 8px;
         padding: 9px 12px;
         font-size: 15px;
     }
     QLineEdit:disabled {
-        background-color: rgba(96, 101, 111, 150);
-        border-color: #777D81;
-        color: #666;
+        background-color: rgba(50, 56, 66, 130);
+        border: 1px solid rgba(100, 106, 116, 80);
+        color: #5A6370;
     }
     QLineEdit:focus {
-        border-color: #58A6FF;
+        border: 1px solid rgba(88, 166, 255, 220);
+        background-color: rgba(25, 40, 60, 240);
     }
     QLineEdit::placeholder {
-        color: #7B8798;
+        color: #5C6B7E;
     }
     QLineEdit[hasError="true"] {
         border: 1px solid #F87171;
@@ -363,75 +391,95 @@ GLASS_STYLE = """
     }
 
     QPlainTextEdit {
-        background-color: rgba(22, 27, 34, 220);
-        color: #FFFFFF;
-        border: none;
-        border-radius: 8px;
-        font-family: 'Consolas', 'Courier New', monospace;
-        font-size: 15px;
-        padding: 8px;
+        background-color: rgba(16, 22, 30, 235);
+        color: #E6EDF3;
+        border: 1px solid rgba(48, 54, 61, 100);
+        border-radius: 10px;
+        font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+        font-size: 14px;
+        padding: 12px;
+    }
+    QPlainTextEdit:focus {
+        border: 1px solid rgba(88, 166, 255, 140);
     }
 
+    /* ── COMBOBOX ── */
     QComboBox {
-        background-color: rgba(18, 32, 54, 206);
+        background-color: rgba(18, 32, 54, 215);
         color: #FFFFFF;
-        border: 1px solid rgba(86, 146, 228, 62);
+        border: 1px solid rgba(88, 130, 200, 70);
         border-radius: 8px;
         padding: 7px 12px;
         font-size: 15px;
+    }
+    QComboBox:hover {
+        border: 1px solid rgba(88, 166, 255, 120);
     }
     QComboBox:focus {
         border: 1px solid #58A6FF;
     }
     QComboBox::drop-down {
         border: none;
-        width: 24px;
+        width: 28px;
     }
     QComboBox QAbstractItemView {
-        background-color: #0C1A2E;
+        background-color: rgba(12, 26, 46, 250);
         color: #FFFFFF;
-        selection-background-color: #1A2840;
-        border: 1px solid rgba(70, 140, 230, 40);
+        selection-background-color: rgba(88, 166, 255, 50);
+        border: 1px solid rgba(70, 140, 230, 50);
+        border-radius: 6px;
+        padding: 4px;
+        outline: none;
     }
 
+    /* ── CHECKBOX ── */
     QCheckBox {
         background: transparent;
-        spacing: 6px;
+        spacing: 8px;
     }
     QCheckBox::indicator {
         width: 18px;
         height: 18px;
-        border: 1px solid #6B7280;
-        border-radius: 4px;
-        background: rgba(43, 50, 63, 200);
+        border: 1.5px solid #5A6370;
+        border-radius: 5px;
+        background: rgba(35, 42, 55, 220);
     }
-    QCheckBox::indicator:checked {
-        background: #58A6FF;
+    QCheckBox::indicator:hover {
         border-color: #58A6FF;
     }
+    QCheckBox::indicator:checked {
+        background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #3B82F6, stop:1 #2563EB);
+        border-color: #60A5FA;
+    }
 
+    /* ── LIST WIDGET ── */
     QListWidget {
-        background-color: rgba(6, 14, 28, 230);
-        border: 1px solid rgba(72, 124, 196, 130);
-        border-radius: 8px;
+        background-color: rgba(6, 14, 28, 235);
+        border: 1px solid rgba(72, 124, 196, 110);
+        border-radius: 10px;
         padding: 6px;
         font-size: 15px;
+        outline: none;
     }
     QListWidget:focus {
-        border: 1px solid #58A6FF;
+        border: 1px solid rgba(88, 166, 255, 180);
     }
     QListWidget::item {
-        padding: 9px 10px;
-        border-radius: 4px;
+        padding: 10px 12px;
+        border-radius: 6px;
+        margin-bottom: 2px;
+        border-left: 3px solid transparent;
     }
     QListWidget::item:selected {
-        background-color: rgba(88, 166, 255, 60);
+        background-color: rgba(88, 166, 255, 50);
         color: #FFFFFF;
+        border-left: 3px solid #3B82F6;
     }
-    QListWidget::item:hover {
-        background-color: rgba(88, 166, 255, 30);
+    QListWidget::item:hover:!selected {
+        background-color: rgba(88, 166, 255, 22);
     }
 
+    /* ── SCROLL AREA ── */
     QScrollArea {
         background: transparent;
         border: none;
@@ -440,63 +488,114 @@ GLASS_STYLE = """
         background: transparent;
     }
 
+    /* ── SCROLLBAR ── */
     QScrollBar:vertical {
-        background: rgba(12, 26, 46, 88);
-        width: 7px;
+        background: rgba(12, 26, 46, 60);
+        width: 8px;
         border-radius: 4px;
+        margin: 2px 0px;
     }
     QScrollBar::handle:vertical {
-        background: rgba(88, 166, 255, 120);
+        background: rgba(88, 140, 210, 100);
         border-radius: 4px;
-        min-height: 30px;
+        min-height: 36px;
+    }
+    QScrollBar::handle:vertical:hover {
+        background: rgba(88, 166, 255, 170);
     }
     QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
         height: 0px;
     }
+    QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+        background: none;
+    }
+    QScrollBar:horizontal {
+        background: rgba(12, 26, 46, 60);
+        height: 8px;
+        border-radius: 4px;
+    }
+    QScrollBar::handle:horizontal {
+        background: rgba(88, 140, 210, 100);
+        border-radius: 4px;
+        min-width: 36px;
+    }
+    QScrollBar::handle:horizontal:hover {
+        background: rgba(88, 166, 255, 170);
+    }
+    QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+        width: 0px;
+    }
+    QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+        background: none;
+    }
 
+    /* ── TABLE ── */
     QTableWidget {
-        background-color: rgba(22, 27, 34, 200);
+        background-color: rgba(16, 22, 30, 220);
         color: #C9D1D9;
         border: none;
-        border-radius: 8px;
-        gridline-color: rgba(48, 54, 61, 150);
+        border-radius: 10px;
+        gridline-color: rgba(48, 54, 61, 100);
         font-size: 14px;
+        alternate-background-color: rgba(22, 30, 42, 200);
+        outline: none;
     }
     QTableWidget:focus {
-        border: 1px solid #58A6FF;
+        border: 1px solid rgba(88, 166, 255, 120);
+    }
+    QTableWidget::item {
+        padding: 6px 10px;
+        border-bottom: 1px solid rgba(48, 54, 61, 80);
     }
     QTableWidget::item:selected {
         background-color: rgba(38, 79, 120, 200);
         color: #FFFFFF;
     }
+    QTableWidget::item:hover:!selected {
+        background-color: rgba(88, 166, 255, 16);
+    }
     QHeaderView::section {
-        background-color: rgba(31, 38, 48, 220);
+        background-color: rgba(22, 30, 42, 240);
         color: #8B949E;
         border: none;
-        padding: 7px 10px;
-        font-weight: bold;
-        font-size: 14px;
+        border-bottom: 2px solid rgba(48, 54, 61, 150);
+        padding: 8px 10px;
+        font-weight: 600;
+        font-size: 13px;
+        letter-spacing: 0.3px;
     }
 
+    /* ── MENUS ── */
     QMenuBar {
-        background-color: rgba(7, 16, 31, 200);
+        background-color: rgba(7, 16, 31, 210);
         color: #C9D1D9;
     }
     QMenuBar::item:selected {
         background-color: rgba(88, 166, 255, 80);
     }
     QMenu {
-        background-color: #0C1A2E;
+        background-color: rgba(12, 26, 46, 250);
         color: #C9D1D9;
-        border: 1px solid rgba(70, 140, 230, 40);
+        border: 1px solid rgba(70, 140, 230, 50);
+        border-radius: 8px;
+        padding: 4px;
+    }
+    QMenu::item {
+        padding: 8px 24px;
+        border-radius: 4px;
     }
     QMenu::item:selected {
-        background-color: rgba(88, 166, 255, 80);
+        background-color: rgba(88, 166, 255, 60);
+    }
+    QMenu::separator {
+        height: 1px;
+        background: rgba(48, 54, 61, 120);
+        margin: 4px 12px;
     }
 
-    /* Unified dialog theming (message boxes, input dialogs, file dialogs) */
+    /* Unified dialog theming */
     QDialog, QMessageBox, QInputDialog, QFileDialog {
-        background-color: rgba(8, 18, 34, 232);
+        background-color: rgba(8, 18, 34, 240);
         color: #D3DCE8;
     }
     QMessageBox QLabel, QInputDialog QLabel, QFileDialog QLabel {
@@ -507,14 +606,14 @@ GLASS_STYLE = """
         min-width: 92px;
     }
     QFileDialog QTreeView, QFileDialog QListView {
-        background-color: rgba(14, 28, 46, 228);
+        background-color: rgba(14, 28, 46, 235);
         color: #D3DCE8;
-        border: 1px solid rgba(86, 146, 228, 64);
+        border: 1px solid rgba(86, 146, 228, 50);
         border-radius: 8px;
-        selection-background-color: rgba(88, 166, 255, 72);
+        selection-background-color: rgba(88, 166, 255, 60);
     }
     QFileDialog QLineEdit {
-        background-color: rgba(18, 32, 54, 220);
+        background-color: rgba(18, 32, 54, 225);
     }
 """
 
@@ -622,6 +721,7 @@ class App(QMainWindow):
 
     def __init__(self):
         super().__init__()
+        self.txt_logs = None
         self._use_custom_title_bar = (sys.platform == "win32")
         self._title_drag_offset: Optional[QPoint] = None
         self._title_drag_widgets: tuple[QWidget, ...] = tuple()
@@ -661,6 +761,16 @@ class App(QMainWindow):
             app.setStyleSheet(GLASS_STYLE)
         self.setStyleSheet(GLASS_STYLE)
 
+        # Set application & window icon (taskbar + title bar)
+        for _icon_candidate in ("ancs_logo.ico", "logo_icon.png"):
+            _icon_path = _gui_path(_icon_candidate)
+            if os.path.exists(_icon_path):
+                _app_icon = QIcon(_icon_path)
+                self.setWindowIcon(_app_icon)
+                if app is not None:
+                    app.setWindowIcon(_app_icon)
+                break
+
         # State
         self.device_types = {"router": RouterModel, "switch": SwitchModel, "core switch": CoreSwitchModel}
         
@@ -675,7 +785,12 @@ class App(QMainWindow):
         self._last_gns3_url = self._load_gns3_url()
         self._send_in_progress = False
         self.right_sidebar_visible = True
+        self._project_sync_triggered = False
         self._main_thread_call.connect(self._execute_main_thread_call)
+
+        # Purge leftover database devices, configs, and credentials on startup
+        # to ensure the persistent DB represents ONLY the live active session.
+        self._clear_all_devices_from_db()
 
         self._build_ui()
         self._apply_main_window_min_size()
@@ -1297,12 +1412,12 @@ class App(QMainWindow):
         lbl_title = OutlinedLabel("ANCS", stroke_width=2)
         lbl_title.setAttribute(Qt.WA_TranslucentBackground)
         # Using 28pt Michroma with 3px letter spacing tightly equalizes to 8pt subtitle 
-        lbl_title.setStyleSheet("background: transparent; color: #FFFFFF; font-family: 'Michroma'; font-size: 28pt; letter-spacing: 3px;")
+        lbl_title.setStyleSheet("background: transparent; color: #FFFFFF; font-family: 'Michroma'; font-size: 28pt; letter-spacing: 4px; font-weight: 800;")
         text_col.addWidget(lbl_title)
 
         lbl_sub = QLabel("Auto Network Configuration System")
         lbl_sub.setAttribute(Qt.WA_TranslucentBackground)
-        lbl_sub.setStyleSheet("background: transparent; color: #9AAABB; font-family: 'Montserrat'; font-size: 8pt; letter-spacing: 0px;")
+        lbl_sub.setStyleSheet("background: transparent; color: #A0B4C8; font-family: 'Montserrat'; font-size: 8pt; letter-spacing: 1px;")
         text_col.addWidget(lbl_sub)
 
         header_row.addLayout(text_col)
@@ -1353,20 +1468,20 @@ class App(QMainWindow):
         left_panel.setAutoFillBackground(True)
         left_panel.setStyleSheet("""
             QFrame#leftPanel {
-                background-color: rgba(11, 29, 50, 100);
-                border-radius: 8px;
-                border: 1px solid rgba(50, 85, 160, 80);
+                background-color: rgba(11, 29, 50, 110);
+                border-radius: 12px;
+                border: 1px solid rgba(50, 85, 160, 65);
             }
         """)
-        left_panel.setMinimumWidth(220)
-        left_panel.setMaximumWidth(340)
+        left_panel.setMinimumWidth(260)
+        left_panel.setMaximumWidth(380)
         left_scroll = QScrollArea()
         left_scroll.setWidget(left_panel)
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QFrame.NoFrame)
         left_scroll.setStyleSheet("background: transparent;")
-        left_scroll.setMinimumWidth(220)
-        left_scroll.setMaximumWidth(340)
+        left_scroll.setMinimumWidth(260)
+        left_scroll.setMaximumWidth(380)
         left_scroll.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         left_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
@@ -1374,33 +1489,41 @@ class App(QMainWindow):
         left_layout.setContentsMargins(14, 14, 14, 14)
         left_layout.setSpacing(8)
 
-        lbl_devices = QLabel("Devices")
-        lbl_devices.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: 700;")
+        lbl_devices = QLabel("  Devices")
+        lbl_devices.setStyleSheet(
+            "color: #F0F2F4; font-size: 19px; font-weight: 700; "
+            "border-left: 3px solid qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB); "
+            "padding-left: 10px; padding-top: 2px; padding-bottom: 2px; margin-bottom: 4px;"
+        )
         left_layout.addWidget(lbl_devices)
 
         self.device_list = QListWidget()
         self.device_list.setIconSize(QSize(16, 16))
-        self.device_list.setMinimumHeight(120)
+        self.device_list.setMinimumHeight(250)
         self.device_list.setAutoFillBackground(True)
         self.device_list.setStyleSheet("""
             QListWidget {
-                background-color: rgba(10, 28, 48, 185);
-                border: 1px solid rgba(55, 100, 180, 100);
-                border-radius: 8px;
+                background-color: rgba(8, 22, 42, 200);
+                border: 1px solid rgba(55, 100, 180, 80);
+                border-radius: 10px;
                 padding: 6px;
                 font-size: 15px;
+                outline: none;
             }
             QListWidget::item {
-                padding: 9px 10px;
-                border-radius: 4px;
+                padding: 10px 12px;
+                border-radius: 6px;
                 color: #C9D1D9;
+                border-left: 3px solid transparent;
+                margin-bottom: 2px;
             }
             QListWidget::item:selected {
-                background-color: rgba(88, 166, 255, 80);
+                background-color: rgba(59, 130, 246, 55);
                 color: #FFFFFF;
+                border-left: 3px solid #3B82F6;
             }
-            QListWidget::item:hover {
-                background-color: rgba(88, 166, 255, 40);
+            QListWidget::item:hover:!selected {
+                background-color: rgba(88, 166, 255, 25);
             }
         """)
         self.device_list.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1409,65 +1532,68 @@ class App(QMainWindow):
         left_layout.addWidget(self.device_list)
 
         dev_btns = QHBoxLayout()
-        btn_add = QPushButton("+ Add")
-        btn_add.setStyleSheet("""
+        _capsule_btn_style = """
             QPushButton {
-                background-color: #2C4563;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
+                background-color: rgba(30, 55, 85, 220);
+                border: 1px solid rgba(88, 140, 210, 50);
+                border-radius: 17px;
+                color: #C9D1D9;
+                font-size: 13px;
+                font-weight: 600;
+                padding: 4px 16px;
             }
             QPushButton:hover {
-                background-color: #38567A;
+                background-color: rgba(45, 75, 115, 240);
+                border: 1px solid rgba(88, 166, 255, 120);
+                color: #FFFFFF;
             }
-        """)
+        """
+        btn_add = QPushButton("+ Add")
+        btn_add.setStyleSheet(_capsule_btn_style)
         btn_add.setFixedHeight(34)
         btn_add.clicked.connect(self.add_device_prompt)
         btn_remove = QPushButton("Remove")
-        btn_remove.setStyleSheet("""
-            QPushButton {
-                background-color: #2C4563;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #38567A;
-            }
-        """)
+        btn_remove.setStyleSheet(_capsule_btn_style)
         btn_remove.setFixedHeight(34)
         btn_remove.clicked.connect(self.remove_selected_device)
         dev_btns.addWidget(btn_add)
         dev_btns.addWidget(btn_remove)
         left_layout.addLayout(dev_btns)
 
-        lbl_templates = QLabel("Templates")
-        lbl_templates.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: 700;")
+        lbl_templates = QLabel("  Templates")
+        lbl_templates.setStyleSheet(
+            "color: #F0F2F4; font-size: 19px; font-weight: 700; "
+            "border-left: 3px solid qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #8B5CF6, stop:1 #6D28D9); "
+            "padding-left: 10px; padding-top: 2px; padding-bottom: 2px; margin-bottom: 4px;"
+        )
         left_layout.addWidget(lbl_templates)
 
         self.template_list = QListWidget()
+        self.template_list.setMinimumHeight(200)
         self.template_list.setAutoFillBackground(True)
         self.template_list.setStyleSheet("""
             QListWidget {
-                background-color: rgba(10, 28, 48, 185);
-                border: 1px solid rgba(55, 100, 180, 100);
-                border-radius: 8px;
+                background-color: rgba(8, 22, 42, 200);
+                border: 1px solid rgba(55, 100, 180, 80);
+                border-radius: 10px;
                 padding: 6px;
                 font-size: 15px;
+                outline: none;
             }
             QListWidget::item {
-                padding: 9px 10px;
-                border-radius: 4px;
+                padding: 10px 12px;
+                border-radius: 6px;
                 color: #C9D1D9;
+                border-left: 3px solid transparent;
+                margin-bottom: 2px;
             }
             QListWidget::item:selected {
-                background-color: rgba(88, 166, 255, 80);
+                background-color: rgba(139, 92, 246, 45);
                 color: #FFFFFF;
+                border-left: 3px solid #8B5CF6;
             }
-            QListWidget::item:hover {
-                background-color: rgba(88, 166, 255, 40);
+            QListWidget::item:hover:!selected {
+                background-color: rgba(139, 92, 246, 18);
             }
         """)
         self.template_list.currentRowChanged.connect(self._on_template_row_changed)
@@ -1476,34 +1602,12 @@ class App(QMainWindow):
         tpl_btns = QHBoxLayout()
         btn_tpl_add = QPushButton("+ Add")
         self._apply_icon(btn_tpl_add, "doc.svg")
-        btn_tpl_add.setStyleSheet("""
-            QPushButton {
-                background-color: #2C4563;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #38567A;
-            }
-        """)
+        btn_tpl_add.setStyleSheet(_capsule_btn_style)
         btn_tpl_add.setFixedHeight(34)
         btn_tpl_add.clicked.connect(self.add_template_dialog)
         btn_tpl_edit = QPushButton("Edit")
         self._apply_icon(btn_tpl_edit, "doc.svg")
-        btn_tpl_edit.setStyleSheet("""
-            QPushButton {
-                background-color: #2C4563;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #38567A;
-            }
-        """)
+        btn_tpl_edit.setStyleSheet(_capsule_btn_style)
         btn_tpl_edit.setFixedHeight(34)
         btn_tpl_edit.clicked.connect(self.edit_template_dialog)
         tpl_btns.addWidget(btn_tpl_add)
@@ -1511,39 +1615,52 @@ class App(QMainWindow):
         left_layout.addLayout(tpl_btns)
 
         left_sep_top = QFrame()
-        left_sep_top.setFrameShape(QFrame.HLine)
-        left_sep_top.setStyleSheet("color: rgba(86,146,228,45);")
+        left_sep_top.setFixedHeight(1)
+        left_sep_top.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 transparent, stop:0.3 rgba(88,166,255,60), "
+            "stop:0.7 rgba(88,166,255,60), stop:1 transparent); "
+            "border: none; margin-top: 6px; margin-bottom: 6px;"
+        )
         left_layout.addWidget(left_sep_top)
 
-        btn_guided = QPushButton("Guided Setup")
+        btn_guided = QPushButton("✦  Guided Setup")
         btn_guided.setStyleSheet("""
             QPushButton {
-                background-color: #238636;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1B7A30, stop:1 #238636);
+                border: 1px solid rgba(46, 160, 67, 80);
+                border-radius: 8px;
                 color: #FFFFFF;
                 font-size: 14px;
                 font-weight: bold;
+                letter-spacing: 0.3px;
             }
-            QPushButton:hover { background-color: #2EA043; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #238636, stop:1 #2EA043);
+                border: 1px solid rgba(63, 185, 80, 120);
+            }
         """)
-        btn_guided.setFixedHeight(36)
+        btn_guided.setFixedHeight(38)
         btn_guided.clicked.connect(self.guided_setup)
         left_layout.addWidget(btn_guided)
 
-        btn_deploy = QPushButton("Deploy All (Ordered)")
+        btn_deploy = QPushButton("⚡  Deploy All (Ordered)")
         btn_deploy.setStyleSheet("""
             QPushButton {
-                background-color: #2563EB;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1D4ED8, stop:1 #2563EB);
+                border: 1px solid rgba(59, 130, 246, 80);
+                border-radius: 8px;
                 color: #FFFFFF;
                 font-size: 14px;
                 font-weight: bold;
+                letter-spacing: 0.3px;
             }
-            QPushButton:hover { background-color: #3B82F6; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563EB, stop:1 #3B82F6);
+                border: 1px solid rgba(96, 165, 250, 130);
+            }
         """)
-        btn_deploy.setFixedHeight(36)
+        btn_deploy.setFixedHeight(38)
         btn_deploy.clicked.connect(self.deploy_all_ordered)
         left_layout.addWidget(btn_deploy)
 
@@ -1566,8 +1683,13 @@ class App(QMainWindow):
         left_layout.addWidget(self.btn_rollback)
 
         left_sep_bottom = QFrame()
-        left_sep_bottom.setFrameShape(QFrame.HLine)
-        left_sep_bottom.setStyleSheet("color: rgba(86,146,228,35);")
+        left_sep_bottom.setFixedHeight(1)
+        left_sep_bottom.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 transparent, stop:0.3 rgba(88,166,255,40), "
+            "stop:0.7 rgba(88,166,255,40), stop:1 transparent); "
+            "border: none; margin-top: 4px; margin-bottom: 4px;"
+        )
         left_layout.addWidget(left_sep_bottom)
 
         left_layout.addStretch()
@@ -1584,7 +1706,11 @@ class App(QMainWindow):
 
         center_header = QHBoxLayout()
         lbl_preview = QLabel("Preview")
-        lbl_preview.setStyleSheet("color: #F0F2F4; font-size: 24px; font-weight: 700;")
+        lbl_preview.setStyleSheet(
+            "color: #F0F2F4; font-size: 26px; font-weight: 800; letter-spacing: 0.5px; "
+            "border-bottom: 2px solid qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 #3B82F6, stop:1 transparent); padding-bottom: 4px;"
+        )
         center_header.addWidget(lbl_preview)
         center_header.addStretch()
 
@@ -1597,14 +1723,17 @@ class App(QMainWindow):
         btn_import = QPushButton("Import Project")
         btn_import.setStyleSheet("""
             QPushButton {
-                background-color: #408CDB;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3574C4, stop:1 #408CDB);
+                border: 1px solid rgba(88, 166, 255, 60);
+                border-radius: 8px;
                 color: #FFFFFF;
                 font-size: 14px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #58A6FF; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #408CDB, stop:1 #58A6FF);
+                border: 1px solid rgba(88, 166, 255, 130);
+            }
         """)
         btn_import.setFixedHeight(36)
         btn_import.clicked.connect(self.import_project)
@@ -1643,24 +1772,43 @@ class App(QMainWindow):
         center_layout.addWidget(self.preview)
 
         center_bottom = QHBoxLayout()
-        btn_generate = QPushButton("Generate")
+        btn_generate = QPushButton("⚙  Generate")
         btn_generate.setStyleSheet("""
             QPushButton {
-                background-color: #408CDB;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 20px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563EB, stop:1 #4F46E5);
+                border: 1px solid rgba(99, 102, 241, 80);
+                border-radius: 21px;
                 color: #FFFFFF;
                 font-size: 16px;
                 font-weight: bold;
+                padding: 0 28px;
+                letter-spacing: 0.5px;
             }
-            QPushButton:hover { background-color: #58A6FF; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3B82F6, stop:1 #6366F1);
+                border: 1px solid rgba(147, 197, 253, 130);
+            }
         """)
         btn_generate.setFixedHeight(42)
         btn_generate.clicked.connect(self.generate_full)
         center_bottom.addWidget(btn_generate)
         center_bottom.addStretch()
         btn_clear = QPushButton("Clear Preview")
-        btn_clear.setProperty("danger", True)
+        btn_clear.setStyleSheet("""
+            QPushButton {
+                background-color: transparent;
+                color: #9CA3AF;
+                border: 1px solid rgba(156, 163, 175, 60);
+                border-radius: 21px;
+                font-size: 14px;
+                padding: 0 20px;
+            }
+            QPushButton:hover {
+                color: #F87171;
+                border: 1px solid rgba(248, 113, 113, 100);
+                background-color: rgba(248, 113, 113, 10);
+            }
+        """)
         btn_clear.setFixedHeight(42)
         btn_clear.clicked.connect(self.clear_preview)
         center_bottom.addWidget(btn_clear)
@@ -1674,9 +1822,9 @@ class App(QMainWindow):
         self.right_panel.setAutoFillBackground(True)
         self.right_panel.setStyleSheet("""
             QFrame#rightPanel {
-                background-color: rgba(11, 29, 50, 100);
-                border-radius: 8px;
-                border: 1px solid rgba(50, 85, 160, 80);
+                background-color: rgba(11, 29, 50, 110);
+                border-radius: 12px;
+                border: 1px solid rgba(50, 85, 160, 65);
             }
         """)
         self.right_panel.setMinimumWidth(340)
@@ -1693,9 +1841,13 @@ class App(QMainWindow):
         right_layout.setContentsMargins(18, 18, 18, 18)
         right_layout.setSpacing(10)
 
-        # GNS3 section
-        lbl_gns3 = QLabel("GNS3 Project")
-        lbl_gns3.setStyleSheet("color: white; font-size: 18px; font-weight: 700;")
+        # Import & Discovery section
+        lbl_gns3 = QLabel("  Discovery & Import")
+        lbl_gns3.setStyleSheet(
+            "color: #F0F2F4; font-size: 18px; font-weight: 700; "
+            "border-left: 3px solid qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #F59E0B, stop:1 #D97706); "
+            "padding-left: 10px; padding-top: 2px; padding-bottom: 2px; margin-bottom: 4px;"
+        )
         right_layout.addWidget(lbl_gns3)
 
         gns3_row = QHBoxLayout()
@@ -1710,18 +1862,23 @@ class App(QMainWindow):
         gns3_row.addWidget(self.lbl_gns3_status)
         right_layout.addLayout(gns3_row)
 
-        gns3_btns = QHBoxLayout()
+        gns3_btns = QGridLayout()
+        gns3_btns.setHorizontalSpacing(6)
+        gns3_btns.setVerticalSpacing(6)
         btn_gns3_import = QPushButton("Import")
         btn_gns3_import.setStyleSheet("""
             QPushButton {
-                background-color: #408CDB;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #3574C4, stop:1 #408CDB);
+                border: 1px solid rgba(88, 166, 255, 60);
+                border-radius: 8px;
                 color: #FFFFFF;
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: bold;
             }
-            QPushButton:hover { background-color: #58A6FF; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #408CDB, stop:1 #58A6FF);
+                border: 1px solid rgba(88, 166, 255, 130);
+            }
         """)
         btn_gns3_import.setFixedHeight(32)
         btn_gns3_import.clicked.connect(self.gns3_list_projects)
@@ -1729,40 +1886,78 @@ class App(QMainWindow):
         btn_gns3_refresh = QPushButton("Refresh")
         btn_gns3_refresh.setStyleSheet("""
             QPushButton {
-                background-color: #445263;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 6px;
-                color: #FFFFFF;
-                font-size: 14px;
+                background-color: rgba(50, 66, 85, 220);
+                border: 1px solid rgba(100, 130, 170, 50);
+                border-radius: 8px;
+                color: #C9D1D9;
+                font-size: 13px;
             }
-            QPushButton:hover { background-color: #55667A; }
+            QPushButton:hover {
+                background-color: rgba(65, 85, 110, 240);
+                border: 1px solid rgba(88, 166, 255, 100);
+                color: #FFFFFF;
+            }
         """)
         btn_gns3_refresh.setFixedHeight(32)
         btn_gns3_refresh.clicked.connect(self.refresh_gns3_connection)
+        
+        btn_physical_discovery = QPushButton("Add Physical")
+        btn_physical_discovery.setStyleSheet("""
+            QPushButton {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1B7A30, stop:1 #238636);
+                border: 1px solid rgba(46, 160, 67, 60);
+                border-radius: 8px;
+                color: #FFFFFF;
+                font-size: 13px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #238636, stop:1 #2EA043);
+                border: 1px solid rgba(63, 185, 80, 100);
+            }
+        """)
+        btn_physical_discovery.setFixedHeight(32)
+        btn_physical_discovery.clicked.connect(self.show_physical_discovery)
+        
         btn_network_rescan = QPushButton("Rescan Networks")
         btn_network_rescan.setStyleSheet("""
             QPushButton {
-                background-color: rgba(30, 60, 45, 180);
-                border: 1px solid rgba(136, 219, 136, 60);
-                color: #A3D8A3; border-radius: 4px; padding: 4px;
+                background-color: rgba(25, 50, 40, 200);
+                border: 1px solid rgba(100, 200, 130, 45);
+                border-radius: 8px;
+                color: #86EFAC;
+                font-size: 13px;
             }
-            QPushButton:hover { background-color: rgba(40, 80, 55, 200); }
+            QPushButton:hover {
+                background-color: rgba(35, 70, 50, 230);
+                border: 1px solid rgba(134, 239, 172, 80);
+            }
         """)
         btn_network_rescan.setFixedHeight(32)
         btn_network_rescan.clicked.connect(self._assign_network_ids)
-        gns3_btns.addWidget(btn_gns3_import)
-        gns3_btns.addWidget(btn_gns3_refresh)
-        gns3_btns.addWidget(btn_network_rescan)
+        gns3_btns.addWidget(btn_gns3_import, 0, 0)
+        gns3_btns.addWidget(btn_physical_discovery, 0, 1)
+        gns3_btns.addWidget(btn_gns3_refresh, 1, 0)
+        gns3_btns.addWidget(btn_network_rescan, 1, 1)
         right_layout.addLayout(gns3_btns)
 
         right_sep_top = QFrame()
-        right_sep_top.setFrameShape(QFrame.HLine)
-        right_sep_top.setStyleSheet("color: rgba(86,146,228,45);")
+        right_sep_top.setFixedHeight(1)
+        right_sep_top.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0, "
+            "stop:0 transparent, stop:0.3 rgba(88,166,255,50), "
+            "stop:0.7 rgba(88,166,255,50), stop:1 transparent); "
+            "border: none; margin-top: 6px; margin-bottom: 6px;"
+        )
         right_layout.addWidget(right_sep_top)
 
         # Send / Connect section
-        lbl_send = QLabel("Send / Connect")
-        lbl_send.setStyleSheet("color: #F0F2F4; font-size: 18px; font-weight: 700;")
+        lbl_send = QLabel("  Send / Connect")
+        lbl_send.setStyleSheet(
+            "color: #F0F2F4; font-size: 18px; font-weight: 700; "
+            "border-left: 3px solid qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #3B82F6, stop:1 #2563EB); "
+            "padding-left: 10px; padding-top: 2px; padding-bottom: 2px; margin-bottom: 4px;"
+        )
         right_layout.addWidget(lbl_send)
 
         self.send_method = QComboBox()
@@ -1835,17 +2030,26 @@ class App(QMainWindow):
         ):
             _le.returnPressed.connect(self._on_connection_field_return)
 
-        self.btn_send = QPushButton("Send")
+        self.btn_send = QPushButton("➤  Send")
         self.btn_send.setStyleSheet("""
             QPushButton {
-                background-color: #1F6FEB;
-                border: 1px solid rgba(255, 255, 255, 20);
-                border-radius: 20px;
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #1D4ED8, stop:1 #2563EB);
+                border: 1px solid rgba(59, 130, 246, 80);
+                border-radius: 21px;
                 color: #FFFFFF;
                 font-size: 16px;
                 font-weight: bold;
+                letter-spacing: 0.5px;
             }
-            QPushButton:hover { background-color: #388BFD; }
+            QPushButton:hover {
+                background: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #2563EB, stop:1 #3B82F6);
+                border: 1px solid rgba(96, 165, 250, 140);
+            }
+            QPushButton:disabled {
+                background: rgba(35, 42, 52, 180);
+                color: #4A5568;
+                border: 1px solid rgba(80, 100, 130, 40);
+            }
         """)
         self.btn_send.setFixedHeight(42)
         self._apply_icon(self.btn_send, "router.svg")
@@ -1879,32 +2083,29 @@ class App(QMainWindow):
         send_row.addWidget(self.btn_ai, 0)
         right_layout.addLayout(send_row)
 
-        btn_save_creds = QPushButton("Save Credentials")
-        btn_save_creds.setStyleSheet("""
+        _ghost_btn_style = """
             QPushButton {
                 background-color: transparent;
-                border: 1px solid rgba(88, 166, 255, 120);
-                border-radius: 6px;
-                color: #58A6FF;
-                font-size: 14px;
+                border: 1px solid rgba(88, 166, 255, 90);
+                border-radius: 8px;
+                color: #7CB8F0;
+                font-size: 13px;
+                font-weight: 600;
             }
-            QPushButton:hover { background-color: rgba(88, 166, 255, 30); }
-        """)
+            QPushButton:hover {
+                background-color: rgba(88, 166, 255, 16);
+                border: 1px solid rgba(88, 166, 255, 160);
+                color: #93C5FD;
+            }
+        """
+        btn_save_creds = QPushButton("Save Credentials")
+        btn_save_creds.setStyleSheet(_ghost_btn_style)
         btn_save_creds.setFixedHeight(34)
         btn_save_creds.clicked.connect(self.save_credentials)
         right_layout.addWidget(btn_save_creds)
 
         btn_terminal = QPushButton("Open Terminal")
-        btn_terminal.setStyleSheet("""
-            QPushButton {
-                background-color: transparent;
-                border: 1px solid rgba(88, 166, 255, 120);
-                border-radius: 6px;
-                color: #58A6FF;
-                font-size: 14px;
-            }
-            QPushButton:hover { background-color: rgba(88, 166, 255, 30); }
-        """)
+        btn_terminal.setStyleSheet(_ghost_btn_style)
         btn_terminal.setFixedHeight(34)
         btn_terminal.clicked.connect(self.open_terminal)
         right_layout.addWidget(btn_terminal)
@@ -2084,11 +2285,53 @@ class App(QMainWindow):
 
     # ── Thread-safe UI helpers (replaces self.after) ────────────────────
 
-    def _execute_main_thread_call(self, fn):
-        try:
-            fn()
-        except Exception:
-            pass
+    def _execute_main_thread_call(self, func):
+        func()
+
+    def show_physical_discovery(self):
+        """Shows the physical subnet/CDP discovery dialog and ingests findings."""
+        dlg = PhysicalDiscoveryDialog(self)
+        dlg.discovery_complete.connect(self._ingest_physical_devices)
+        dlg.exec()
+
+    def _ingest_physical_devices(self, found_devices):
+        """Ingests list of {'name':..., 'ip':..., 'port':..., 'protocol':..., 'type':...}"""
+        self._safe_bg_log(f"Importing {len(found_devices)} physical devices...")
+        
+        imported_count = 0
+        assigned = set([dev.name for _, dev, _ in self.devices])
+        
+        for p_dev in found_devices:
+            name = p_dev.get("name")
+            dev_type = p_dev.get("type", "router")
+            if not name or name in assigned:
+                import uuid
+                name = f"{name or 'Node'}-{str(uuid.uuid4())[:4]}"
+            
+            ModelClass = self.device_types.get(dev_type.lower(), DeviceModel)
+            model = ModelClass(name)
+            meta = {
+                "ip": p_dev.get("ip"),
+                "port": p_dev.get("port"),
+                "protocol": p_dev.get("protocol"),
+                "is_physical": True,
+                "type": dev_type
+            }
+            imported_count += 1
+            self.devices.append((name, model, meta))
+            assigned.add(name)
+
+        if imported_count > 0:
+            # Trigger UI update
+            self.lbl_gns3_project_name.setText(f"Physical/GNS3 Mixed")
+            self.lbl_gns3_status.setText(f"Active")
+            self.lbl_gns3_status.setStyleSheet(
+                "color: #7EE787; background-color: rgba(30,56,36,210); "
+                "border: 1px solid rgba(86,211,100,70); border-radius: 7px; "
+                "padding: 5px 11px; font-weight: bold; font-size: 13px;"
+            )
+            QTimer.singleShot(0, self.update_device_list)
+            QMessageBox.information(self, "Physical Discovery", f"Successfully imported {imported_count} devices from the physical network.")
 
     def _run_on_main(self, fn):
         app = QApplication.instance()
@@ -2106,7 +2349,30 @@ class App(QMainWindow):
         obj = cls(name)
         if metadata is None:
             metadata = {}
-        self.devices.append((name, obj, metadata))
+        
+        # Avoid duplicate additions to the in-memory list
+        if not any(d[0] == name for d in self.devices):
+            self.devices.append((name, obj, metadata))
+            
+        # Automatically insert/update the device in the SQLite database to keep DB in sync
+        ts = time.strftime("%Y-%m-%d %H:%M:%S")
+        ip = metadata.get("ip", metadata.get("console_host", ""))
+        port = str(metadata.get("port", metadata.get("console_port", "")))
+        conn_type = "gns3-console" if metadata.get("gns3_node") else "manual"
+        added_gns3 = 1 if metadata.get("gns3_node") else 0
+        proj_id = metadata.get("project_id", "")
+        node_id = metadata.get("node_id", "")
+        
+        try:
+            with db_lock:
+                cur.execute(
+                    "INSERT OR REPLACE INTO devices (name, type, ip, port, connection_type, added_from_gns3, project_id, node_id, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (name, type_key, ip, port, conn_type, added_gns3, proj_id, node_id, ts)
+                )
+                conn.commit()
+        except Exception as e:
+            self.log(f"[db] error auto-syncing added device '{name}': {e}")
 
     def refresh_device_list(self):
         self.device_list.blockSignals(True)
@@ -2191,6 +2457,18 @@ class App(QMainWindow):
         self.add_device_instance(dtype, name.strip())
         self.refresh_device_list()
 
+    def _clear_all_devices_from_db(self):
+        """Purge leftover devices, configs, and credentials from the database to avoid ghost/old devices."""
+        try:
+            with db_lock:
+                cur.execute("DELETE FROM configs")
+                cur.execute("DELETE FROM credentials")
+                cur.execute("DELETE FROM devices")
+                conn.commit()
+            self.log("[db] Cleared leftover devices, configs, and credentials from SQLite database.")
+        except Exception as e:
+            self.log(f"[db] error clearing database: {e}")
+
     def remove_selected_device(self):
         if not self.selected_device_name:
             QMessageBox.information(self, "Info", "Select a device first")
@@ -2205,6 +2483,16 @@ class App(QMainWindow):
         name = self.devices[idx][0]
         ret = QMessageBox.question(self, "Confirm", f"Remove {name}?")
         if ret == QMessageBox.Yes:
+            # Clean up device and its configs from SQLite database
+            try:
+                with db_lock:
+                    cur.execute("DELETE FROM configs WHERE device_id = (SELECT id FROM devices WHERE name = ?)", (name,))
+                    cur.execute("DELETE FROM credentials WHERE device_name = ?", (name,))
+                    cur.execute("DELETE FROM devices WHERE name = ?", (name,))
+                    conn.commit()
+                self.log(f"[db] Manually removed device '{name}' and its configs from database.")
+            except Exception as e:
+                self.log(f"[db] error deleting device '{name}': {e}")
             del self.devices[idx]
             self.refresh_device_list()
 
@@ -2359,7 +2647,10 @@ class App(QMainWindow):
     def log(self, msg):
         def _do():
             ts = time.strftime("%H:%M:%S")
-            self.txt_logs.appendPlainText(f"[{ts}] {msg}")
+            if hasattr(self, "txt_logs") and self.txt_logs is not None:
+                self.txt_logs.appendPlainText(f"[{ts}] {msg}")
+            else:
+                print(f"[{ts}] {msg}")
         self._run_on_main(_do)
 
     def _refresh_logs_history(self):
@@ -2543,10 +2834,14 @@ class App(QMainWindow):
                     protocol = str(cprot).lower()
 
             if meta.get("gns3_node"):
-                if not host:
-                    host = (meta.get("console_host") or "").strip()
-                if not port_str:
-                    port_str = str(meta.get("console_port") or "").strip()
+                # GNS3 console ports change on every project restart —
+                # ALWAYS prefer the live metadata over stale credentials.
+                gns3_host = (meta.get("console_host") or "").strip()
+                gns3_port = str(meta.get("console_port") or "").strip()
+                if gns3_host:
+                    host = gns3_host
+                if gns3_port:
+                    port_str = gns3_port
 
             if not host and dip:
                 host = dip
@@ -2681,364 +2976,26 @@ class App(QMainWindow):
 
     def invoke_ai_agent(self):
         """Triggered by the AI ✨ button — opens the Copilot interactive chat dialog."""
-        import json, markdown
-        from PySide6.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-                                        QLineEdit, QPushButton, QTextBrowser, QMessageBox,
-                                        QTabWidget, QWidget, QScrollArea, QFrame)
-        from PySide6.QtCore import Qt, QTimer
-        from network_manager.ai_agent import CopilotWorker
-        from network_manager.config import CONFIG_FILE, GNS3_DEFAULT_URL
+        if getattr(self, "_copilot_dlg", None) is not None:
+            self._copilot_dlg.show()
+            self._copilot_dlg.raise_()
+            self._copilot_dlg.activateWindow()
+            return
 
-        # ── Load API key ─────────────────────────────────────────────────
-        cfg = {}
-        try:
-            with open(CONFIG_FILE, "r") as f:
-                cfg = json.load(f)
-        except Exception:
-            pass
-        saved_key = cfg.get("gemini_api_key", "")
+        from network_manager.gui.agent_dialog import ANCSAgentDialog
 
-        # ── Build Copilot Chat Dialog ────────────────────────────────────
-        dlg = QDialog(self)
-        dlg.setWindowTitle("ANCS Copilot — AI Agent")
-        dlg.resize(920, 700)
-        dlg.setStyleSheet(self._dialog_style())
-        layout = QVBoxLayout(dlg)
-        layout.setSpacing(8)
-        layout.setContentsMargins(14, 14, 14, 14)
+        # Ensure state attributes exist on MainWindow
+        if not hasattr(self, "_copilot_history"):
+            self._copilot_history = []
+        if not hasattr(self, "_copilot_worker"):
+            self._copilot_worker = None
+        if not hasattr(self, "_copilot_chat_data"):
+            self._copilot_chat_data = []
 
-        # ── Header row ───────────────────────────────────────────────────
-        header_row = QHBoxLayout()
-        title = QLabel("✨ ANCS Copilot")
-        title.setStyleSheet("font-size: 22px; font-weight: bold; color: #a371f7;")
-        header_row.addWidget(title)
+        dlg = ANCSAgentDialog(self)
+        self._copilot_dlg = dlg
+        dlg.show()
 
-        status_lbl = QLabel("● Offline")
-        status_lbl.setStyleSheet("color: #8b949e; font-size: 12px;")
-        header_row.addWidget(status_lbl)
-        header_row.addStretch()
-
-        btn_config = QPushButton("⚙️")
-        btn_config.setToolTip("Configure API Key")
-        btn_config.setFixedSize(36, 36)
-        btn_config.setStyleSheet("""
-            QPushButton { background: transparent; border: 1px solid #30363D;
-                border-radius: 18px; font-size: 18px; }
-            QPushButton:hover { background: #21262D; border-color: #a371f7; }
-        """)
-        btn_config.setAutoDefault(False)
-        btn_config.setDefault(False)
-        btn_config.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        header_row.addWidget(btn_config)
-        layout.addLayout(header_row)
-
-        # ── Scope info (agent sees all devices — no focus picker) ──────────
-        scope_row = QHBoxLayout()
-        n_devs = len(self.devices)
-        n_configured = sum(1 for _, m, _ in self.devices if any(m.templates.values()))
-        scope_lbl = QLabel(f"📡 Workspace: {n_devs} device(s), {n_configured} configured")
-        scope_lbl.setStyleSheet("color: #8b949e; font-size: 12px;")
-        chk_raw_deploy = QCheckBox("Allow raw config deploy")
-        chk_raw_deploy.setStyleSheet("color: #8b949e; font-size: 12px;")
-        chk_raw_deploy.setChecked(bool(cfg.get("agent_allow_raw_deploy", False)))
-        scope_row.addWidget(scope_lbl)
-        scope_row.addStretch()
-        scope_row.addWidget(chk_raw_deploy)
-        layout.addLayout(scope_row)
-
-        # Hidden API key row
-        key_widget = QWidget()
-        key_layout = QHBoxLayout(key_widget)
-        key_layout.setContentsMargins(0, 0, 0, 0)
-        key_label = QLabel("API Key:")
-        key_label.setStyleSheet("color: #8b949e; font-size: 12px;")
-        key_input = QLineEdit(saved_key)
-        key_input.setEchoMode(QLineEdit.Password)
-        key_input.setPlaceholderText("Paste your Google AI Studio API key")
-        key_input.setStyleSheet("""
-            QLineEdit { background-color: #161B22; border: 1px solid #30363D;
-                border-radius: 6px; color: #C9D1D9; padding: 5px 8px; font-size: 12px; }
-            QLineEdit:focus { border-color: #a371f7; }
-        """)
-        key_layout.addWidget(key_label)
-        key_layout.addWidget(key_input, 1)
-        
-        btn_launch = QPushButton("Connect Agent")
-        btn_launch.setCursor(Qt.PointingHandCursor)
-        btn_launch.setStyleSheet("""
-            QPushButton { background-color: #238636; border: 1px solid #30363D;
-                border-radius: 6px; color: #FFFFFF; padding: 5px 12px; font-size: 12px; font-weight: bold; }
-            QPushButton:hover { background-color: #2ea043; }
-        """)
-        key_layout.addWidget(btn_launch)
-
-        key_widget.setVisible(not bool(saved_key))
-        layout.addWidget(key_widget)
-        btn_config.clicked.connect(lambda: key_widget.setVisible(not key_widget.isVisible()))
-
-        # ── Tab Widget: Chat | Execution Logs ────────────────────────────
-        tabs = QTabWidget()
-        tabs.setStyleSheet("""
-            QTabWidget::pane { border: 1px solid #21262D; border-radius: 8px; background: #0D1117; }
-            QTabBar::tab { background: #161B22; color: #8b949e; padding: 8px 20px;
-                border: 1px solid #21262D; border-bottom: none; border-top-left-radius: 8px;
-                border-top-right-radius: 8px; font-size: 13px; margin-right: 2px; }
-            QTabBar::tab:selected { background: #0D1117; color: #e6edf3; font-weight: bold;
-                border-bottom: 2px solid #a371f7; }
-            QTabBar::tab:hover { color: #C9D1D9; }
-        """)
-
-        # Tab 1: Chat conversation (Markdown rendered)
-        chat_browser = QTextBrowser()
-        chat_browser.setOpenExternalLinks(False)
-        chat_browser.setStyleSheet("""
-            QTextBrowser { background-color: #0D1117; border: none; color: #e6edf3;
-                font-family: 'Segoe UI', 'Inter', sans-serif; font-size: 13px; padding: 14px; }
-        """)
-        chat_browser.setHtml("<p style='color:#8b949e'>Connecting to AI agent...</p>")
-        tabs.addTab(chat_browser, "💬  Chat")
-
-        # Tab 2: Execution Logs
-        logs_browser = QTextBrowser()
-        logs_browser.setOpenExternalLinks(False)
-        logs_browser.setStyleSheet("""
-            QTextBrowser { background-color: #0D1117; border: none; color: #C9D1D9;
-                font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 12px; padding: 10px; }
-        """)
-        logs_browser.setHtml("<span style='color:#8b949e'>Tool execution logs will stream here...</span>")
-        tabs.addTab(logs_browser, "🖥️  Execution Logs")
-
-        layout.addWidget(tabs, 1)
-
-        # ── Thinking indicator ───────────────────────────────────────────
-        thinking_row = QHBoxLayout()
-        thinking_label = QLabel("")
-        thinking_label.setStyleSheet("color: #a371f7; font-size: 13px; font-weight: bold;")
-        thinking_row.addWidget(thinking_label)
-        thinking_row.addStretch()
-        layout.addLayout(thinking_row)
-
-        _dots = {"count": 0, "timer": None}
-        def _animate_dots():
-            _dots["count"] = (_dots["count"] % 4) + 1
-            thinking_label.setText(f"⏳ Copilot is thinking{'.' * _dots['count']}")
-
-        def start_thinking():
-            _dots["timer"] = QTimer(dlg)
-            _dots["timer"].timeout.connect(_animate_dots)
-            _dots["timer"].start(400)
-
-        def stop_thinking():
-            if _dots["timer"]:
-                _dots["timer"].stop()
-            thinking_label.setText("")
-
-        # ── Chat input row ───────────────────────────────────────────────
-        input_row = QHBoxLayout()
-        chat_input = QLineEdit()
-        chat_input.setPlaceholderText("Ask the Copilot anything...")
-        chat_input.setFixedHeight(42)
-        chat_input.setStyleSheet("""
-            QLineEdit {
-                background-color: #161B22; border: 1px solid #30363D;
-                border-radius: 8px; color: #e6edf3; padding: 0 14px;
-                font-size: 14px;
-            }
-            QLineEdit:focus { border-color: #a371f7; }
-        """)
-        chat_input.setEnabled(False)  # Disabled until agent is ready
-
-        btn_send = QPushButton("Send")
-        btn_send.setFixedSize(90, 42)
-        btn_send.setStyleSheet("""
-            QPushButton {
-                background: qlineargradient(x1:0,y1:0,x2:1,y2:1, stop:0 #2a145e, stop:1 #4A24A6);
-                border: 1px solid #5a3a91; border-radius: 8px; color: #FFFFFF;
-                font-size: 14px; font-weight: bold;
-            }
-            QPushButton:hover { border-color: #a371f7; }
-            QPushButton:disabled { background: #21262D; color: #484F58; border-color: #30363D; }
-        """)
-
-        btn_close = QPushButton("Close")
-        btn_close.setFixedSize(70, 42)
-        btn_close.setStyleSheet("""
-            QPushButton { background-color: #21262D; border: 1px solid #30363D;
-                border-radius: 8px; color: #C9D1D9; font-size: 14px; }
-            QPushButton:hover { background-color: #30363D; border-color: #8B949E; }
-        """)
-        btn_close.clicked.connect(dlg.accept)
-        btn_close.setAutoDefault(False)
-        btn_close.setDefault(False)
-        btn_close.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-
-        def _copilot_set_send_enabled(en: bool):
-            btn_send.setEnabled(en)
-            btn_send.setDefault(en)
-            btn_send.setAutoDefault(en)
-
-        input_row.addWidget(chat_input, 1)
-        input_row.addWidget(btn_send)
-        input_row.addWidget(btn_close)
-        layout.addLayout(input_row)
-        _copilot_set_send_enabled(False)
-
-        # ── Markdown CSS ─────────────────────────────────────────────────
-        md_css = """
-        <style>
-            body { color: #e6edf3; font-family: 'Segoe UI', sans-serif; }
-            h1, h2, h3 { color: #a371f7; margin-top: 12px; }
-            strong, b { color: #58a6ff; }
-            code { background: #161B22; color: #79c0ff; padding: 2px 6px; border-radius: 4px; font-size: 12px; }
-            pre { background: #161B22; padding: 10px; border-radius: 6px; overflow-x: auto; }
-            pre code { background: none; padding: 0; }
-            ul, ol { padding-left: 20px; }
-            li { margin-bottom: 4px; }
-            hr { border: 1px solid #21262D; }
-            p { line-height: 1.6; }
-            table { border-collapse: collapse; width: 100%; margin: 8px 0; }
-            th, td { border: 1px solid #30363D; padding: 6px 12px; text-align: left; }
-            th { background: #161B22; color: #a371f7; }
-            .user-msg { background: #1a1f3a; border-left: 3px solid #58a6ff; padding: 8px 14px; border-radius: 6px; margin: 8px 0; }
-            .ai-msg { padding: 8px 0; margin: 8px 0; }
-        </style>
-        """
-
-        # ── Chat history for rendering ───────────────────────────────────
-        chat_html_parts = [md_css]
-
-        def render_chat():
-            chat_browser.setHtml("".join(chat_html_parts))
-            chat_browser.verticalScrollBar().setValue(chat_browser.verticalScrollBar().maximum())
-
-        def add_user_message(text: str):
-            chat_html_parts.append(
-                f"<div class='user-msg'><b style='color: #58a6ff'>You:</b> "
-                f"<span style='color: #e6edf3'>{text}</span></div>"
-            )
-            render_chat()
-
-        def add_ai_message(text: str):
-            rendered = markdown.markdown(text, extensions=["fenced_code", "tables"])
-            chat_html_parts.append(f"<div class='ai-msg'>{rendered}</div><hr>")
-            render_chat()
-
-        # ── Worker lifecycle ─────────────────────────────────────────────
-        self._copilot_worker = None
-        _waiting_for_reply = {"flag": False}
-
-        def on_terminal_log(html_text: str):
-            logs_browser.append(html_text)
-            logs_browser.verticalScrollBar().setValue(logs_browser.verticalScrollBar().maximum())
-
-        def on_chat_response(text: str):
-            stop_thinking()
-            add_ai_message(text)
-            tabs.setCurrentIndex(0)  # Focus on chat
-            chat_input.setEnabled(True)
-            _copilot_set_send_enabled(True)
-            chat_input.setFocus()
-            _waiting_for_reply["flag"] = False
-
-        def on_finished(summary: str, success: bool):
-            stop_thinking()
-            status_lbl.setText("● Disconnected")
-            status_lbl.setStyleSheet("color: #f85149; font-size: 12px;")
-            if not success:
-                add_ai_message(f"**Error:** {summary}")
-            chat_input.setEnabled(False)
-            _copilot_set_send_enabled(False)
-
-        def on_ready():
-            status_lbl.setText("● Online")
-            status_lbl.setStyleSheet("color: #3fb950; font-size: 12px;")
-            chat_input.setEnabled(True)
-            _copilot_set_send_enabled(True)
-            chat_input.setFocus()
-
-        def send_message():
-            msg = chat_input.text().strip()
-            if not msg or _waiting_for_reply["flag"]:
-                return
-            add_user_message(msg)
-            chat_input.clear()
-            _waiting_for_reply["flag"] = True
-            chat_input.setEnabled(False)
-            _copilot_set_send_enabled(False)
-            start_thinking()
-            if self._copilot_worker:
-                self._copilot_worker.queue_message(msg)
-
-        btn_send.clicked.connect(send_message)
-        chat_input.returnPressed.connect(send_message)
-
-        # ── Start the agent immediately ──────────────────────────────────
-        def launch_agent():
-            api_key = key_input.text().strip()
-            if not api_key:
-                key_widget.setVisible(True)
-                QMessageBox.warning(dlg, "Missing Key", "Please enter your Google AI Studio API key, then reopen Copilot.")
-                return
-
-            # Save key + agent preferences
-            cfg["gemini_api_key"] = api_key
-            cfg["agent_allow_raw_deploy"] = chk_raw_deploy.isChecked()
-            try:
-                with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-                    json.dump(cfg, f, indent=2)
-            except Exception:
-                pass
-
-            # GNS3 URL
-            gns3_url = getattr(self, '_gns3_url', GNS3_DEFAULT_URL) or GNS3_DEFAULT_URL
-            gns3_project_id = getattr(self, "gns3_project_id", None) or ""
-
-            # Build full project snapshot for the agent
-            project_snapshot = self._build_copilot_snapshot()
-
-            workspace_resolved = self._copilot_workspace_resolved()
-
-            start_thinking()
-            self._copilot_worker = CopilotWorker(
-                api_key=api_key,
-                gns3_url=gns3_url,
-                allow_raw_deploy=chk_raw_deploy.isChecked(),
-                workspace_resolved=workspace_resolved,
-                gns3_project_id=str(gns3_project_id) if gns3_project_id else "",
-                project_snapshot=project_snapshot,
-                audit_fn=self._write_audit_log,
-            )
-            self._copilot_worker.terminal_log_signal.connect(on_terminal_log)
-            self._copilot_worker.chat_response_signal.connect(on_chat_response)
-            self._copilot_worker.finished_signal.connect(on_finished)
-            self._copilot_worker.ready_signal.connect(on_ready)
-            self._copilot_worker.start()
-            
-            # Update UI state
-            key_widget.setVisible(False)
-            chat_browser.setHtml("<p style='color:#8b949e'>Connecting to AI agent...</p>")
-            status_lbl.setText("● Initializing...")
-            status_lbl.setStyleSheet("color: #d29922; font-size: 12px;")
-
-        # Wire up manual launch
-        btn_launch.clicked.connect(launch_agent)
-        key_input.returnPressed.connect(launch_agent)
-
-        # Cleanup on close
-        def on_close():
-            if self._copilot_worker:
-                self._copilot_worker.stop()
-                self._copilot_worker.wait(2000)
-                self._copilot_worker = None
-        dlg.finished.connect(lambda _: on_close())
-
-        # Auto-launch if we have an API key
-        if saved_key:
-            QTimer.singleShot(300, launch_agent)
-        else:
-            chat_browser.setHtml("<p style='color:#d29922'>Please configure your API key using the ⚙️ button, then reopen Copilot.</p>")
-
-        dlg.exec()
 
     def _set_send_busy(self, busy: bool):
         self._send_in_progress = busy
@@ -3423,6 +3380,7 @@ class App(QMainWindow):
 
         if replace_mode:
             self.devices.clear()
+            self._clear_all_devices_from_db()
             self.refresh_device_list()
 
         added = 0
@@ -4235,14 +4193,14 @@ class App(QMainWindow):
                     proj = projs[0]
             self.gns3 = g
             self.last_gns3_project = proj
-            project_id = proj.get('project_id') or proj.get('projectId') or proj.get('id')
+            project_id = proj.get('project_id') or proj.get('projectId')
             self.gns3_project_id = project_id
             if not project_id:
                 self._set_gns3_status("Project missing ID", False, "")
                 return
             nodes = self.gns3.get_nodes(project_id)
             _SKIP_TYPES = {"vpcs", "cloud", "nat", "ethernet_switch", "ethernet_hub", "frame_relay_switch", "atm_switch"}
-            l3_keywords = ['l3 switch', 'layer3', 'layer 3', 'esw', 'c3640', 'c3560', 'c3750', 'multilayer']
+            l3_keywords = ['l3 switch', 'layer3', 'layer 3', 'esw', 'c3640', 'c3560', 'c3750', 'multilayer', 'etherswitch', 'l3', 'ioul3']
             rtr_keywords = ['router', 'ios', 'csr', 'isr', 'iosv', 'firepower', 'asa', 'xrv', 'nxos',
                             'c2691', 'c2600', 'c7200', 'c3725', 'c3745', 'c3660', 'c3845', 'c1900', 'c2900',
                             'adventerprisek9', 'advipservices']
@@ -4366,6 +4324,48 @@ class App(QMainWindow):
         imported = 0
         ts = time.strftime("%Y-%m-%d %H:%M:%S")
         project_id = self.gns3_project_id if hasattr(self, 'gns3_project_id') else ""
+
+        # ── WIPE STALE/OLD GHOST DEVICES FROM DATABASE AND MEMORY ──
+        # Ensure ONLY live devices in the current GNS3 project session exist.
+        live_node_ids = {d["node_id"] for d in new_devices}
+        
+        try:
+            with db_lock:
+                # Get all GNS3 devices from the database
+                cur.execute("SELECT name, node_id, project_id FROM devices WHERE added_from_gns3 = 1")
+                db_gns3_devices = cur.fetchall()
+                
+                # Identify ghost devices to delete
+                to_delete = []
+                for name, node_id, pid in db_gns3_devices:
+                    if pid != project_id or node_id not in live_node_ids:
+                        to_delete.append(name)
+                        
+                for name in to_delete:
+                    # Clean up configurations first (foreign key reference)
+                    cur.execute("DELETE FROM configs WHERE device_id = (SELECT id FROM devices WHERE name = ?)", (name,))
+                    # Clean up device credentials
+                    cur.execute("DELETE FROM credentials WHERE device_name = ?", (name,))
+                    # Clean up the device itself
+                    cur.execute("DELETE FROM devices WHERE name = ?", (name,))
+                    self.log(f"[db] Wiped stale ghost device '{name}' from database.")
+                conn.commit()
+        except Exception as exc:
+            self.log(f"[db] error cleaning stale ghost devices: {exc}")
+
+        # Remove stale ghost devices from in-memory workspace list
+        stale_indices = []
+        for idx, (name, _, meta) in enumerate(self.devices):
+            if meta.get("gns3_node"):
+                if meta.get("project_id") != project_id or meta.get("node_id") not in live_node_ids:
+                    stale_indices.append(idx)
+                    
+        # Delete indices in reverse order to preserve list positions
+        for idx in sorted(stale_indices, reverse=True):
+            self.log(f"[UI] Removed stale ghost device '{self.devices[idx][0]}' from active workspace.")
+            del self.devices[idx]
+
+        # Ingest active/live nodes
         for d in new_devices:
             name, node_id = d["name"], d["node_id"]
             already = any(x[2].get("node_id") == node_id and x[2].get("project_id") == project_id for x in self.devices)
@@ -4392,7 +4392,9 @@ class App(QMainWindow):
             self.refresh_device_list()
             self.log(f"Auto-imported {imported} GNS3 node(s) from '{proj_name}'")
             # Automatically open the Project Setup when new devices are discovered
-            self.run_project_sync()
+            if not getattr(self, "_project_sync_triggered", False):
+                self._project_sync_triggered = True
+                self.run_project_sync()
         self._set_gns3_status("\u2713 Connected", connected=True, project_name=proj_name or "Unknown project")
 
     def gns3_list_projects(self):
@@ -4420,7 +4422,7 @@ class App(QMainWindow):
                 return
             project = projs[idx]
             self.last_gns3_project = project
-            self.gns3_project_id = project.get('project_id') or project.get('projectId') or project.get('id')
+            self.gns3_project_id = project.get('project_id') or project.get('projectId')
             proj_name = project.get('name', '')
             self._set_gns3_status("\u2713 Connected", connected=True, project_name=proj_name or "Unknown project")
             QMessageBox.information(self, "GNS3", f"Selected {proj_name}")
@@ -4500,7 +4502,39 @@ class App(QMainWindow):
             if ret != QMessageBox.Yes:
                 event.ignore()
                 return
+        self._shutdown_copilot_on_exit()
         event.accept()
+
+    def _shutdown_copilot_on_exit(self):
+        """Stop the Copilot dialog/worker before Qt tears down widgets."""
+        dlg = getattr(self, "_copilot_dlg", None)
+        if dlg is not None:
+            try:
+                dlg._closing_for_app = True
+                if hasattr(dlg, "_chips_timer"):
+                    dlg._chips_timer.stop()
+                if hasattr(dlg, "_thinking_dots"):
+                    dlg._thinking_dots.stop()
+                if hasattr(dlg, "_disconnect_worker_signals"):
+                    dlg._disconnect_worker_signals()
+                dlg.close()
+                dlg.deleteLater()
+            except Exception:
+                pass
+            self._copilot_dlg = None
+
+        worker = getattr(self, "_copilot_worker", None)
+        if worker is None:
+            return
+        try:
+            self._copilot_history = getattr(worker, "_messages", [])
+            worker.stop()
+            if worker.isRunning() and not worker.wait(5000):
+                worker.terminate()
+                worker.wait(1500)
+        except Exception:
+            pass
+        self._copilot_worker = None
 
     # ── DB stubs (kept for compatibility) ───────────────────────────────
 
