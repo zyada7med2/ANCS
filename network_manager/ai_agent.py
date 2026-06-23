@@ -5515,6 +5515,8 @@ class CopilotWorker(QThread):
                             augmented_msg = f"{reminder}\n\n{user_msg}"
                             contents.append(augmented_msg)
                             response = self._send_with_retry(contents if len(contents) > 1 else augmented_msg)
+                            reply = self._process_response(response)
+                            self._track_usage(response)
                         elif self.provider == "openmodel":
                             content_list = user_msg + (f" [Attached PDF/File: {os.path.basename(attachment_path)}]" if attachment_path else "")
                             reminder_msg = {"role": "system", "content": self._build_system_reminder()}
@@ -5599,10 +5601,8 @@ class CopilotWorker(QThread):
                                 if level != "none":
                                     kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
                             response = self._client.chat.completions.create(**kwargs)
-                        reply = self._process_response(response)
-
-                        # Component 7: Track token usage and cost
-                        self._track_usage(response)
+                            reply = self._process_response(response)
+                            self._track_usage(response)
 
                         # Component 4: Validate response for policy violations
                         reply = self._validate_response(reply)
