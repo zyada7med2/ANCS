@@ -282,10 +282,9 @@ This project is licensed under the **MIT License**.
 
 ---
 
-<div align="center">
 
-Made with ❤️ by <a href="https://github.com/zyada7med2"><strong>Zyad Ahmed</strong></a>
 
-<sub>Computer Science Student · Cyber Security Enthusiast · Cairo, Egypt</sub>
+
+
 
 </div>
