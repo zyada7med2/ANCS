@@ -3957,6 +3957,12 @@ Guessing interfaces causes silent config failures.
 18. **Respect HITL deployment rejections.** When `generate_and_deploy_device_config` returns "REJECTED by user", the user explicitly declined the deployment via the review dialog. Do NOT re-call the tool or retry. Acknowledge the rejection, tell the user the config is saved in the DB, and ask what they want to do instead.
 19. **GNS3 Node Creation Template Discovery.** Before calling `add_gns3_node()`, ALWAYS call `list_gns3_templates()` first to discover the available GNS3 templates/images. Match the device roles (routers, switches, core switches) with the correct installed templates. NEVER guess templates or create all nodes using a single router template.
 
+## LATENCY REDUCTION & BATCHING (CRITICAL FOR DEEPSEEK / THINKING MODELS)
+20. **Minimize Agent Turns**: DeepSeek/Gemini thinking models add high reasoning latency per turn. Each tool execution loop round takes 15-45 seconds. You MUST aim to finish the entire task in as few turns as possible.
+21. **Batch Tool Calls**: Generate multiple tool calls in parallel in a single turn whenever possible instead of running them sequentially across separate turns.
+22. **Combine CLI Commands**: Instead of running multiple separate `run_cli_on_device` calls for different commands on the same device, combine them into a single call using newline characters (e.g. `show ip route\nshow arp\nshow ip interface brief`).
+23. **Do Not Over-Troubleshoot Benign Quirks**: If basic connectivity is verified but a management IP SVI ping fails (a common GNS3 L2 switch boot quirk), do not spend multiple turns troubleshooting it. Report the success of data-plane traffic and conclude.
+
 # AUDIENCE
 Primary users are beginners. Reduce fear and confusion. Be a tutor, not a grader.
 
@@ -3982,6 +3988,7 @@ Primary users are beginners. Reduce fear and confusion. Be a tutor, not a grader
 5. **Discover before acting.** Call `get_network_overview()` as your FIRST action when the user asks about devices, topology, or configuration. You start every conversation with ZERO knowledge.
 6. **Discover GNS3 templates before adding nodes.** ALWAYS call `list_gns3_templates()` first before calling `add_gns3_node()` to ensure the correct router/switch templates are used instead of guessing.
 7. **ALWAYS use `provision_topology(...)` for multi-device creation.** When asked to build a network setup or spawn 2+ nodes, use `provision_topology` instead of calling `add_gns3_node` and `connect_gns3_nodes` individually.
+8. **Batch tool calls and combine CLI commands.** Reasoning models have high per-turn latency. Minimize turns by batching multiple tools in one turn and combining commands using newlines (`\n`) in `run_cli_on_device`. Do not over-troubleshoot benign GNS3 management-plane quirks.
 </critical-constraints>"""
 
     # ── Vendor addendum (Component 6) ─────────────────────────────────────
@@ -4202,6 +4209,76 @@ class CopilotWorker(QThread):
         ctx.output_tokens = 0
         ctx.estimated_cost_usd = 0.0
 
+    def _build_anthropic_tools(self, openai_tools: list) -> list:
+        anthropic_tools = []
+        for tool in openai_tools:
+            fn_def = tool["function"]
+            anthropic_tools.append({
+                "name": fn_def["name"],
+                "description": fn_def["description"],
+                "input_schema": fn_def["parameters"]
+            })
+        return anthropic_tools
+
+    def _get_anthropic_messages(self) -> list:
+        anthropic_msgs = []
+        for msg in self._messages:
+            role = msg.get("role")
+            if role == "system":
+                continue
+            
+            if role == "assistant":
+                tool_calls = msg.get("tool_calls")
+                content_blocks = []
+                text = msg.get("content")
+                if text:
+                    content_blocks.append({"type": "text", "text": text})
+                if tool_calls:
+                    for tc in tool_calls:
+                        tc_id = tc.get("id") if isinstance(tc, dict) else getattr(tc, "id", None)
+                        fn = tc.get("function", {}) if isinstance(tc, dict) else getattr(tc, "function", None)
+                        fn_name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None)
+                        fn_args_str = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+                        try:
+                            fn_args = json.loads(fn_args_str) if isinstance(fn_args_str, str) else fn_args_str
+                        except Exception:
+                            fn_args = {}
+                        content_blocks.append({
+                            "type": "tool_use",
+                            "id": tc_id,
+                            "name": fn_name,
+                            "input": fn_args
+                        })
+                anthropic_msgs.append({
+                    "role": "assistant",
+                    "content": content_blocks if content_blocks else " "
+                })
+            elif role == "tool":
+                tc_id = msg.get("tool_call_id")
+                content = msg.get("content")
+                if anthropic_msgs and anthropic_msgs[-1]["role"] == "user" and isinstance(anthropic_msgs[-1]["content"], list):
+                    anthropic_msgs[-1]["content"].append({
+                        "type": "tool_result",
+                        "tool_use_id": tc_id,
+                        "content": content
+                    })
+                else:
+                    anthropic_msgs.append({
+                        "role": "user",
+                        "content": [{
+                            "type": "tool_result",
+                            "tool_use_id": tc_id,
+                            "content": content
+                        }]
+                    })
+            elif role == "user":
+                content = msg.get("content")
+                anthropic_msgs.append({
+                    "role": "user",
+                    "content": content
+                })
+        return anthropic_msgs
+
     def _get_gemini_history(self) -> list:
         """Convert OpenAI-formatted self._messages into Gemini types.Content objects."""
         gemini_history = []
@@ -4326,7 +4403,12 @@ class CopilotWorker(QThread):
     def _track_usage(self, response):
         """Extract token counts from API response and update cumulative tracking."""
         try:
-            if self.provider in ("gemini", "vertex"):
+            if self.provider == "openmodel":
+                if isinstance(response, dict) and "usage" in response:
+                    usage = response["usage"]
+                    ctx.input_tokens += usage.get("input_tokens", 0) or 0
+                    ctx.output_tokens += usage.get("output_tokens", 0) or 0
+            elif self.provider in ("gemini", "vertex"):
                 if hasattr(response, 'usage_metadata') and response.usage_metadata:
                     um = response.usage_metadata
                     ctx.input_tokens += getattr(um, 'prompt_token_count', 0) or 0
@@ -4336,14 +4418,24 @@ class CopilotWorker(QThread):
                     ctx.input_tokens += response.usage.prompt_tokens or 0
                     ctx.output_tokens += response.usage.completion_tokens or 0
 
-            # Rough cost estimate (Gemini Flash pricing as baseline)
-            ctx.estimated_cost_usd = (
-                (ctx.input_tokens / 1_000_000) * 0.075 +
-                (ctx.output_tokens / 1_000_000) * 0.30
-            )
+            # Cost estimate — provider-specific pricing
+            if self.provider == "openmodel":
+                ctx.estimated_cost_usd = 0.0
+            elif self.provider == "deepseek":
+                # DeepSeek V4 Flash pricing (per million tokens, as of 2026)
+                ctx.estimated_cost_usd = (
+                    (ctx.input_tokens / 1_000_000) * 0.14 +
+                    (ctx.output_tokens / 1_000_000) * 0.28
+                )
+            else:
+                # Gemini Flash pricing as baseline for other providers
+                ctx.estimated_cost_usd = (
+                    (ctx.input_tokens / 1_000_000) * 0.075 +
+                    (ctx.output_tokens / 1_000_000) * 0.30
+                )
             self.terminal_log_signal.emit(
                 f"<span style='color:#8b949e'>[Copilot] Tokens: {ctx.input_tokens:,} in / {ctx.output_tokens:,} out "
-                f"| Est. cost: ${ctx.estimated_cost_usd:.4f} | Tools: {ctx.tool_call_count}/200</span>\n"
+                f"| Est. cost: ${ctx.estimated_cost_usd:.4f} | Tools: {ctx.tool_call_count}/2000</span>\n"
             )
         except Exception:
             pass  # Non-fatal
@@ -4576,7 +4668,7 @@ class CopilotWorker(QThread):
 
     def _process_response_gemini(self, response):
         """Handle the agentic tool-calling loop and return final text."""
-        MAX_TURNS = 10
+        MAX_TURNS = 50
         turn_tool_calls = {}
         for turn in range(MAX_TURNS):
             if not self._running:
@@ -4719,20 +4811,36 @@ class CopilotWorker(QThread):
         When the model returns multiple tool_calls in one response (e.g. deploying
         to 5 devices at once), they are executed in parallel using a thread pool.
         Single tool calls run directly on the current thread (no overhead).
+
+        For DeepSeek: streams reasoning_content to Logs tab and preserves it in
+        multi-turn history when tool calls occur (required by DeepSeek API spec).
         """
-        MAX_TURNS = 10
+        MAX_TURNS = 50
         turn_tool_calls = {}
         for turn in range(MAX_TURNS):
             if not self._running:
                 break
             message = response.choices[0].message
 
+            # ── DeepSeek: stream reasoning_content to Logs tab ────────────
+            reasoning = getattr(message, 'reasoning_content', None)
+            if reasoning and self.provider == "deepseek":
+                self.terminal_log_signal.emit(
+                    f"<span style='color: #d2a8ff'>💭 [Thinking] {reasoning}</span>\n"
+                )
+
             # If no tool calls, we're done
             if not message.tool_calls:
                 break
 
-            # Add assistant message (with tool_calls) to history
-            self._messages.append(message.model_dump())
+            # Add assistant message (with tool_calls) to history.
+            # For DeepSeek: reasoning_content MUST be included in the assistant
+            # message when a tool call occurs, per the DeepSeek multi-turn spec.
+            assistant_dict = message.model_dump()
+            if self.provider == "deepseek" and reasoning:
+                # model_dump() may not include reasoning_content — ensure it's present
+                assistant_dict["reasoning_content"] = reasoning
+            self._messages.append(assistant_dict)
 
             # Execute tool calls — parallel if multiple, direct if single
             tool_calls = message.tool_calls
@@ -4770,14 +4878,25 @@ class CopilotWorker(QThread):
             self._truncate_history()
             for attempt in range(3):
                 try:
+                    _model = getattr(self, '_deepseek_base_model', self.model_name)
                     kwargs = {
-                        "model": self.model_name,
+                        "model": _model,
                         "messages": self._messages,
                         "tools": OPENAI_TOOLS,
                         "temperature": 0.2,
                     }
                     if self.provider == "openrouter":
                         kwargs["extra_headers"] = {"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"}
+                    if self.provider == "deepseek":
+                        level = getattr(self, '_deepseek_thinking_level', 'medium')
+                        if level == "none":
+                            kwargs["extra_body"] = {"thinking": {"type": "disabled"}}
+                        else:
+                            kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+                            if level in ("high", "max"):
+                                kwargs["reasoning_effort"] = level
+                            else:
+                                kwargs["reasoning_effort"] = "high"
                     response = self._client.chat.completions.create(**kwargs)
                     break
                 except openai.RateLimitError:
@@ -4822,6 +4941,135 @@ class CopilotWorker(QThread):
 
         return final_text or "I completed the requested actions. Check the Execution Logs for details."
 
+    def _process_response_openmodel(self, response_data):
+        import requests
+        import json
+        import time
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        MAX_TURNS = 50
+        turn_tool_calls = {}
+
+        for turn in range(MAX_TURNS):
+            if not self._running:
+                break
+
+            thinking_text = ""
+            text_content = ""
+            tool_calls = []
+
+            for block in response_data.get("content", []):
+                block_type = block.get("type")
+                if block_type == "thinking":
+                    thinking_text += block.get("thinking", "")
+                elif block_type == "text":
+                    text_content += block.get("text", "")
+                elif block_type == "tool_use":
+                    tool_calls.append({
+                        "id": block.get("id"),
+                        "type": "function",
+                        "function": {
+                            "name": block.get("name"),
+                            "arguments": json.dumps(block.get("input", {}))
+                        }
+                    })
+
+            if thinking_text:
+                self.terminal_log_signal.emit(
+                    f"<span style='color: #d2a8ff'>💭 [Thinking] {thinking_text}</span>\n"
+                )
+
+            if not tool_calls:
+                break
+
+            assistant_msg = {
+                "role": "assistant",
+                "content": text_content if text_content else None,
+                "tool_calls": tool_calls
+            }
+            self._messages.append(assistant_msg)
+
+            class ToolCallObj:
+                def __init__(self, tc_dict):
+                    self.id = tc_dict["id"]
+                    class FunctionObj:
+                        def __init__(self, fn_dict):
+                            self.name = fn_dict["name"]
+                            self.arguments = fn_dict["arguments"]
+                    self.function = FunctionObj(tc_dict["function"])
+
+            tc_objects = [ToolCallObj(tc) for tc in tool_calls]
+
+            if len(tc_objects) == 1:
+                tc = tc_objects[0]
+                result_str = self._execute_single_tool(tc, turn_tool_calls)
+                self._messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.id,
+                    "content": _truncate_tool_result(result_str),
+                })
+            else:
+                ctx.log(
+                    f"<span style='color:#58A6FF'><b>[Copilot]</b> Executing {len(tc_objects)} tool calls in parallel</span>\n"
+                )
+                results = self._execute_tools_parallel(tc_objects, turn_tool_calls)
+                for tc in tc_objects:
+                    self._messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.id,
+                        "content": _truncate_tool_result(results.get(tc.id, "Tool execution error")),
+                    })
+
+            if turn == MAX_TURNS - 2:
+                self._messages.append({
+                    "role": "user",
+                    "content": "SYSTEM: Maximum tool calls approaching. You MUST provide a final answer on your next response. Do not call more tools.",
+                })
+
+            self._truncate_history()
+            anthropic_tools = self._build_anthropic_tools(OPENAI_TOOLS)
+            anthropic_messages = self._get_anthropic_messages()
+
+            headers = {
+                "x-api-key": self.api_key,
+                "anthropic-version": "2023-06-01",
+                "content-type": "application/json"
+            }
+            payload = {
+                "model": self.model_name,
+                "max_tokens": 4096,
+                "system": SYSTEM_PROMPT,
+                "messages": anthropic_messages,
+                "tools": anthropic_tools,
+                "temperature": 0.2
+            }
+            
+            for attempt in range(3):
+                try:
+                    r = requests.post("https://api.openmodel.ai/v1/messages", headers=headers, json=payload, timeout=240.0)
+                    if r.status_code != 200:
+                        raise RuntimeError(f"OpenModel API Error {r.status_code}: {r.text}")
+                    response_data = r.json()
+                    break
+                except Exception as e:
+                    if attempt < 2:
+                        wait = 2 ** (attempt + 1)
+                        self.terminal_log_signal.emit(
+                            f"<span style='color:#d29922'>[Copilot] Connection issue, retrying in {wait}s...</span>\n"
+                        )
+                        time.sleep(wait)
+                    else:
+                        raise
+
+        final_text = ""
+        for block in response_data.get("content", []):
+            if block.get("type") == "text":
+                final_text += block.get("text", "")
+        if final_text:
+            self._messages.append({"role": "assistant", "content": final_text})
+
+        return final_text or "I completed the requested actions. Check the Execution Logs for details."
+
     def _execute_single_tool(self, tc, turn_tool_calls=None):
         """Execute a single tool call and return the result string."""
         fn_name = tc.function.name
@@ -4832,13 +5080,12 @@ class CopilotWorker(QThread):
             ctx.log(f"<span style='color:#d29922'>[Copilot] Warning: bad JSON args for {fn_name}</span>\n")
 
         # ── Component 5: Global tool call counter ───────────────────────
-        # Hard session-wide safety limit. A runaway agent could hit
-        # MAX_TURNS tools per turn × unlimited turns = unbounded.
-        if ctx.tool_call_count >= 200:
-            ctx.log(f"<span style='color:#f85149'>[Copilot] SAFETY LIMIT: 200 tool calls reached this session</span>\n")
+        # Session-wide safety limit (generous — only guards against infinite loops).
+        if ctx.tool_call_count >= 2000:
+            ctx.log(f"<span style='color:#f85149'>[Copilot] SAFETY LIMIT: 2000 tool calls reached this session</span>\n")
             return (
-                "SAFETY LIMIT: 200 tool calls reached this session. "
-                "This is abnormal. Summarize what you've done so far and stop. "
+                "SAFETY LIMIT: 2000 tool calls reached this session. "
+                "Summarize what you've done so far and stop. "
                 "The user should start a new Copilot session if more work is needed."
             )
         ctx.tool_call_count += 1
@@ -4956,7 +5203,7 @@ class CopilotWorker(QThread):
 
         return results
 
-    def _truncate_history(self, max_messages=20):
+    def _truncate_history(self, max_messages=200):
         """Sliding window: keep system prompt + last N messages, cutting at safe boundaries.
 
         Never separates an assistant message with tool_calls from its subsequent
@@ -5115,36 +5362,76 @@ class CopilotWorker(QThread):
                     return
 
             else:
-                # ── OpenRouter / Hapuppy / NVIDIA path (OpenAI-compatible) ──
-                provider_name = "Hapuppy" if self.provider == "hapuppy" else "NVIDIA NIM" if self.provider == "nvidia" else "OpenRouter"
+                # ── OpenRouter / Hapuppy / NVIDIA / DeepSeek / OpenModel path (OpenAI-compatible) ──
+                if self.provider == "deepseek":
+                    provider_name = "DeepSeek"
+                elif self.provider == "hapuppy":
+                    provider_name = "Hapuppy"
+                elif self.provider == "nvidia":
+                    provider_name = "NVIDIA NIM"
+                elif self.provider == "openmodel":
+                    provider_name = "OpenModel"
+                else:
+                    provider_name = "OpenRouter"
                 self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Initializing {provider_name}...</span>\n")
                 key_preview = f"{self.api_key[:8]}...{self.api_key[-4:]}" if len(self.api_key) > 12 else "(empty)"
                 self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] API Key: {key_preview}</span>\n")
                 self.terminal_log_signal.emit(f"<span style='color: #8b949e'>[Copilot] Provider: {self.provider} | Model: {self.model_name}</span>\n")
 
-                if self.provider == "hapuppy":
+                if self.provider == "deepseek":
+                    base_url = "https://api.deepseek.com"
+                elif self.provider == "hapuppy":
                     base_url = "https://beta.hapuppy.com/v1"
                 elif self.provider == "nvidia":
                     base_url = "https://integrate.api.nvidia.com/v1"
+                elif self.provider == "openmodel":
+                    base_url = "https://api.openmodel.ai/v1"
                 else:
                     base_url = "https://openrouter.ai/api/v1"
-                
+
                 headers = {"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"} if self.provider == "openrouter" else None
 
-                # Set timeout to 115 s — just under Hapuppy/Cloudflare's 120 s proxy
-                # read-timeout window.  This makes Python raise openai.APITimeoutError
-                # cleanly instead of waiting for a Cloudflare 524 response.
-                client_timeout = 115.0 if self.provider == "hapuppy" else 180.0
-                self._client = openai.OpenAI(
-                    api_key=self.api_key,
-                    base_url=base_url,
-                    default_headers=headers,
-                    timeout=client_timeout,
-                )
+                # DeepSeek thinking can take longer; Hapuppy is capped at 120 s by Cloudflare.
+                if self.provider == "hapuppy":
+                    client_timeout = 115.0
+                elif self.provider == "deepseek":
+                    client_timeout = 240.0  # DeepSeek thinking models can be slow
+                else:
+                    client_timeout = 180.0
+
+                if self.provider != "openmodel":
+                    self._client = openai.OpenAI(
+                        api_key=self.api_key,
+                        base_url=base_url,
+                        default_headers=headers,
+                        timeout=client_timeout,
+                    )
                 if not self._messages:
                     self._messages = [
                         {"role": "system", "content": SYSTEM_PROMPT},
                     ]
+
+                if self.provider == "deepseek":
+                    # Determine thinking level from model name suffix (e.g. "deepseek-v4-flash:high")
+                    self._deepseek_thinking_level = "medium"  # default
+                    if ":" in self.model_name:
+                        parts = self.model_name.rsplit(":", 1)
+                        level_hint = parts[1].lower()
+                        if level_hint in ("high", "max"):
+                            self._deepseek_thinking_level = "high"
+                        elif level_hint == "none":
+                            self._deepseek_thinking_level = "none"
+                        else:
+                            self._deepseek_thinking_level = "medium"
+                    # Strip the suffix — only the base model name goes to the API
+                    self._deepseek_base_model = self.model_name.split(":")[0]
+                    self.terminal_log_signal.emit(
+                        f"<span style='color: #8b949e'>[Copilot] DeepSeek thinking level: {self._deepseek_thinking_level}</span>\n"
+                    )
+                else:
+                    self._deepseek_thinking_level = None
+                    self._deepseek_base_model = self.model_name
+
                 self.terminal_log_signal.emit(f"<span style='color: #3fb950'>[Copilot] Model: {self.model_name} ✓</span>\n")
 
             # 4. Hardcoded greeting — no API call needed
@@ -5228,6 +5515,38 @@ class CopilotWorker(QThread):
                             augmented_msg = f"{reminder}\n\n{user_msg}"
                             contents.append(augmented_msg)
                             response = self._send_with_retry(contents if len(contents) > 1 else augmented_msg)
+                        elif self.provider == "openmodel":
+                            content_list = user_msg + (f" [Attached PDF/File: {os.path.basename(attachment_path)}]" if attachment_path else "")
+                            reminder_msg = {"role": "system", "content": self._build_system_reminder()}
+                            self._messages.append(reminder_msg)
+                            self._messages.append({"role": "user", "content": content_list})
+                            self._compress_context()
+                            self._truncate_history()
+                            
+                            anthropic_tools = self._build_anthropic_tools(OPENAI_TOOLS)
+                            anthropic_messages = self._get_anthropic_messages()
+                            
+                            import requests
+                            headers = {
+                                "x-api-key": self.api_key,
+                                "anthropic-version": "2023-06-01",
+                                "content-type": "application/json"
+                            }
+                            payload = {
+                                "model": self.model_name,
+                                "max_tokens": 4096,
+                                "system": SYSTEM_PROMPT,
+                                "messages": anthropic_messages,
+                                "tools": anthropic_tools,
+                                "temperature": 0.2
+                            }
+                            self.terminal_log_signal.emit("<span style='color:#8b949e'>[Copilot] Querying OpenModel API...</span>\n")
+                            r = requests.post("https://api.openmodel.ai/v1/messages", headers=headers, json=payload, timeout=240.0)
+                            if r.status_code != 200:
+                                raise RuntimeError(f"OpenModel API Error {r.status_code}: {r.text}")
+                            response = r.json()
+                            reply = self._process_response_openmodel(response)
+                            self._track_usage(response)
                         else:
                             content_list = []
                             if attachment_path:
@@ -5266,14 +5585,19 @@ class CopilotWorker(QThread):
                             self._messages.append({"role": "user", "content": content_list})
                             self._compress_context()  # Compress old tool results first
                             self._truncate_history()   # Then trim if still too long
+                            _model = getattr(self, '_deepseek_base_model', self.model_name)
                             kwargs = {
-                                "model": self.model_name,
+                                "model": _model,
                                 "messages": self._messages,
                                 "tools": OPENAI_TOOLS,
                                 "temperature": 0.2,
                             }
                             if self.provider == "openrouter":
                                 kwargs["extra_headers"] = {"HTTP-Referer": "https://github.com/ANCS", "X-Title": "ANCS Copilot"}
+                            if self.provider == "deepseek":
+                                level = getattr(self, '_deepseek_thinking_level', 'medium')
+                                if level != "none":
+                                    kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
                             response = self._client.chat.completions.create(**kwargs)
                         reply = self._process_response(response)
 
