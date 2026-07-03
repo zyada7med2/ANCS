@@ -17,8 +17,49 @@ import threading
 import sys
 import os
 
-# When running as PyInstaller exe, use exe directory for DB/config
-_BASE_DIR = os.path.dirname(sys.executable) if getattr(sys, "frozen", False) else os.getcwd()
+# Determine the base directory for DB/config
+if getattr(sys, "frozen", False):
+    _default_dir = os.path.dirname(sys.executable)
+else:
+    # Use the root directory of the project (containing run.py) instead of os.getcwd()
+    _default_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+def _get_writable_base_dir(default_dir: str) -> str:
+    """Helper to find a writable base directory, falling back to user directories if needed."""
+    def _is_writable(path: str) -> bool:
+        try:
+            if not os.path.exists(path):
+                os.makedirs(path, exist_ok=True)
+            test_file = os.path.join(path, ".ancs_write_test")
+            with open(test_file, "w", encoding="utf-8") as f:
+                f.write("test")
+            os.remove(test_file)
+            return True
+        except Exception:
+            return False
+
+    if _is_writable(default_dir):
+        return default_dir
+
+    # Fallback to User AppData (Windows) or home directory (Unix)
+    if sys.platform == "win32":
+        fallback = os.path.join(os.environ.get("APPDATA", os.path.expanduser("~")), "ANCS")
+    else:
+        fallback = os.path.join(os.path.expanduser("~"), ".ancs")
+
+    try:
+        os.makedirs(fallback, exist_ok=True)
+        if _is_writable(fallback):
+            return fallback
+    except Exception:
+        pass
+
+    import tempfile
+    fallback_temp = os.path.join(tempfile.gettempdir(), "ANCS")
+    os.makedirs(fallback_temp, exist_ok=True)
+    return fallback_temp
+
+_BASE_DIR = _get_writable_base_dir(_default_dir)
 
 # Configuration constants
 DB_PATH = os.path.join(_BASE_DIR, "network_manager.db")
