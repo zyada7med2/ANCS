@@ -136,7 +136,7 @@ Step-by-step wizards that auto-derive full configs:
 ### 1. Clone the repository
 
 ```bash
-git clone https://github.com/youssefsamir14/ANCS.git
+git clone https://github.com/zyada7med2/ANCS.git
 cd ANCS
 ```
 
